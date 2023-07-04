@@ -123,18 +123,6 @@ impl<V> LeafNode<V> {
         self.key.iter().zip(key).all(|(a, b)| a == b)
     }
 
-    // Find the length of the longest common prefix between the leaf node and another leaf node, starting from a given depth
-    #[inline]
-    pub fn longest_common_prefix(&self, other: &[u8], depth: usize) -> usize {
-        let limit = min(self.key.len(), other.len()) - depth;
-        let limit = min(limit, MAX_PREFIX_LEN);
-        for idx in 0..limit {
-            if self.key[depth + idx] != other[depth + idx] {
-                return idx;
-            }
-        }
-        limit
-    }
 }
 
 impl<V> InnerNode<V> {
@@ -370,10 +358,13 @@ impl<V> InnerNode<V> {
     #[inline]
     fn find_child(&mut self, key: u8) -> Option<&mut Node<V>> {
         let idx = self.index(key)?;
-
         match &mut self.node_type {
-            NodeType::Node4 => Some(&mut self.children[idx]),
-            NodeType::Node16 => Some(&mut self.children[idx]),
+            NodeType::Node4 => {
+                Some(&mut self.children[idx])
+            },
+            NodeType::Node16 => {
+                Some(&mut self.children[idx])
+            },
             NodeType::Node48 => Some(&mut self.children[idx]),
             NodeType::Node256 => {
                 let node = &mut self.children[key as usize];
@@ -440,32 +431,6 @@ impl<V> InnerNode<V> {
                 }
             }
         }
-    }
-
-    fn prefix_mismatch(&self, key: &[u8], depth: usize) -> usize {
-        let max_cmp = min(min(MAX_PREFIX_LEN, self.meta.prefix_len), key.len() - depth);
-        let idx = (0..max_cmp)
-            .into_iter()
-            .position(|i| self.meta.prefix[i] != key[depth + i]);
-        if let Some(id) = idx {
-            return id;
-        }
-
-        let idx = max_cmp;
-
-        // If the prefix is short we can avoid finding a leaf
-        if self.meta.prefix_len > MAX_PREFIX_LEN {
-            // Prefix is longer than what we've checked, find a leaf
-            let l = self.minimum().unwrap();
-            let max_cmp = min(l.key.len(), key.len()) - depth;
-            for i in idx..max_cmp {
-                if l.key[(i + depth)] != key[(depth + i)] {
-                    return i;
-                }
-            }
-        }
-
-        return idx;
     }
 }
 
@@ -554,6 +519,10 @@ impl<V> Node<V> {
         matches!(self, Node::Leaf(_))
     }
 
+    fn is_inner(&self) -> bool {
+        matches!(self, Node::Inner(_))
+    }
+
     fn inner_node(&mut self) -> Option<&mut InnerNode<V>> {
         match self {
             Node::Inner(inner) => Some(inner),
@@ -580,7 +549,7 @@ impl<V> Node<V> {
             Node::Inner(inner) => match inner.node_type {
                 NodeType::Node4 => {
                     let child = &mut inner.children[0];
-                    if !child.is_leaf() {
+                    if child.is_inner() {
                         let child_inner = child.inner_node().unwrap();
                         let mut current_prefix_len = inner.meta.prefix_len;
 
@@ -667,19 +636,95 @@ impl<V> Node<V> {
 
     pub fn add_child(&mut self, key: u8, node: Node<V>) {
         match self {
-            Node::Inner(dm) => {
-                dm.add_child(key, node);
+            Node::Inner(inner) => {
+                inner.add_child(key, node);
             }
             Node::Leaf(_) => unreachable!("Should not be possible."),
             Node::Empty => unreachable!("Should not be possible."),
         }
     }
 
+    pub fn num_children(&self) -> usize {
+        match self {
+            Node::Inner(n) => n.children.len(),
+            Node::Leaf(n) => 0,
+            Node::Empty => unreachable!("Should not be possible."),
+        }
+    }
+
+    fn prefix_clone(&self) -> Box<[u8]> {
+        match self {
+            Node::Inner(n) => n.meta.prefix.to_vec().into_boxed_slice(),
+            Node::Leaf(n) => n.key.to_vec().into_boxed_slice(),
+            Node::Empty => unreachable!("Should not be possible."),
+        }
+    }
+
+    // TODO: fix this
+    #[inline]
+    fn prefix(&self) -> &[u8] {
+        match self {
+            Node::Inner(n) => &n.meta.prefix[..n.meta.prefix.len()],
+            Node::Leaf(n) => &n.key[..n.key.len()],
+            Node::Empty => unreachable!("Should not be possible."),
+        }
+    }
+
+    // TODO: fix this, need to find length from prefix itself
+    #[inline]
+    fn prefix_len(&self) -> usize {
+        match self {
+            Node::Inner(n) => {
+                n.meta.prefix_len
+            },
+            Node::Leaf(n) => n.key.len(),
+            Node::Empty => unreachable!("Should not be possible."),
+        }
+    }
+
+    #[inline]
+    fn longest_common_prefix(&self, other: &[u8]) -> usize {
+        let limit = min(self.prefix_len(), other.len());
+        let limit = min(limit, MAX_PREFIX_LEN);
+        let prefix = self.prefix();
+        for idx in 0..limit {
+            if prefix[idx] != other[idx] {
+                return idx;
+            }
+        }
+
+        limit
+    }
+
+
+
+    fn set_prefix(&mut self, prefix: &[u8]) {
+        match self {
+            Node::Inner(n) => {
+                let mut length = 0;
+                for i in 0..prefix.len() {
+                    if prefix[i]!=0{
+                        length += 1;
+                    }
+                    n.meta.prefix[i] = prefix[i];
+                }
+                // TODO: fix this, need to find length from prefix itself
+                n.meta.prefix_len = length;
+            }
+            Node::Leaf(n) => {
+                n.key = prefix.to_vec().into_boxed_slice();
+            }
+            Node::Empty => unreachable!("Should not be possible."),
+        }
+    }
+
+
+
 }
 
 fn partial_after(slice: &[u8], start_position: usize) -> &[u8] {
     assert!(start_position <= slice.len());
-    &slice[start_position..]
+    &slice[start_position..slice.len()]
 }
 
 fn partial_before(slice: &[u8], length: usize) -> &[u8] {
@@ -712,64 +757,62 @@ impl<V> Tree<V> {
         value: V,
         depth:usize,
     ) -> Option<V>{
+        let cur_node_prefix = cur_node.prefix_clone();
+        let cur_node_prefix_len = cur_node.prefix_len();
 
         let key_prefix = partial_after(key, depth);
+        let longest_common_prefix = cur_node.longest_common_prefix(key_prefix);
+
+        let new_key = partial_after(cur_node_prefix.as_ref(), longest_common_prefix);
+        let partial = partial_before(cur_node_prefix.as_ref(), longest_common_prefix);
+        let partial_len = partial.len();
+        let new_partial = copy_to_fixed_array(partial);
+
+
+        let is_prefix_match =
+        min(cur_node_prefix_len, key_prefix.len()) == longest_common_prefix;
 
         if let Node::Leaf(ref mut leaf) = cur_node{
-            let longest_common_prefix = get_longest_common_prefix(&leaf.key, key_prefix);
-            let is_prefix_match =
-            min(leaf.key.len(), key_prefix.len()) == longest_common_prefix;
             if is_prefix_match && leaf.key.len() == key_prefix.len(){
                 return Some(mem::replace(&mut leaf.value, value))
             }
-
-            if !is_prefix_match{
-                let cur_node_prefix = leaf.key.clone();
-
-
-                let key = partial_after(cur_node_prefix.as_ref(), longest_common_prefix);
-                leaf.key = key.into();
-
-
-
-                let partial = partial_before(&cur_node_prefix, longest_common_prefix);
-
-
-                let mut n4: InnerNode<V> = InnerNode::new_node4();
-                n4.meta.prefix_len = partial.len();
-                n4.meta.prefix = copy_to_fixed_array(partial);
-                let n4_node: Node<V> = Node::Inner(Box::new(n4));
-
-                let k1 = cur_node_prefix[longest_common_prefix];
-                let k2 = key_prefix[longest_common_prefix];
-
-                let replacement_current = mem::replace(cur_node, n4_node);
-
-                let new_leaf = LeafNode::new(key_prefix[longest_common_prefix..].into(), value);
-
-                cur_node.add_child(k1, replacement_current);
-                cur_node.add_child(k2, Node::Leaf(Box::new(new_leaf)));
-
-                return None;
-            }
         }
-        
-        if let Node::Inner(ref mut inner) = cur_node{
-            let longest_common_prefix = get_longest_common_prefix(&inner.meta.prefix, key_prefix);
-            let k = key_prefix[longest_common_prefix];
 
+        let k1 = cur_node_prefix[longest_common_prefix];
+        let k2 = key_prefix[longest_common_prefix];
+
+
+        if !is_prefix_match{
+            cur_node.set_prefix(new_key);
+
+            let mut n4: InnerNode<V> = InnerNode::new_node4();
+            n4.meta.prefix_len = partial_len;
+            n4.meta.prefix = new_partial;
+            let n4_node: Node<V> = Node::Inner(Box::new(n4));
+
+
+            let replacement_current = mem::replace(cur_node, n4_node);
+            let new_leaf = LeafNode::new(key_prefix[longest_common_prefix..].into(), value);
+
+            cur_node.add_child(k1, replacement_current);
+            cur_node.add_child(k2, Node::Leaf(Box::new(new_leaf)));
+
+            return None;
+        }
+
+
+
+        let k = key_prefix[longest_common_prefix];
+
+        if let Node::Inner(ref mut inner) = cur_node{
             let next_child = inner.find_child(k);
             if let Some(child) = next_child {
                 return Tree::insert_recurse(child, key, value, depth + longest_common_prefix)
             }
-
-
-            let longest_common_prefix = get_longest_common_prefix(&inner.meta.prefix, key_prefix);
-            let k = key_prefix[longest_common_prefix];
-            let new_leaf = LeafNode::new(key_prefix[longest_common_prefix..].into(), value);
-            cur_node.add_child(k, Node::Leaf(Box::new(new_leaf)));
         }
 
+        let new_leaf = LeafNode::new(key_prefix[longest_common_prefix..].into(), value);
+        cur_node.add_child(k, Node::Leaf(Box::new(new_leaf)));
         return None;
     }
 
@@ -790,45 +833,50 @@ impl<V> Tree<V> {
         }
 
         let cur_node = cur_node_ptr.as_mut().unwrap();
-
         if cur_node.is_empty() {
             return false;
         }
 
-        if cur_node.is_leaf() {
-            let leaf = cur_node.leaf_node().unwrap();
-            if leaf.matches(key) {
-                *cur_node_ptr = None;
-                return true;
-            }
-            return false;
+        let prefix = cur_node.prefix();
+        let prefix_len = cur_node.prefix_len();
+        let key_prefix = partial_after(key, depth);
+        let longest_common_prefix = cur_node.longest_common_prefix(key_prefix);
+        let is_prefix_match = min(prefix_len, key_prefix.len()) == longest_common_prefix;
+
+        // if prefix.len() !=longest_common_prefix{
+        //     return false;
+        // }
+
+        if is_prefix_match && prefix_len == key_prefix.len(){
+            *cur_node_ptr = None;
+            return true;
         }
 
-
-
+        let k = key_prefix[longest_common_prefix];
         let inner = cur_node.inner_node().unwrap();
-        let prefix_diff = inner.prefix_mismatch(key, depth);
+        let next_child = &mut inner.find_child(k);
 
-        let next_child = &mut inner.find_child(key[depth+prefix_diff]);
         if let Some(child) = next_child {
-            match child {
-                Node::Leaf(leaf) => {
-                    if leaf.matches(key) {
-                        cur_node.delete_child(key[prefix_diff]);
-                        return true;
-                    }
-                    return false;
+            if child.num_children()==0{
+                if child.prefix_len()==key_prefix.len() - longest_common_prefix {
+                    cur_node.delete_child(k);
+                    return true;
                 }
-                _ => {
-                    return Tree::remove_recurse(next_child, key, depth + prefix_diff);
-                }
+                return false;
             }
+
+            return Tree::remove_recurse(next_child, key, depth + longest_common_prefix);
         }
 
         return false;
     }
 
+
+
 }
+/*
+    Test cases for Adaptive Radix Tree
+*/
 
 fn copy_to_fixed_array(source: &[u8]) -> [u8; 10] {
     let mut destination: [u8; 10] = [0; 10];
@@ -837,16 +885,18 @@ fn copy_to_fixed_array(source: &[u8]) -> [u8; 10] {
     destination
 }
 
-fn get_longest_common_prefix(key1: &[u8], key2: &[u8]) -> usize {
-    let limit = min(key1.len(), key2.len());
-    let limit = min(limit, MAX_PREFIX_LEN);
-    for idx in 0..limit {
-        if key1[idx] != key2[idx] {
-            return idx;
-        }
-    }
-    limit
-}
+// fn get_longest_common_prefix(key1: &[u8], key2: &[u8]) -> usize {
+//     let limit = min(key1.len(), key2.len());
+//     let limit = min(limit, MAX_PREFIX_LEN);
+//     let mut idx = 0;
+//     while idx < limit{
+//         if key1[idx] != key2[idx] {
+//             return idx;
+//         }
+//         idx += 1;
+//     }
+//     idx
+// }
 
 
 fn add_zero_to_bytestring(bytestring: &[u8]) -> Vec<u8> {
@@ -857,29 +907,11 @@ fn add_zero_to_bytestring(bytestring: &[u8]) -> Vec<u8> {
 }
 
 
-/*
-    Test cases for Adaptive Radix Tree
-*/
-
-
 #[test]
-fn test_string_insert_delete() {
-    let DUMMY_VALUE: u32 = 1;
+fn test_string_duplicate_insert() {
     let mut tree = Tree::new();
-    assert!(tree.insert(&add_zero_to_bytestring(b"abc"), DUMMY_VALUE).is_none());
-    assert!(tree.insert(&add_zero_to_bytestring(b"abcd"), DUMMY_VALUE).is_none());
-    // assert!(tree.insert(b"abcde", DUMMY_VALUE).is_none());
-    // assert!(tree.insert(b"xyz", DUMMY_VALUE).is_none());
-    // assert!(tree.insert(b"xyz", DUMMY_VALUE).is_some());
-    // assert!(tree.insert(b"axyz", DUMMY_VALUE).is_none());
-    // assert!(tree.insert(b"1245zzz", DUMMY_VALUE).is_none());
-
-    assert_eq!(tree.remove(&add_zero_to_bytestring(b"abcd")), true);
-    // assert_eq!(tree.remove(b"abc"), false);
-    // assert_eq!(tree.remove(b"abcde"), false);
-    // assert_eq!(tree.remove(b"xyz"), false);
-    // assert_eq!(tree.remove(b"axyz"), false);
-    // assert_eq!(tree.remove(b"1245zzz"), false);
+    assert!(tree.insert(&add_zero_to_bytestring(b"abc"), 1).is_none());
+    assert!(tree.insert(&add_zero_to_bytestring(b"abc"), 2).is_some());
 }
 
 #[test]
@@ -889,13 +921,14 @@ fn test_string_keys_get_set() {
     tree.insert(&add_zero_to_bytestring(b"abc"), 2);
     tree.insert(&add_zero_to_bytestring(b"abcd"), 1);
     tree.insert(&add_zero_to_bytestring(b"abcde"), 3);
-    // tree.insert(&add_zero_to_bytestring(b"xyz"), 4);
-    // tree.insert(&add_zero_to_bytestring(b"xyz"), 5);
-    // tree.insert(&add_zero_to_bytestring(b"axyz"), 6);
-    // tree.insert(&add_zero_to_bytestring(b"1245zzz"), 6);
+    tree.insert(&add_zero_to_bytestring(b"xyz"), 4);
+    tree.insert(&add_zero_to_bytestring(b"axyz"), 6);
+    tree.insert(&add_zero_to_bytestring(b"1245zzz"), 6);
 
     assert_eq!(tree.remove(&add_zero_to_bytestring(b"abc")), true);
-    // assert_eq!(tree.remove(&add_zero_to_bytestring(b"abcde")), true);
+    assert_eq!(tree.remove(&add_zero_to_bytestring(b"abcde")), true);
+    assert_eq!(tree.remove(&add_zero_to_bytestring(b"abcd")), true);
+    assert_eq!(tree.remove(&add_zero_to_bytestring(b"xyz")), true);
 }
 
 #[test]
