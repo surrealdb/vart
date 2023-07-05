@@ -120,9 +120,21 @@ impl<V> LeafNode<V> {
         if self.key.len() != key.len() {
             return false;
         }
-        self.key.iter().zip(key).all(|(a, b)| a == b)
+        self.key == key.into()
     }
 
+    // Find the length of the longest common prefix between the leaf node and another leaf node, starting from a given depth
+    #[inline]
+    pub fn longest_common_prefix(&self, other: &[u8]) -> usize {
+        let limit = min(self.key.len(), other.len());
+        let limit = min(limit, MAX_PREFIX_LEN);
+        for idx in 0..limit {
+            if self.key[idx] != other[idx] {
+                return idx;
+            }
+        }
+        limit
+    }
 }
 
 impl<V> InnerNode<V> {
@@ -230,8 +242,6 @@ impl<V> InnerNode<V> {
     fn add_child(&mut self, key: u8, child: Node<V>) {
         if self.is_full() {
             self.grow();
-            // self.add_child(key, child);
-            // return;
         }
 
         let m = self.meta.num_children;
@@ -326,10 +336,10 @@ impl<V> InnerNode<V> {
             // ArtNodes of type NODE4 have a relatively simple lookup algorithm since
             // they are of very small size:  Simply iterate over all keys and check to
             // see if they match.
-            NodeType::Node4=>{
+            NodeType::Node4 => {
                 let res = (0..self.meta.num_children).find(|&i| self.keys[i] == key);
                 return res;
-            },
+            }
             NodeType::Node16 => self.keys[0..min(NODE16MAX, self.meta.num_children)]
                 .iter()
                 .position(|&c| key == c),
@@ -353,18 +363,34 @@ impl<V> InnerNode<V> {
         }
     }
 
+    #[inline]
+    fn find_child(&self, key: u8) -> Option<&Node<V>> {
+        let idx = self.index(key)?;
+        match self.node_type {
+            NodeType::Node4 => Some(&self.children[idx]),
+            NodeType::Node16 => Some(&self.children[idx]),
+            NodeType::Node48 => Some(&self.children[idx]),
+            NodeType::Node256 => {
+                let node = &self.children[key as usize];
+                if node.is_empty() {
+                    None
+                } else {
+                    Some(node)
+                }
+            }
+        }
+    }
+
     // Returns a mutablepointer to the child that matches
     // the passed in key, or none if not present.
     #[inline]
-    fn find_child(&mut self, key: u8) -> Option<&mut Node<V>> {
+    fn find_child_mut(&mut self, key: u8) -> Option<&mut Node<V>> {
         let idx = self.index(key)?;
         match &mut self.node_type {
             NodeType::Node4 => {
                 Some(&mut self.children[idx])
-            },
-            NodeType::Node16 => {
-                Some(&mut self.children[idx])
-            },
+            }
+            NodeType::Node16 => Some(&mut self.children[idx]),
             NodeType::Node48 => Some(&mut self.children[idx]),
             NodeType::Node256 => {
                 let node = &mut self.children[key as usize];
@@ -377,60 +403,16 @@ impl<V> InnerNode<V> {
         }
     }
 
-    fn find_child_idx(&self, key: u8) -> Option<usize> {
-        let idx = self.index(key)?;
-
-        match &self.node_type {
-            NodeType::Node4 => Some(idx),
-            NodeType::Node16 => Some(idx),
-            NodeType::Node48 => Some(idx),
-            NodeType::Node256 => {
-                let node = &self.children[key as usize];
-                if node.is_empty() {
-                    None
-                } else {
-                    Some(key as usize)
-                }
+    #[inline]
+    pub fn longest_common_prefix(&self, other: &[u8]) -> usize {
+        let limit = min(self.meta.prefix_len, other.len());
+        let limit = min(limit, MAX_PREFIX_LEN);
+        for idx in 0..limit {
+            if self.meta.prefix[idx] != other[idx] {
+                return idx;
             }
         }
-    }
-
-    fn minimum(&self) -> Option<&LeafNode<V>> {
-        match self.node_type {
-            NodeType::Node4 => self.children[0].minimum(),
-            NodeType::Node16 => self.children[0].minimum(),
-            NodeType::Node48 => {
-                let idx = self.keys.iter().position(|&key| key != 0).unwrap();
-                let idx = (self.keys[idx] - 1) as usize;
-                self.children[idx].minimum()
-            }
-            NodeType::Node256 => {
-                let idx = self.children.iter().position(|child| !child.is_empty());
-                match idx {
-                    None => None,
-                    Some(i) => self.children[i].minimum(),
-                }
-            }
-        }
-    }
-
-    fn maximum(&self) -> Option<&LeafNode<V>> {
-        match self.node_type {
-            NodeType::Node4 => self.children[self.meta.num_children - 1].maximum(),
-            NodeType::Node16 => self.children[self.meta.num_children - 1].maximum(),
-            NodeType::Node48 => {
-                let idx = self.keys.iter().rposition(|&key| key != 0).unwrap();
-                let idx = (self.keys[idx] - 1) as usize;
-                self.children[idx].maximum()
-            }
-            NodeType::Node256 => {
-                let idx = self.children.iter().rposition(|child| !child.is_empty());
-                match idx {
-                    None => None,
-                    Some(i) => self.children[i].maximum(),
-                }
-            }
-        }
+        limit
     }
 }
 
@@ -444,32 +426,14 @@ impl<V> Node<V> {
         matches!(self, Node::Empty)
     }
 
-    fn minimum(&self) -> Option<&LeafNode<V>> {
-        match self {
-            Node::Leaf(leaf) => Some(leaf.as_ref()),
-            Node::Inner(inner) => inner.minimum(),
-            Node::Empty => None,
-        }
-    }
-
-    fn maximum(&self) -> Option<&LeafNode<V>> {
-        match self {
-            Node::Leaf(leaf) => Some(leaf.as_ref()),
-            Node::Inner(inner) => inner.maximum(),
-            Node::Empty => None,
-        }
-    }
-
     fn delete_child(&mut self, key: u8) {
         match self {
             Node::Inner(inner) => {
                 match inner.node_type {
                     NodeType::Node4 | NodeType::Node16 => {
-                        let idx = inner.index(key);
-                        if idx.is_none() {
-                            return;
-                        }
-                        let idx = idx.unwrap();
+                        let Some(idx) = inner.index(key) else {
+                            return
+                        };
                         inner.keys[idx] = 0;
                         inner.children[idx] = Node::Empty;
                         for i in idx..inner.meta.num_children - 1 {
@@ -481,11 +445,9 @@ impl<V> Node<V> {
                         inner.meta.num_children -= 1;
                     }
                     NodeType::Node48 => {
-                        let idx = inner.index(key);
-                        if idx.is_none() {
-                            return;
-                        }
-                        let idx = idx.unwrap();
+                        let Some(idx) = inner.index(key) else {
+                            return
+                        };
                         let child = &inner.children[idx];
                         if !child.is_empty() {
                             inner.children[idx] = Node::Empty;
@@ -494,11 +456,9 @@ impl<V> Node<V> {
                         }
                     }
                     NodeType::Node256 => {
-                        let idx = inner.index(key);
-                        if idx.is_none() {
-                            return;
-                        }
-                        let idx = idx.unwrap();
+                        let Some(idx) = inner.index(key) else {
+                            return
+                        };
                         let child = &inner.children[idx];
                         if !child.is_empty() {
                             inner.children[idx] = Node::Empty;
@@ -563,8 +523,9 @@ impl<V> Node<V> {
                                 child_inner.meta.prefix_len,
                                 MAX_PREFIX_LEN - current_prefix_len,
                             );
-                            for i in 0..child_prefix_len{
-                                inner.meta.prefix[current_prefix_len + i] = child_inner.meta.prefix[i];
+                            for i in 0..child_prefix_len {
+                                inner.meta.prefix[current_prefix_len + i] =
+                                    child_inner.meta.prefix[i];
                             }
                             current_prefix_len += child_prefix_len;
                         }
@@ -573,7 +534,6 @@ impl<V> Node<V> {
                         for i in 0..min(copy_len, MAX_PREFIX_LEN) {
                             child_inner.meta.prefix[i] = inner.meta.prefix[i];
                         }
-                        // child_inner.meta.prefix.copy_within(0..copy_len, copy_len);
                         child_inner.meta.prefix_len += inner.meta.prefix_len + 1;
 
                         *self = mem::take(child);
@@ -660,8 +620,6 @@ impl<V> Node<V> {
         }
     }
 
-    // TODO: fix this
-    #[inline]
     fn prefix(&self) -> &[u8] {
         match self {
             Node::Inner(n) => &n.meta.prefix[..n.meta.prefix.len()],
@@ -670,19 +628,14 @@ impl<V> Node<V> {
         }
     }
 
-    // TODO: fix this, need to find length from prefix itself
-    #[inline]
     fn prefix_len(&self) -> usize {
         match self {
-            Node::Inner(n) => {
-                n.meta.prefix_len
-            },
+            Node::Inner(n) => n.meta.prefix_len,
             Node::Leaf(n) => n.key.len(),
             Node::Empty => unreachable!("Should not be possible."),
         }
     }
 
-    #[inline]
     fn longest_common_prefix(&self, other: &[u8]) -> usize {
         let limit = min(self.prefix_len(), other.len());
         let limit = min(limit, MAX_PREFIX_LEN);
@@ -692,23 +645,19 @@ impl<V> Node<V> {
                 return idx;
             }
         }
-
         limit
     }
-
-
 
     fn set_prefix(&mut self, prefix: &[u8]) {
         match self {
             Node::Inner(n) => {
                 let mut length = 0;
                 for i in 0..prefix.len() {
-                    if prefix[i]!=0{
+                    if prefix[i] != 0 {
                         length += 1;
                     }
                     n.meta.prefix[i] = prefix[i];
                 }
-                // TODO: fix this, need to find length from prefix itself
                 n.meta.prefix_len = length;
             }
             Node::Leaf(n) => {
@@ -718,8 +667,24 @@ impl<V> Node<V> {
         }
     }
 
+    pub fn value(&self) -> Option<&V> {
+        let Node::Leaf(leaf) = &self else {
+            return None;
+        };
+        Some(&leaf.value)
+    }
 
+    pub fn find_child(&self, key: u8) -> Option<&Node<V>> {
+        if self.num_children() == 0 {
+            return None;
+        }
 
+        match self {
+            Node::Inner(inner) => inner.find_child(key),
+            Node::Leaf(_) => None,
+            Node::Empty => unreachable!("Should not be possible."),
+        }
+    }
 }
 
 fn partial_after(slice: &[u8], start_position: usize) -> &[u8] {
@@ -731,7 +696,6 @@ fn partial_before(slice: &[u8], length: usize) -> &[u8] {
     assert!(length <= slice.len());
     &slice[..length]
 }
-
 
 impl<V> Tree<V> {
     pub fn new() -> Self {
@@ -751,12 +715,7 @@ impl<V> Tree<V> {
         return Tree::insert_recurse(root, key, value, 0);
     }
 
-    fn insert_recurse(
-        cur_node: &mut Node<V>,
-        key: &[u8], 
-        value: V,
-        depth:usize,
-    ) -> Option<V>{
+    fn insert_recurse(cur_node: &mut Node<V>, key: &[u8], value: V, depth: usize) -> Option<V> {
         let cur_node_prefix = cur_node.prefix_clone();
         let cur_node_prefix_len = cur_node.prefix_len();
 
@@ -768,21 +727,18 @@ impl<V> Tree<V> {
         let partial_len = partial.len();
         let new_partial = copy_to_fixed_array(partial);
 
+        let is_prefix_match = min(cur_node_prefix_len, key_prefix.len()) == longest_common_prefix;
 
-        let is_prefix_match =
-        min(cur_node_prefix_len, key_prefix.len()) == longest_common_prefix;
-
-        if let Node::Leaf(ref mut leaf) = cur_node{
-            if is_prefix_match && leaf.key.len() == key_prefix.len(){
-                return Some(mem::replace(&mut leaf.value, value))
+        if let Node::Leaf(ref mut leaf) = cur_node {
+            if is_prefix_match && leaf.key.len() == key_prefix.len() {
+                return Some(mem::replace(&mut leaf.value, value));
             }
         }
 
         let k1 = cur_node_prefix[longest_common_prefix];
         let k2 = key_prefix[longest_common_prefix];
 
-
-        if !is_prefix_match{
+        if !is_prefix_match {
             cur_node.set_prefix(new_key);
 
             let mut n4: InnerNode<V> = InnerNode::new_node4();
@@ -790,8 +746,8 @@ impl<V> Tree<V> {
             n4.meta.prefix = new_partial;
             let n4_node: Node<V> = Node::Inner(Box::new(n4));
 
-
             let replacement_current = mem::replace(cur_node, n4_node);
+
             let new_leaf = LeafNode::new(key_prefix[longest_common_prefix..].into(), value);
 
             cur_node.add_child(k1, replacement_current);
@@ -800,14 +756,12 @@ impl<V> Tree<V> {
             return None;
         }
 
-
-
         let k = key_prefix[longest_common_prefix];
 
-        if let Node::Inner(ref mut inner) = cur_node{
-            let next_child = inner.find_child(k);
+        if let Node::Inner(ref mut inner) = cur_node {
+            let next_child = inner.find_child_mut(k);
             if let Some(child) = next_child {
-                return Tree::insert_recurse(child, key, value, depth + longest_common_prefix)
+                return Tree::insert_recurse(child, key, value, depth + longest_common_prefix);
             }
         }
 
@@ -847,37 +801,55 @@ impl<V> Tree<V> {
         //     return false;
         // }
 
-        if is_prefix_match && prefix_len == key_prefix.len(){
+        if is_prefix_match && prefix_len == key_prefix.len() {
             *cur_node_ptr = None;
             return true;
         }
 
         let k = key_prefix[longest_common_prefix];
         let inner = cur_node.inner_node().unwrap();
-        let next_child = &mut inner.find_child(k);
+        let next_child = &mut inner.find_child_mut(k);
 
         if let Some(child) = next_child {
-            if child.num_children()==0{
-                if child.prefix_len()==key_prefix.len() - longest_common_prefix {
+            if child.num_children() == 0 {
+                if child.prefix_len() == key_prefix.len() - longest_common_prefix {
                     cur_node.delete_child(k);
                     return true;
                 }
                 return false;
             }
-
             return Tree::remove_recurse(next_child, key, depth + longest_common_prefix);
         }
 
         return false;
     }
 
+    pub fn get(&self, key: &[u8]) -> Option<&V> {
+        Tree::find(self.root.as_ref()?, key)
+    }
 
+    fn find<'a>(cur_node: &'a Node<V>, key: &[u8]) -> Option<&'a V> {
+        let mut cur_node = cur_node;
+        let mut depth = 0;
+        loop {
+            let key_prefix = partial_after(key, depth);
+            let prefix_common_match = cur_node.longest_common_prefix(key_prefix);
+            if prefix_common_match != cur_node.prefix_len() {
+                return None;
+            }
 
+            if cur_node.prefix_len() == key_prefix.len() {
+                return cur_node.value();
+            }
+
+            let k = key[depth + cur_node.prefix_len()];
+            depth += cur_node.prefix_len();
+            cur_node = cur_node.find_child(k)?;
+        }
+    }
 }
-/*
-    Test cases for Adaptive Radix Tree
-*/
 
+// TODO: get rid for this
 fn copy_to_fixed_array(source: &[u8]) -> [u8; 10] {
     let mut destination: [u8; 10] = [0; 10];
     let length = std::cmp::min(source.len(), destination.len());
@@ -885,163 +857,319 @@ fn copy_to_fixed_array(source: &[u8]) -> [u8; 10] {
     destination
 }
 
-// fn get_longest_common_prefix(key1: &[u8], key2: &[u8]) -> usize {
-//     let limit = min(key1.len(), key2.len());
-//     let limit = min(limit, MAX_PREFIX_LEN);
-//     let mut idx = 0;
-//     while idx < limit{
-//         if key1[idx] != key2[idx] {
-//             return idx;
-//         }
-//         idx += 1;
-//     }
-//     idx
-// }
+/*
+    Test cases for Adaptive Radix Tree
+*/
 
-
-fn add_zero_to_bytestring(bytestring: &[u8]) -> Vec<u8> {
-    let mut new_bytestring = Vec::with_capacity(bytestring.len() + 1);
-    new_bytestring.extend_from_slice(bytestring);
-    new_bytestring.push(0);
-    new_bytestring
-}
-
-
-#[test]
-fn test_string_duplicate_insert() {
-    let mut tree = Tree::new();
-    assert!(tree.insert(&add_zero_to_bytestring(b"abc"), 1).is_none());
-    assert!(tree.insert(&add_zero_to_bytestring(b"abc"), 2).is_some());
-}
-
-#[test]
-fn test_string_keys_get_set() {
-    let DUMMY_VALUE: u32 = 1;
-    let mut tree = Tree::new();
-    tree.insert(&add_zero_to_bytestring(b"abc"), 2);
-    tree.insert(&add_zero_to_bytestring(b"abcd"), 1);
-    tree.insert(&add_zero_to_bytestring(b"abcde"), 3);
-    tree.insert(&add_zero_to_bytestring(b"xyz"), 4);
-    tree.insert(&add_zero_to_bytestring(b"axyz"), 6);
-    tree.insert(&add_zero_to_bytestring(b"1245zzz"), 6);
-
-    assert_eq!(tree.remove(&add_zero_to_bytestring(b"abc")), true);
-    assert_eq!(tree.remove(&add_zero_to_bytestring(b"abcde")), true);
-    assert_eq!(tree.remove(&add_zero_to_bytestring(b"abcd")), true);
-    assert_eq!(tree.remove(&add_zero_to_bytestring(b"xyz")), true);
-}
-
-#[test]
-fn test_insert() {
-    let DUMMY_VALUE: u32 = 1;
-    let mut tree = Tree::new();
-    assert!(tree.insert(b"hello", DUMMY_VALUE).is_none());
-    assert!(tree.insert(b"hi", DUMMY_VALUE).is_none());
-    assert!(tree.insert(b"bye", DUMMY_VALUE).is_none());
-    assert!(tree.insert(b"world", DUMMY_VALUE).is_none());
-    assert!(tree.insert(b"real", DUMMY_VALUE).is_none());
-}
-
-#[test]
-fn test_find_child() {
-    // Create a sample innerNode
-    let mut inner_node = InnerNode::new_node48();
-    let leaf = LeafNode::new(b"hello", 1);
-
-    // Add a child node at index 42
-    inner_node.add_child(42, Node::Leaf(Box::new(leaf)));
-
-    // Test finding the child with key 42
-    let found_child = inner_node.find_child(42).unwrap();
-    // Assert the type of the node
-    match found_child {
-        Node::Empty => panic!("Expected a non-empty node"),
-        Node::Leaf(_) => {
-            // The type of the node is Leaf
-        }
-        Node::Inner(_) => panic!("Expected a Leaf node"),
-    }
-}
-
-#[test]
-fn test_add_child() {
-    let leaf = LeafNode::new(b"hello", 1);
-    let leaf2 = LeafNode::new(b"hell", 1);
-    let leaf3 = LeafNode::new(b"hello world", 1);
-
-    let prefix_key = b"hello"[0];
-
-    let mut inner = InnerNode::new_node4();
-    inner.add_child(prefix_key, Node::Leaf(Box::new(leaf)));
-    inner.add_child(prefix_key, Node::Leaf(Box::new(leaf2)));
-    inner.add_child(prefix_key, Node::Leaf(Box::new(leaf3)));
-
-    assert_eq!(inner.meta.num_children, 3);
-    assert_eq!(inner.keys[0], prefix_key);
-    assert_eq!(inner.keys[1], prefix_key);
-    assert_eq!(inner.keys[2], prefix_key);
-}
-
-#[test]
-fn test_grow() {
-    let leaf = LeafNode::new(b"hello", 1);
-    let leaf2 = LeafNode::new(b"hell", 1);
-    let leaf3 = LeafNode::new(b"hello world", 1);
-    let leaf4 = LeafNode::new(b"hella", 1);
-    let leaf5 = LeafNode::new(b"hellb", 1);
-
-    let prefix_key = b"hello"[0];
-
-    let mut inner = InnerNode::new_node4();
-    inner.add_child(prefix_key, Node::Leaf(Box::new(leaf)));
-    inner.add_child(prefix_key, Node::Leaf(Box::new(leaf2)));
-    inner.add_child(prefix_key, Node::Leaf(Box::new(leaf3)));
-    inner.add_child(prefix_key, Node::Leaf(Box::new(leaf4)));
-    inner.add_child(prefix_key, Node::Leaf(Box::new(leaf5)));
-
-    assert_eq!(inner.node_type, NodeType::Node16);
-    assert_eq!(inner.meta.num_children, 1);
-    assert_eq!(inner.keys[0], prefix_key);
-    assert_eq!(inner.keys[1], prefix_key);
-    assert_eq!(inner.keys[2], prefix_key);
-    assert_eq!(inner.keys[3], prefix_key);
-}
-
-
-#[test]
-fn test_matches() {
-    let leaf = LeafNode::new(b"hello", 1);
-    assert_eq!(leaf.matches(b"hello"), true);
-    assert_eq!(leaf.matches(b"hello world"), false);
-    assert_eq!(leaf.matches(b"hell"), false);
-    assert_eq!(leaf.matches(b"hell"), false);
-}
-
-#[test]
-fn test_check_prefix() {
-    let mut meta = Meta {
-        prefix: [0; MAX_PREFIX_LEN],
-        prefix_len: 0,
-        num_children: NODE4MAX,
+#[cfg(test)]
+mod tests {
+    use crate::art::{
+        copy_to_fixed_array, InnerNode, LeafNode, Meta, Node, NodeType, 
+        Tree, MAX_PREFIX_LEN,NODE4MAX,
     };
-    let key = b"hello";
-    let prefix_len = meta.check_prefix(key);
-    assert_eq!(prefix_len, 0);
 
-    meta.prefix[0] = b'h';
-    meta.prefix[1] = b'e';
-    meta.prefix[2] = b'l';
-    meta.prefix[3] = b'l';
-    meta.prefix[4] = b'o';
-    meta.prefix_len = 5;
-    let prefix_len = meta.check_prefix(key);
-    assert_eq!(prefix_len, 5);
+    fn add_zero_to_bytestring(bytestring: &[u8]) -> Vec<u8> {
+        let mut new_bytestring = Vec::with_capacity(bytestring.len() + 1);
+        new_bytestring.extend_from_slice(bytestring);
+        new_bytestring.push(0);
+        new_bytestring
+    }
 
-    let key = b"hell";
-    let prefix_len = meta.check_prefix(key);
-    assert_eq!(prefix_len, 4);
+    #[test]
+    fn test_root_set_get() {
+        let mut tree = Tree::new();
+        let key = add_zero_to_bytestring(b"abc");
+        assert!(tree.insert(&key, 1).is_none());
+        assert_eq!(*tree.get(&key).unwrap(), 1);
+    }
 
-    let key = b"hello world";
-    let prefix_len = meta.check_prefix(key);
-    assert_eq!(prefix_len, 5);
+    #[test]
+    fn test_string_keys_get_set() {
+        let mut q = Tree::new();
+        q.insert(&add_zero_to_bytestring(b"abcd"), 1);
+        q.insert(&add_zero_to_bytestring(b"abc"), 2);
+        q.insert(&add_zero_to_bytestring(b"abcde"), 3);
+        q.insert(&add_zero_to_bytestring(b"xyz"), 4);
+        q.insert(&add_zero_to_bytestring(b"xyz"), 5);
+        q.insert(&add_zero_to_bytestring(b"axyz"), 6);
+        q.insert(&add_zero_to_bytestring(b"1245zzz"), 6);
+
+        assert_eq!(*q.get(&add_zero_to_bytestring(b"abcd")).unwrap(), 1);
+        assert_eq!(*q.get(&add_zero_to_bytestring(b"abc")).unwrap(), 2);
+        assert_eq!(*q.get(&add_zero_to_bytestring(b"abcde")).unwrap(), 3);
+        assert_eq!(*q.get(&add_zero_to_bytestring(b"axyz")).unwrap(), 6);
+        assert_eq!(*q.get(&add_zero_to_bytestring(b"xyz")).unwrap(), 5);
+
+        assert!(q.remove(&add_zero_to_bytestring(b"abcde")));
+        assert_eq!(q.get(&add_zero_to_bytestring(b"abcde")), None);
+        assert_eq!(*q.get(&add_zero_to_bytestring(b"abc")).unwrap(), 2);
+        assert_eq!(*q.get(&add_zero_to_bytestring(b"axyz")).unwrap(), 6);
+        assert!(q.remove(&add_zero_to_bytestring(b"abc")));
+        assert_eq!(q.get(&add_zero_to_bytestring(b"abc")), None);
+    }
+
+    #[test]
+    fn test_string_duplicate_insert() {
+        let mut tree = Tree::new();
+        assert!(tree.insert(&add_zero_to_bytestring(b"abc"), 1).is_none());
+        assert!(tree.insert(&add_zero_to_bytestring(b"abc"), 2).is_some());
+    }
+
+    #[test]
+    fn test_string_keys_set_remove() {
+        let mut tree = Tree::new();
+        tree.insert(&add_zero_to_bytestring(b"abc"), 2);
+        tree.insert(&add_zero_to_bytestring(b"abcd"), 1);
+        tree.insert(&add_zero_to_bytestring(b"abcde"), 3);
+        tree.insert(&add_zero_to_bytestring(b"xyz"), 4);
+        tree.insert(&add_zero_to_bytestring(b"axyz"), 6);
+        tree.insert(&add_zero_to_bytestring(b"1245zzz"), 6);
+
+        assert_eq!(tree.remove(&add_zero_to_bytestring(b"abc")), true);
+        assert_eq!(tree.remove(&add_zero_to_bytestring(b"abcde")), true);
+        assert_eq!(tree.remove(&add_zero_to_bytestring(b"abcd")), true);
+        assert_eq!(tree.remove(&add_zero_to_bytestring(b"xyz")), true);
+        assert_eq!(tree.remove(&add_zero_to_bytestring(b"axyz")), true);
+        assert_eq!(tree.remove(&add_zero_to_bytestring(b"1245zzz")), true);
+    }
+
+    #[test]
+    fn test_find_child_mut() {
+        let mut inner_node = InnerNode::new_node48();
+        let leaf = LeafNode::new(b"hello", 1);
+
+        // Add a child node at index 42
+        inner_node.add_child(42, Node::Leaf(Box::new(leaf)));
+
+        // Test finding the child with key 42
+        let found_child = inner_node.find_child_mut(42).unwrap();
+        // Assert the type of the node
+        match found_child {
+            Node::Empty => panic!("Expected a non-empty node"),
+            Node::Leaf(_) => {
+                // The type of the node is Leaf
+            }
+            Node::Inner(_) => panic!("Expected a Leaf node"),
+        }
+    }
+
+    #[test]
+    fn test_add_child() {
+        let leaf = LeafNode::new(b"hello", 1);
+        let leaf2 = LeafNode::new(b"hell", 1);
+        let leaf3 = LeafNode::new(b"hello world", 1);
+
+        let prefix_key = b"hello"[0];
+
+        let mut inner = InnerNode::new_node4();
+        inner.add_child(prefix_key, Node::Leaf(Box::new(leaf)));
+        inner.add_child(prefix_key, Node::Leaf(Box::new(leaf2)));
+        inner.add_child(prefix_key, Node::Leaf(Box::new(leaf3)));
+
+        assert_eq!(inner.meta.num_children, 3);
+        assert_eq!(inner.keys[0], prefix_key);
+        assert_eq!(inner.keys[1], prefix_key);
+        assert_eq!(inner.keys[2], prefix_key);
+    }
+
+    #[test]
+    fn test_grow() {
+        let leaf = LeafNode::new(b"hello", 1);
+        let leaf2 = LeafNode::new(b"hell", 1);
+        let leaf3 = LeafNode::new(b"hello world", 1);
+        let leaf4 = LeafNode::new(b"hella", 1);
+        let leaf5 = LeafNode::new(b"hellb", 1);
+
+        let prefix_key = b"hello"[0];
+
+        let mut inner = InnerNode::new_node4();
+        inner.add_child(prefix_key, Node::Leaf(Box::new(leaf)));
+        inner.add_child(prefix_key, Node::Leaf(Box::new(leaf2)));
+        inner.add_child(prefix_key, Node::Leaf(Box::new(leaf3)));
+        inner.add_child(prefix_key, Node::Leaf(Box::new(leaf4)));
+        inner.add_child(prefix_key, Node::Leaf(Box::new(leaf5)));
+
+        assert_eq!(inner.node_type, NodeType::Node16);
+        assert_eq!(inner.meta.num_children, 1);
+        assert_eq!(inner.keys[0], prefix_key);
+        assert_eq!(inner.keys[1], prefix_key);
+        assert_eq!(inner.keys[2], prefix_key);
+        assert_eq!(inner.keys[3], prefix_key);
+    }
+
+    #[test]
+    fn test_matches() {
+        let leaf = LeafNode::new(b"hello", 1);
+        assert_eq!(leaf.matches(b"hello"), true);
+        assert_eq!(leaf.matches(b"hello world"), false);
+        assert_eq!(leaf.matches(b"hell"), false);
+        assert_eq!(leaf.matches(b"hell"), false);
+    }
+
+    #[test]
+    fn test_check_prefix() {
+        let mut meta = Meta {
+            prefix: [0; MAX_PREFIX_LEN],
+            prefix_len: 0,
+            num_children: NODE4MAX,
+        };
+        let key = b"hello";
+        let prefix_len = meta.check_prefix(key);
+        assert_eq!(prefix_len, 0);
+
+        meta.prefix[0] = b'h';
+        meta.prefix[1] = b'e';
+        meta.prefix[2] = b'l';
+        meta.prefix[3] = b'l';
+        meta.prefix[4] = b'o';
+        meta.prefix_len = 5;
+        let prefix_len = meta.check_prefix(key);
+        assert_eq!(prefix_len, 5);
+
+        let key = b"hell";
+        let prefix_len = meta.check_prefix(key);
+        assert_eq!(prefix_len, 4);
+
+        let key = b"hello world";
+        let prefix_len = meta.check_prefix(key);
+        assert_eq!(prefix_len, 5);
+    }
+
+    #[test]
+    fn test_n4() {
+        let test_key = &add_zero_to_bytestring(b"abc");
+
+        let mut n4 = InnerNode::new_node4();
+        n4.meta.prefix = copy_to_fixed_array(test_key);
+        n4.meta.prefix_len = test_key.len();
+        let mut n4 = Node::Inner(Box::new(n4));
+
+        n4.add_child(5, Node::Leaf(Box::new(LeafNode::new(test_key, 1))));
+        n4.add_child(4, Node::Leaf(Box::new(LeafNode::new(test_key, 2))));
+        n4.add_child(3, Node::Leaf(Box::new(LeafNode::new(test_key, 3))));
+        n4.add_child(2, Node::Leaf(Box::new(LeafNode::new(test_key, 4))));
+
+        assert_eq!(*n4.find_child(5).unwrap().value().unwrap(), 1);
+        assert_eq!(*n4.find_child(4).unwrap().value().unwrap(), 2);
+        assert_eq!(*n4.find_child(3).unwrap().value().unwrap(), 3);
+        assert_eq!(*n4.find_child(2).unwrap().value().unwrap(), 4);
+
+        n4.delete_child(5);
+        assert!(n4.find_child(5).is_none());
+        assert_eq!(*n4.find_child(4).unwrap().value().unwrap(), 2);
+        assert_eq!(*n4.find_child(3).unwrap().value().unwrap(), 3);
+        assert_eq!(*n4.find_child(2).unwrap().value().unwrap(), 4);
+
+        n4.delete_child(2);
+        assert!(n4.find_child(5).is_none());
+        assert!(n4.find_child(2).is_none());
+
+        n4.add_child(2, Node::Leaf(Box::new(LeafNode::new(test_key, 4))));
+        n4.delete_child(3);
+        assert!(n4.find_child(5).is_none());
+        assert!(n4.find_child(3).is_none());
+    }
+
+    #[test]
+    fn test_n16() {
+        let test_key = &add_zero_to_bytestring(b"abc");
+
+        let mut n16 = InnerNode::new_node16();
+        n16.meta.prefix = copy_to_fixed_array(test_key);
+        n16.meta.prefix_len = test_key.len();
+        let mut n16 = Node::Inner(Box::new(n16));
+
+        // Fill up the node with keys in reverse order.
+        for i in (0..16).rev() {
+            n16.add_child(i, Node::Leaf(Box::new(LeafNode::new(test_key, i))));
+        }
+
+        for i in 0..16 {
+            assert_eq!(*n16.find_child(i).unwrap().value().unwrap(), i);
+        }
+
+        // Delete from end doesn't affect position of others.
+        n16.delete_child(15);
+        n16.delete_child(14);
+        assert!(n16.find_child(15).is_none());
+        assert!(n16.find_child(14).is_none());
+        for i in 0..14 {
+            assert_eq!(*n16.find_child(i).unwrap().value().unwrap(), i);
+        }
+
+        n16.delete_child(0);
+        n16.delete_child(1);
+        assert!(n16.find_child(0).is_none());
+        assert!(n16.find_child(1).is_none());
+        for i in 2..14 {
+            assert_eq!(*n16.find_child(i).unwrap().value().unwrap(), i);
+        }
+
+        // Delete from the middle
+        n16.delete_child(5);
+        n16.delete_child(6);
+        assert!(n16.find_child(5).is_none());
+        assert!(n16.find_child(6).is_none());
+        for i in 2..5 {
+            assert_eq!(*n16.find_child(i).unwrap().value().unwrap(), i);
+        }
+        for i in 7..14 {
+            assert_eq!(*n16.find_child(i).unwrap().value().unwrap(), i);
+        }
+    }
+
+    #[test]
+    fn test_n48() {
+        let test_key = &add_zero_to_bytestring(b"abc");
+
+        let mut n48 = InnerNode::new_node48();
+        n48.meta.prefix = copy_to_fixed_array(test_key);
+        n48.meta.prefix_len = test_key.len();
+        let mut n48 = Node::Inner(Box::new(n48));
+
+        // indexes in n48 have no sort order, so we don't look at that
+        for i in 0..48 {
+            n48.add_child(i, Node::Leaf(Box::new(LeafNode::new(test_key, i))));
+        }
+
+        for i in 0..48 {
+            assert_eq!(*n48.find_child(i).unwrap().value().unwrap(), i);
+        }
+
+        n48.delete_child(47);
+        n48.delete_child(46);
+        assert!(n48.find_child(47).is_none());
+        assert!(n48.find_child(46).is_none());
+        for i in 0..46 {
+            assert_eq!(*n48.find_child(i).unwrap().value().unwrap(), i);
+        }
+    }
+
+    #[test]
+    fn test_n_256() {
+        let test_key = &add_zero_to_bytestring(b"abc");
+
+        let mut n256 = InnerNode::new_node256();
+        n256.meta.prefix = copy_to_fixed_array(test_key);
+        n256.meta.prefix_len = test_key.len();
+        let mut n256 = Node::Inner(Box::new(n256));
+
+        for i in 0..=255 {
+            n256.add_child(i, Node::Leaf(Box::new(LeafNode::new(test_key, i))));
+        }
+        for i in 0..=255 {
+            assert_eq!(*n256.find_child(i).unwrap().value().unwrap(), i);
+        }
+
+        n256.delete_child(47);
+        n256.delete_child(46);
+        assert!(n256.find_child(47).is_none());
+        assert!(n256.find_child(46).is_none());
+        for i in 0..46 {
+            assert_eq!(*n256.find_child(i).unwrap().value().unwrap(), i);
+        }
+        for i in 48..=255 {
+            assert_eq!(*n256.find_child(i).unwrap().value().unwrap(), i);
+        }
+    }
 }
