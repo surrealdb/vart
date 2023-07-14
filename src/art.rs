@@ -299,11 +299,9 @@ impl<P: PartialTrait, V> InnerNode<P, V> {
             // ArtNodes of type NODE4 have a relatively simple lookup algorithm since
             // they are of very small size:  Simply iterate over all keys and check to
             // see if they match.
-            NodeType::Node4 => {
-                self.keys[0..min(NODE16MAX, self.meta.num_children)]
-                    .iter()
-                    .position(|&c| key == c)
-            }
+            NodeType::Node4 => self.keys[0..min(NODE16MAX, self.meta.num_children)]
+                .iter()
+                .position(|&c| key == c),
             NodeType::Node16 => self.keys[0..min(NODE16MAX, self.meta.num_children)]
                 .iter()
                 .position(|&c| key == c),
@@ -354,9 +352,7 @@ impl<P: PartialTrait, V> InnerNode<P, V> {
     fn find_child_mut(&mut self, key: u8) -> Option<&mut Node<P, V>> {
         let idx = self.index(key)?;
         match &mut self.node_type {
-            NodeType::Node4 => {
-                Some(&mut self.children[idx])
-            }
+            NodeType::Node4 => Some(&mut self.children[idx]),
             NodeType::Node16 => Some(&mut self.children[idx]),
             NodeType::Node48 => {
                 let i = self.keys[key as usize] as usize;

@@ -195,6 +195,12 @@ pub struct FlatNode<N, const WIDTH: usize> {
     num_children: u8,
 }
 
+impl<N, const WIDTH: usize> Default for FlatNode<N, WIDTH> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<N, const WIDTH: usize> FlatNode<N, WIDTH> {
     #[inline]
     pub fn new() -> Self {
@@ -220,34 +226,34 @@ impl<N, const WIDTH: usize> FlatNode<N, WIDTH> {
     fn find_pos(&self, key: u8) -> Option<usize> {
         let idx = (0..self.num_children as usize)
             .rev()
-            .find(|&i| key < self.keys.as_ref()[i as usize]);
+            .find(|&i| key < self.keys.as_ref()[i]);
         idx.or(Some(self.num_children as usize))
     }
 
     #[inline]
     fn index(&self, key: u8) -> Option<usize> {
         if WIDTH == 16 {
-            let mut left = 0 as usize;
+            let mut left = 0_usize;
             let mut right = self.num_children as usize;
             while left < right {
-                let mid = ((left + right) / 2) as usize;
-                if self.keys[mid] == key {
-                    return Some(mid);
-                } else if self.keys[mid] < key {
-                    left = mid + 1;
-                } else {
-                    right = mid;
+                let mid = (left + right) / 2;
+                match self.keys[mid] {
+                    v if v == key => return Some(mid),
+                    v if v < key => {
+                        left = mid + 1;
+                    }
+                    _ => {
+                        right = mid;
+                    }
                 }
             }
             None
         } else {
-            let res =
-                (0..self.num_children as usize).find(|&i| self.keys.as_ref()[i as usize] == key);
-            res
+            (0..self.num_children as usize).find(|&i| self.keys.as_ref()[i] == key)
         }
     }
 
-    fn to_node48<const NEW_WIDTH: usize>(&mut self) -> Node48<N, NEW_WIDTH> {
+    fn grow<const NEW_WIDTH: usize>(&mut self) -> Node48<N, NEW_WIDTH> {
         let mut n48 = Node48::new();
         for i in 0..self.num_children as usize {
             n48.keys[self.keys[i] as usize] = (i + 1) as u8;
@@ -336,6 +342,12 @@ pub struct Node48<N, const WIDTH: usize> {
     num_children: u8,
 }
 
+impl<N, const WIDTH: usize> Default for Node48<N, WIDTH> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<N, const WIDTH: usize> Node48<N, WIDTH> {
     pub fn new() -> Self {
         Self {
@@ -360,13 +372,13 @@ impl<N, const WIDTH: usize> Node48<N, WIDTH> {
         node
     }
 
-    fn grow<const NEW_WIDTH: usize>(&mut self) -> Node256<N> { 
+    fn grow<const NEW_WIDTH: usize>(&mut self) -> Node256<N> {
         let mut n256: Node256<N> = Node256::new();
 
-        for (k, v) in self.keys.iter().enumerate().filter(|(_, v)| **v > 0){
+        for (k, v) in self.keys.iter().enumerate().filter(|(_, v)| **v > 0) {
             let val_idx = *v as usize;
             let old = unsafe {
-                mem::replace(&mut self.children[val_idx -1], MaybeUninit::uninit()).assume_init()
+                mem::replace(&mut self.children[val_idx - 1], MaybeUninit::uninit()).assume_init()
             };
             n256.add_child(k as u8, old);
         }
@@ -421,7 +433,7 @@ impl<N, const WIDTH: usize> NodeTrait<N> for Node48<N, WIDTH> {
 
         for i in 0..self.keys.len() {
             // find key which uses last cell inside values array
-            if self.keys[i] == self.num_children as u8 {
+            if self.keys[i] == self.num_children {
                 // move value of key which points to last array cell
                 self.keys[i] = val_idx as u8 + 1;
                 self.children[val_idx] = mem::replace(
@@ -461,9 +473,15 @@ pub struct Node256<N> {
     num_children: usize,
 }
 
+impl<N> Default for Node256<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<N> Drop for Node256<N> {
     fn drop(&mut self) {
-        for value in &mut self.children[..self.num_children as usize] {
+        for value in &mut self.children[..self.num_children] {
             unsafe { value.assume_init_drop() }
         }
         self.num_children = 0;
@@ -558,7 +576,7 @@ impl<N> NodeTrait<N> for Node256<N> {
 
     #[inline]
     fn num_children(&self) -> usize {
-        self.num_children as usize
+        self.num_children
     }
 
     fn width(&self) -> usize {
@@ -620,7 +638,6 @@ mod tests {
         for i in 0..16 {
             assert!(matches!(resized.seek_child(i as u8), Some(v) if *v == i));
         }
-        
 
         let mut node = super::FlatNode::<usize, 4>::new();
         node.add_child(1, 1);
@@ -699,14 +716,11 @@ mod tests {
         for i in 0..48 {
             assert!(matches!(resized.seek_child(i as u8), Some(v) if *v == i));
         }
-
-
     }
 
     #[test]
     fn test_node256() {
         node_test(super::Node256::<usize>::new(), 255);
-
 
         let mut n256 = super::Node256::new();
         for i in 0..255 {
