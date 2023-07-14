@@ -2,6 +2,7 @@
 mod art;
 
 use std::cmp::min;
+use std::mem::{self, MaybeUninit};
 
 pub trait Partial {
     fn at(&self, pos: usize) -> u8;
