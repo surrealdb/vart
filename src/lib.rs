@@ -2,7 +2,8 @@
 mod art;
 pub mod node;
 
-use std::cmp::min;
+use std::{cmp::min, fmt::Debug};
+
 
 
 pub trait Prefix {
@@ -21,6 +22,10 @@ pub trait Key: Clone {
         self.prefix_after(0)
     }
 }
+
+pub trait PrefixTrait: Prefix + Clone + PartialEq + Debug + for<'a> From<&'a [u8]> {}
+impl<T: Prefix + Clone + PartialEq + Debug + for<'a> From<&'a [u8]>> PrefixTrait for T {}
+
 
 /*
     Partial trait implementations
@@ -116,7 +121,6 @@ impl<const SIZE: usize, K: Key> From<K> for ArrayPrefix<SIZE> {
     Key trait implementations
 */
 
-// Owned vec size key.
 #[derive(Clone)]
 pub struct VectorKey {
     data: Vec<u8>,
@@ -161,34 +165,102 @@ impl Key for VectorKey {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct ArrayKey<const N: usize> {
-    data: [u8; N],
-    len: usize,
+/*
+    Vec Array implementation
+*/
+
+
+pub struct VecArray<X, const WIDTH: usize> {
+    storage: Vec<Option<X>>,
 }
 
-impl<const N: usize> ArrayKey<N> {
-    pub fn from_str(key: &str) -> Self {
-        assert!(key.len() < N, "data length is greater than array length");
-        let mut arr = [0; N];
-        arr[..key.len()].copy_from_slice(key.as_bytes());
+impl<X, const WIDTH: usize> VecArray<X, WIDTH> {
+    pub fn new() -> Self {
         Self {
-            data: arr,
-            len: key.len() + 1,
+            storage: Vec::with_capacity(WIDTH),
         }
     }
-}
 
-impl<const N: usize> Key for ArrayKey<N> {
-    fn at(&self, pos: usize) -> u8 {
-        self.data[pos]
+    pub fn push(&mut self, x: X) -> usize {
+        let pos = self.first_free_pos();
+        self.storage[pos] = Some(x);
+        pos
     }
 
-    fn length(&self) -> usize {
-        self.len
+    pub fn pop(&mut self) -> Option<X> {
+        self.last_used_pos().and_then(|pos| self.storage[pos].take())
     }
 
-    fn prefix_after(&self, pos: usize) -> &[u8] {
-        &self.data[pos..self.length()]
+    pub fn last(&self) -> Option<&X> {
+        self.last_used_pos().and_then(|pos| self.storage[pos].as_ref())
+    }
+
+    #[inline]
+    pub fn last_used_pos(&self) -> Option<usize> {
+        self.storage.iter().rposition(Option::is_some)
+    }
+
+    #[inline]
+    pub fn first_free_pos(&mut self) -> usize {
+        let pos = self.storage.iter().position(|x| x.is_none());
+        match pos {
+            Some(p) => p,
+            None => {
+                // No free position was found, so we add a new one.
+                self.storage.push(None);
+                self.storage.len() - 1
+            }
+        }
+    }
+
+    #[inline]
+    pub fn get(&self, pos: usize) -> Option<&X> {
+        self.storage.get(pos).and_then(Option::as_ref)
+    }
+
+    #[inline]
+    pub fn get_mut(&mut self, pos: usize) -> Option<&mut X> {
+        self.storage.get_mut(pos).and_then(Option::as_mut)
+    }
+
+    #[inline]
+    pub fn set(&mut self, pos: usize, x: X) {
+        if pos < self.storage.len() {
+            self.storage[pos] = Some(x);
+        } else {
+            self.storage.resize_with(pos + 1, || None);
+            self.storage[pos] = Some(x);
+        }
+    }
+
+
+    #[inline]
+    pub fn erase(&mut self, pos: usize) -> Option<X> {
+        self.storage[pos].take()
+    }
+
+    pub fn clear(&mut self) {
+        self.storage.clear();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.storage.is_empty()
+    }
+
+
+    pub fn iter_keys(&self) -> impl DoubleEndedIterator<Item = usize> + '_ {
+        self.storage.iter().enumerate().filter_map(|(i, x)| {
+            if x.is_some() {
+                Some(i)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (usize, &X)> {
+        self.storage.iter().enumerate().filter_map(|(i, x)| {
+            x.as_ref().map(|v| (i, v))
+        })
     }
 }

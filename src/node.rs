@@ -3,6 +3,8 @@
 use std::cmp::min;
 use std::mem::MaybeUninit;
 
+use crate::{Prefix, VecArray};
+
 
 /*
     Node trait implementations
@@ -14,33 +16,46 @@ pub trait NodeTrait<N> {
     fn find_child_mut(&mut self, key: u8) -> Option<&mut N>;
     fn delete_child(&mut self, key: u8) -> Option<N>;
     fn num_children(&self) -> usize;
-    fn width(&self) -> usize;
+    fn size(&self) -> usize;
 }
 
-pub struct FlatNode<N, const WIDTH: usize> {
+pub struct LeafNode<K: Prefix + Clone, V> {
+    pub key: K,
+    pub value: V,
+    pub ts: u64, // Timestamp for the leaf node
+}
+
+impl<K: Prefix + Clone, V> LeafNode<K, V> {
+    pub fn new(key: K, value: V) -> Self {
+        Self { key, value, ts:0 }
+    }
+}
+
+
+pub struct FlatNode<P: Prefix + Clone, N, const WIDTH: usize> {
+    pub prefix: P, // Prefix associated with the node (and Key in the leaf node)
+    pub ts: u64, // Timestamp for the flat node
+
+    // Keys and children
     keys: [u8; WIDTH],
     children: Box<[MaybeUninit<N>; WIDTH]>,
     num_children: u8,
 }
 
-impl<N, const WIDTH: usize> Default for FlatNode<N, WIDTH> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<N, const WIDTH: usize> FlatNode<N, WIDTH> {
+impl<P: Prefix + Clone, N, const WIDTH: usize> FlatNode<P, N, WIDTH> {
     #[inline]
-    pub fn new() -> Self {
+    pub fn new(prefix: P) -> Self {
         Self {
+            prefix: prefix,
+            ts:0,
             keys: [0; WIDTH],
             children: Box::new(unsafe { MaybeUninit::uninit().assume_init() }),
             num_children: 0,
         }
     }
 
-    pub fn resize<const NEW_WIDTH: usize>(&mut self) -> FlatNode<N, NEW_WIDTH> {
-        let mut new: FlatNode<N, NEW_WIDTH> = FlatNode::new();
+    pub fn resize<const NEW_WIDTH: usize>(&mut self) -> FlatNode<P, N, NEW_WIDTH> {
+        let mut new: FlatNode<P, N, NEW_WIDTH> = FlatNode::new(self.prefix.clone());
         for i in 0..self.num_children as usize {
             new.keys[i] = self.keys[i];
             new.children[i] = std::mem::replace(&mut self.children[i], MaybeUninit::uninit())
@@ -65,8 +80,8 @@ impl<N, const WIDTH: usize> FlatNode<N, WIDTH> {
         .position(|&c| key == c)
     }
 
-    pub fn grow<const NEW_WIDTH: usize>(&mut self) -> Node48<N, NEW_WIDTH> {
-        let mut n48 = Node48::new();
+    pub fn grow<const NEW_WIDTH: usize>(&mut self) -> Node48<P, N, NEW_WIDTH> {
+        let mut n48 = Node48::new(self.prefix.clone());
         for i in 0..self.num_children as usize {
             let stolen = std::mem::replace(&mut self.children[i], MaybeUninit::uninit());
             n48.add_child(self.keys[i], unsafe { stolen.assume_init() });
@@ -76,10 +91,10 @@ impl<N, const WIDTH: usize> FlatNode<N, WIDTH> {
     }
 }
 
-impl<N, const WIDTH: usize> NodeTrait<N> for FlatNode<N, WIDTH> {
+impl<P: Prefix + Clone, N, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N, WIDTH> {
     #[inline]
     fn add_child(&mut self, key: u8, node: N) {
-        let idx = self.find_pos(key).expect("add_child: no space left");
+        let idx = self.find_pos(key).expect("node is full");
 
         for i in (idx..self.num_children as usize).rev() {
             self.keys[i + 1] = self.keys[i];
@@ -101,30 +116,24 @@ impl<N, const WIDTH: usize> NodeTrait<N> for FlatNode<N, WIDTH> {
     }
 
     fn delete_child(&mut self, key: u8) -> Option<N> {
-        // Find position of the key
         let idx = self
             .keys
             .iter()
             .take(self.num_children as usize)
             .position(|&k| k == key)?;
 
-        // Remove the value.
-        let node = std::mem::replace(&mut self.children[idx], MaybeUninit::uninit());
+        let deleted_node = std::mem::replace(&mut self.children[idx], MaybeUninit::uninit());
 
-        // Shift keys and children to the left.
         for i in idx..(WIDTH - 1) {
             self.keys[i] = self.keys[i + 1];
             self.children[i] = std::mem::replace(&mut self.children[i + 1], MaybeUninit::uninit());
         }
 
-        // Fix the last key and child and adjust count.
         self.keys[WIDTH - 1] = 0;
         self.children[WIDTH - 1] = MaybeUninit::uninit();
-
         self.num_children -= 1;
 
-        // Return what we deleted.
-        Some(unsafe { node.assume_init() })
+        Some(unsafe { deleted_node.assume_init() })
     }
 
     #[inline(always)]
@@ -133,12 +142,12 @@ impl<N, const WIDTH: usize> NodeTrait<N> for FlatNode<N, WIDTH> {
     }
 
     #[inline(always)]
-    fn width(&self) -> usize {
+    fn size(&self) -> usize {
         WIDTH
     }
 }
 
-impl<N, const WIDTH: usize> Drop for FlatNode<N, WIDTH> {
+impl<P: Prefix + Clone, N, const WIDTH: usize> Drop for FlatNode<P, N, WIDTH> {
     fn drop(&mut self) {
         for value in &mut self.children[..self.num_children as usize] {
             unsafe { value.assume_init_drop() }
@@ -147,73 +156,73 @@ impl<N, const WIDTH: usize> Drop for FlatNode<N, WIDTH> {
     }
 }
 
-pub struct Node48<N, const WIDTH: usize> {
-    child_ptr_indexes: Box<VecArray<u8, 256>>,
+pub struct Node48<P: Prefix + Clone, N, const WIDTH: usize> {
+    pub prefix: P, // Prefix associated with the node
+    pub ts: u64, // Timestamp for node48
+
+    // Keys and children
+    keys: Box<VecArray<u8, 256>>,
     children: Box<VecArray<N, WIDTH>>,
     num_children: u8,
 }
 
-impl<N, const WIDTH: usize> Default for Node48<N, WIDTH> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<N, const WIDTH: usize> Node48<N, WIDTH> {
-    pub fn new() -> Self {
+impl<P: Prefix + Clone, N, const WIDTH: usize> Node48<P, N, WIDTH> {
+    pub fn new(prefix: P) -> Self {
         Self {
-            child_ptr_indexes: Box::new(VecArray::new()),
+            prefix: prefix,
+            ts:0,
+            keys: Box::new(VecArray::new()),
             children: Box::new(VecArray::new()),
             num_children: 0,
         }
     }
 
-    pub fn shrink<const NEW_WIDTH: usize>(&mut self) -> FlatNode<N, NEW_WIDTH> {
-        let mut node = FlatNode::<N, NEW_WIDTH>::new();
+    pub fn shrink<const NEW_WIDTH: usize>(&mut self) -> FlatNode<P, N, NEW_WIDTH> {
+        let mut node = FlatNode::<P, N, NEW_WIDTH>::new(self.prefix.clone());
         self.num_children = 0;
         self.resize(&mut node);
         node
     }
 
-    pub fn grow(&mut self) -> Node256<N> {
-        let mut n256: Node256<N> = Node256::new();
+    pub fn grow(&mut self) -> Node256<P, N> {
+        let mut n256: Node256<P, N> = Node256::new(self.prefix.clone());
         self.num_children = 0;
         self.resize(&mut n256);
         n256
     }
 
     fn resize<NM: NodeTrait<N>>(&mut self, nm: &mut NM) {
-        for (key, pos) in self.child_ptr_indexes.iter() {
+        for (key, pos) in self.keys.iter() {
             let node = self.children.erase(*pos as usize).unwrap();
             nm.add_child(key as u8, node);
         }
     }
 }
 
-impl<N, const WIDTH: usize> NodeTrait<N> for Node48<N, WIDTH> {
+impl<P: Prefix + Clone, N, const WIDTH: usize> NodeTrait<N> for Node48<P, N, WIDTH> {
     fn add_child(&mut self, key: u8, node: N) {
         let pos = self.children.first_free_pos();
-        self.child_ptr_indexes.set(key as usize, pos as u8);
+        self.keys.set(key as usize, pos as u8);
         self.children.set(pos, node);
         self.num_children += 1;
     }
 
     fn find_child(&self, key: u8) -> Option<&N> {
-        if let Some(pos) = self.child_ptr_indexes.get(key as usize) {
+        if let Some(pos) = self.keys.get(key as usize) {
             return self.children.get(*pos as usize);
         }
         None
     }
 
     fn find_child_mut(&mut self, key: u8) -> Option<&mut N> {
-        if let Some(pos) = self.child_ptr_indexes.get(key as usize) {
+        if let Some(pos) = self.keys.get(key as usize) {
             return self.children.get_mut(*pos as usize);
         }
         None
     }
 
     fn delete_child(&mut self, key: u8) -> Option<N> {
-        let pos = self.child_ptr_indexes.erase(key as usize)?;
+        let pos = self.keys.erase(key as usize)?;
 
         let old = self.children.erase(pos as usize);
         self.num_children -= 1;
@@ -226,160 +235,35 @@ impl<N, const WIDTH: usize> NodeTrait<N> for Node48<N, WIDTH> {
     }
 
     #[inline]
-    fn width(&self) -> usize {
+    fn size(&self) -> usize {
         WIDTH
     }
 }
 
-impl<N, const WIDTH: usize> Drop for Node48<N, WIDTH> {
+impl<P: Prefix + Clone, N, const WIDTH: usize> Drop for Node48<P, N, WIDTH> {
     fn drop(&mut self) {
         if self.num_children == 0 {
             return;
         }
         self.num_children = 0;
-        self.child_ptr_indexes.clear();
+        self.keys.clear();
         self.children.clear();
     }
 }
 
+pub struct Node256<P: Prefix + Clone, N> {
+    pub prefix: P, // Prefix associated with the node
+    pub ts: u64, // Timestamp for node56
 
-pub struct VecArray<X, const WIDTH: usize> {
-    storage: Vec<Option<X>>,
-}
-
-impl<X, const WIDTH: usize> VecArray<X, WIDTH> {
-    pub fn new() -> Self {
-        Self {
-            storage: Vec::with_capacity(WIDTH),
-        }
-    }
-
-    pub fn push(&mut self, x: X) -> usize {
-        let pos = self.first_free_pos();
-        self.storage[pos] = Some(x);
-        pos
-    }
-
-    pub fn pop(&mut self) -> Option<X> {
-        self.last_used_pos().and_then(|pos| self.storage[pos].take())
-    }
-
-    pub fn last(&self) -> Option<&X> {
-        self.last_used_pos().and_then(|pos| self.storage[pos].as_ref())
-    }
-
-    #[inline]
-    pub fn last_used_pos(&self) -> Option<usize> {
-        self.storage.iter().rposition(Option::is_some)
-    }
-
-    // #[inline]
-    // pub fn first_free_pos(&self) -> Option<usize> {
-    //     // self.storage.iter().position(Option::is_none)
-    //     self.storage.iter().position(|x| x.is_none())
-    // }
-
-    #[inline]
-    pub fn first_free_pos(&mut self) -> usize {
-        let pos = self.storage.iter().position(|x| x.is_none());
-        match pos {
-            Some(p) => p,
-            None => {
-                // No free position was found, so we add a new one.
-                self.storage.push(None);
-                self.storage.len() - 1
-            }
-        }
-    }
-
-    #[inline]
-    pub fn get(&self, pos: usize) -> Option<&X> {
-        self.storage.get(pos).and_then(Option::as_ref)
-    }
-
-    #[inline]
-    pub fn get_mut(&mut self, pos: usize) -> Option<&mut X> {
-        self.storage.get_mut(pos).and_then(Option::as_mut)
-    }
-
-    #[inline]
-    pub fn set(&mut self, pos: usize, x: X) {
-        if pos < self.storage.len() {
-            self.storage[pos] = Some(x);
-        } else {
-            self.storage.resize_with(pos + 1, || None);
-            self.storage[pos] = Some(x);
-        }
-    }
-
-
-    #[inline]
-    pub fn update(&mut self, pos: usize, x: X) -> Option<X> {
-        std::mem::replace(&mut self.storage[pos], Some(x))
-    }
-
-    #[inline]
-    pub fn erase(&mut self, pos: usize) -> Option<X> {
-        self.storage[pos].take()
-    }
-
-    pub fn clear(&mut self) {
-        self.storage.clear();
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.storage.is_empty()
-    }
-
-    pub fn size(&mut self) -> usize {
-        self.storage.len()
-    }
-
-    pub fn iter_keys(&self) -> impl DoubleEndedIterator<Item = usize> + '_ {
-        self.storage.iter().enumerate().filter_map(|(i, x)| {
-            if x.is_some() {
-                Some(i)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (usize, &X)> {
-        self.storage.iter().enumerate().filter_map(|(i, x)| {
-            x.as_ref().map(|v| (i, v))
-        })
-    }
-
-    pub fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = (usize, &mut X)> {
-        self.storage.iter_mut().enumerate().filter_map(|(i, x)| {
-            x.as_mut().map(|v| (i, v))
-        })
-    }
-}
-
-impl<X, const WIDTH: usize> Default for VecArray<X, WIDTH> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<X, const WIDTH: usize> std::ops::Index<usize> for VecArray<X, WIDTH> {
-    type Output = X;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        self.get(index).unwrap()
-    }
-}
-
-pub struct Node256<N> {
     children: Box<VecArray<N, 256>>,
     num_children: usize,
 }
 
-impl<N> Node256<N> {
-    pub fn new() -> Self {
+impl<P: Prefix + Clone, N> Node256<P, N> {
+    pub fn new(prefix: P) -> Self {
         Self {
+            prefix: prefix,
+            ts:0,
             children: Box::new(VecArray::new()),
             num_children: 0,
         }
@@ -390,8 +274,8 @@ impl<N> Node256<N> {
         self.children.iter().map(|(key, node)| (key as u8, node))
     }
 
-    pub fn shrink<const NEW_WIDTH: usize>(&mut self) -> Node48<N, NEW_WIDTH> {
-        let mut indexed = Node48::new();
+    pub fn shrink<const NEW_WIDTH: usize>(&mut self) -> Node48<P, N, NEW_WIDTH> {
+        let mut indexed = Node48::new(self.prefix.clone());
 
         let keys: Vec<usize> = self.children.iter_keys().collect();
         for key in keys {
@@ -403,7 +287,7 @@ impl<N> Node256<N> {
 
 }
 
-impl<N> NodeTrait<N> for Node256<N> {
+impl<P: Prefix + Clone, N> NodeTrait<N> for Node256<P, N> {
     #[inline]
     fn add_child(&mut self, key: u8, node: N) {
         self.children.set(key as usize, node);
@@ -434,7 +318,7 @@ impl<N> NodeTrait<N> for Node256<N> {
         self.num_children
     }
 
-    fn width(&self) -> usize {
+    fn size(&self) -> usize {
         256
     }
 }
@@ -442,6 +326,7 @@ impl<N> NodeTrait<N> for Node256<N> {
 #[cfg(test)]
 mod tests {
     use super::{VecArray, NodeTrait};
+    use crate::ArrayPrefix;
 
     #[test]
     fn new() {
@@ -497,13 +382,6 @@ mod tests {
         assert_eq!(v.get(5), Some(&7));
     }
 
-    #[test]
-    fn update() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.push(5);
-        assert_eq!(v.update(0, 6), Some(5));
-        assert_eq!(v.get(0), Some(&6));
-    }
 
     #[test]
     fn erase() {
@@ -547,77 +425,6 @@ mod tests {
         assert_eq!(values, vec![(0, &5), (1, &6)]);
     }
 
-    #[test]
-    fn iter_mut() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.push(5);
-        v.push(6);
-        for (index, value) in v.iter_mut() {
-            *value += 1;
-        }
-        assert_eq!(v.get(0), Some(&6));
-        assert_eq!(v.get(1), Some(&7));
-    }
-
-
-    // #[test]
-    // fn test_partial_before() {
-    //     let a = ArrayPartial::from_slice(b"Hello, world!");
-    //     assert_eq!(a.partial_before(5).to_slice(), b"Hello");
-    // }
-
-    // #[test]
-    // fn test_partial_from() {
-    //     let arr: ArrayPartial<16> = ArrayPartial::from_slice(b"Hello, world!");
-    //     assert_eq!(arr.partial_from(7, 5).to_slice(), b"world");
-    // }
-
-    // #[test]
-    // fn test_prefix_after() {
-    //     let arr: ArrayPartial<16> = ArrayPartial::from_slice(b"Hello, world!");
-    //     assert_eq!(arr.partial_after(7).to_slice(), b"world!");
-    // }
-
-    // #[test]
-    // fn test_at() {
-    //     let arr: ArrayPartial<16> = ArrayPartial::from_slice(b"Hello, world!");
-    //     assert_eq!(arr.at(0), 72);
-    // }
-
-    // #[test]
-    // fn test_length() {
-    //     let arr: ArrayPartial<16> = ArrayPartial::from_slice(b"Hello, world!");
-    //     assert_eq!(arr.length(), 13);
-    // }
-
-    // #[test]
-    // fn test_prefix_length_common() {
-    //     let arr1: ArrayPartial<16> = ArrayPartial::from_slice(b"Hello, world!");
-    //     let arr2: ArrayPartial<16> = ArrayPartial::from_slice(b"Hello, there!");
-    //     assert_eq!(arr1.prefix_length_common(&arr2), 7);
-    // }
-
-    // #[test]
-    // fn test_from_slice() {
-    //     let arr: ArrayPartial<16> = ArrayPartial::from_slice(b"Hello, world!");
-    //     assert_eq!(arr.to_slice(), b"Hello, world!");
-    // }
-
-    // #[test]
-    // fn test_partial_chain_with_key() {
-    //     let arr1: ArrayPartial<16> = ArrayPartial::key(b"Hello, world!");
-    //     let arr2: ArrayPartial<16> = ArrayPartial::key(b"Hello, there!");
-    //     let partial1 = arr1.partial_before(6);
-    //     assert_eq!(partial1.to_slice(), b"Hello,");
-    //     let partial2 = arr2.partial_from(7, 5);
-    //     assert_eq!(partial2.to_slice(), b"there");
-    //     let partial3 = partial1.partial_after(1);
-    //     assert_eq!(partial3.to_slice(), b"ello,");
-    //     assert_eq!(0, partial3.prefix_length_common(&partial2));
-    // }
-
-
-
     fn node_test(mut node: impl NodeTrait<usize>, size: usize) {
         for i in 0..size {
             node.add_child(i as u8, i);
@@ -636,30 +443,33 @@ mod tests {
 
     #[test]
     fn test_flatnode() {
-        node_test(super::FlatNode::<usize, 4>::new(), 4);
-        node_test(super::FlatNode::<usize, 16>::new(), 16);
-        node_test(super::FlatNode::<usize, 32>::new(), 32);
-        node_test(super::FlatNode::<usize, 48>::new(), 48);
-        node_test(super::FlatNode::<usize, 64>::new(), 64);
+        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::key("foo".as_bytes());
+
+
+        node_test(super::FlatNode::<ArrayPrefix<8>, usize, 4>::new(dummy_prefix.clone()), 4);
+        node_test(super::FlatNode::<ArrayPrefix<8>, usize, 16>::new(dummy_prefix.clone()), 16);
+        node_test(super::FlatNode::<ArrayPrefix<8>, usize, 32>::new(dummy_prefix.clone()), 32);
+        node_test(super::FlatNode::<ArrayPrefix<8>, usize, 48>::new(dummy_prefix.clone()), 48);
+        node_test(super::FlatNode::<ArrayPrefix<8>, usize, 64>::new(dummy_prefix.clone()), 64);
 
         // resize from 16 to 4
-        let mut node = super::FlatNode::<usize, 16>::new();
+        let mut node = super::FlatNode::<ArrayPrefix<8>, usize, 16>::new(dummy_prefix.clone());
         for i in 0..4 {
             node.add_child(i as u8, i);
         }
 
-        let resized: super::FlatNode<usize, 4> = node.resize();
+        let resized: super::FlatNode<ArrayPrefix<8>, usize, 4> = node.resize();
         assert_eq!(resized.num_children, 4);
         for i in 0..4 {
             assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i));
         }
 
         // resize from 4 to 16
-        let mut node = super::FlatNode::<usize, 4>::new();
+        let mut node = super::FlatNode::<ArrayPrefix<8>, usize, 4>::new(dummy_prefix.clone());
         for i in 0..4 {
             node.add_child(i as u8, i);
         }
-        let mut resized: super::FlatNode<usize, 16> = node.resize();
+        let mut resized: super::FlatNode<ArrayPrefix<8>, usize, 16> = node.resize();
         assert_eq!(resized.num_children, 4);
         for i in 4..16 {
             resized.add_child(i as u8, i);
@@ -670,7 +480,7 @@ mod tests {
         }
 
         // resize from 16 to 48
-        let mut node = super::FlatNode::<usize, 16>::new();
+        let mut node = super::FlatNode::<ArrayPrefix<8>, usize, 16>::new(dummy_prefix.clone());
         for i in 0..16 {
             node.add_child(i as u8, i);
         }
@@ -683,7 +493,7 @@ mod tests {
         }
 
         
-        let mut node = super::FlatNode::<usize, 4>::new();
+        let mut node = super::FlatNode::<ArrayPrefix<8>, usize, 4>::new(dummy_prefix.clone());
         node.add_child(1, 1);
         node.add_child(2, 2);
         node.add_child(3, 3);
@@ -709,9 +519,10 @@ mod tests {
 
     #[test]
     fn test_node48() {
-        // node_test(super::Node48::<usize, 48>::new(), 48);
+        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::key("foo".as_bytes());
 
-        let mut n48 = super::Node48::<u8, 48>::new();
+        // node_test(super::Node48::<usize, 48>::new(), 48);
+        let mut n48 = super::Node48::<ArrayPrefix<8>, u8, 48>::new(dummy_prefix.clone());
         for i in 0..48 {
             n48.add_child(i, i);
             assert_eq!(*n48.find_child(i).unwrap(), i);
@@ -727,7 +538,7 @@ mod tests {
         }
 
         // resize from 48 to 16
-        let mut node = super::Node48::<u8, 48>::new();
+        let mut node = super::Node48::<ArrayPrefix<8>, u8, 48>::new(dummy_prefix.clone());
         for i in 0..16 {
             node.add_child(i as u8, i);
         }
@@ -739,7 +550,7 @@ mod tests {
         }
 
         // resize from 48 to 4
-        let mut node = super::Node48::<u8, 48>::new();
+        let mut node = super::Node48::<ArrayPrefix<8>, u8, 48>::new(dummy_prefix.clone());
         for i in 0..4 {
             node.add_child(i as u8, i);
         }
@@ -750,7 +561,7 @@ mod tests {
         }
 
         // resize from 48 to 256
-        let mut node = super::Node48::<u8, 48>::new();
+        let mut node = super::Node48::<ArrayPrefix<8>, u8, 48>::new(dummy_prefix.clone());
         for i in 0..48 {
             node.add_child(i as u8, i);
         }
@@ -764,9 +575,11 @@ mod tests {
 
     #[test]
     fn test_node256() {
-        node_test(super::Node256::<usize>::new(), 255);
+        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::key("foo".as_bytes());
 
-        let mut n256 = super::Node256::new();
+        node_test(super::Node256::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone()), 255);
+
+        let mut n256 = super::Node256::new(dummy_prefix.clone());
         for i in 0..255 {
             n256.add_child(i, i);
             assert_eq!(*n256.find_child(i).unwrap(), i);
@@ -775,7 +588,7 @@ mod tests {
         }
 
         // resize from 256 to 48
-        let mut node = super::Node256::new();
+        let mut node = super::Node256::new(dummy_prefix.clone());
         for i in 0..48 {
             node.add_child(i, i);
         }

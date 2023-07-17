@@ -1,6 +1,6 @@
 use std::mem;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use art::node::VecArray;
+use art::VecArray;
 
 fn bench_vec_array_push(c: &mut Criterion) {
     let mut vec_array: VecArray<u64, 1000> = VecArray::new();

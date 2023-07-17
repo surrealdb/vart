@@ -1,9 +1,9 @@
 use core::panic;
 use std::mem;
-use std::{cmp::min, fmt::Debug};
+use std::cmp::min;
 
-use crate::{ArrayPrefix, Key, Prefix};
-use crate::node::{NodeTrait, Node256, Node48, FlatNode};
+use crate::{PrefixTrait, ArrayPrefix, Key, Prefix};
+use crate::node::{NodeTrait, Node256, Node48, FlatNode, LeafNode};
 
 
 // Minimum and maximum number of children for Node4
@@ -23,35 +23,31 @@ const NODE256MIN: usize = NODE48MAX + 1;
 const NODE256MAX: usize = 256;
 
 
-// From the specification: Radix trees consist of two types of nodes:
-// Inner nodes, which map partial keys to other nodes,
-// and leaf nodes, which store the values corresponding to the keys.
+// From the specification: Adaptive Radix tries consist of two types of nodes:
+// Inner nodes, which map partial(prefix) keys to other nodes,
+// and leaf nodes, which store the values corresponding to the key.
 struct Node<P: Prefix + Clone, V> {
-    pub(crate) prefix: P, // Prefix associated with the node (and Key in the leaf node)
-    pub(crate) node_type: NodeType<P, V>, // Type of the node
+    pub node_type: NodeType<P, V>, // Type of the node
 }
 
 enum NodeType<P: Prefix + Clone, V> {
     // Leaf node of the adaptive radix trie
-    Leaf(V),
+    Leaf(LeafNode<P, V>),
     // Inner node of the adaptive radix trie
-    Node4(FlatNode<Node<P, V>, 4>),   // Node with 4 keys and 4 children
-    Node16(FlatNode<Node<P, V>, 16>),   // Node with 16 keys and 16 children
-    Node48(Node48<Node<P, V>, 48>),   // Node with 256 keys and 48 children
-    Node256(Node256<Node<P, V>>),   // Node with 256 keys and 256 children
+    Node4(FlatNode<P, Node<P, V>, 4>),   // Node with 4 keys and 4 children
+    Node16(FlatNode<P, Node<P, V>, 16>),   // Node with 16 keys and 16 children
+    Node48(Node48<P, Node<P, V>, 48>),   // Node with 256 keys and 48 children
+    Node256(Node256<P, Node<P, V>>),   // Node with 256 keys and 256 children
 }
 
 // Adaptive radix trie
-pub trait PartialTrait: Prefix + Clone + PartialEq + Debug + for<'a> From<&'a [u8]> {}
-impl<T: Prefix + Clone + PartialEq + Debug + for<'a> From<&'a [u8]>> PartialTrait for T {}
-
-pub struct Tree<P: PartialTrait, V> {
+pub struct Tree<P: PrefixTrait, V> {
     root: Option<Node<P, V>>, // Root node of the tree
     size: u64,                // Number of elements in the tree
 }
 
 // Default implementation for the Tree struct
-impl<P: PartialTrait, V> Default for Tree<P, V> {
+impl<P: PrefixTrait, V> Default for Tree<P, V> {
     fn default() -> Self {
         Tree {
             root: None,
@@ -60,12 +56,11 @@ impl<P: PartialTrait, V> Default for Tree<P, V> {
     }
 }
 
-impl<P: PartialTrait + Clone, V> Node<P, V> {
+impl<P: PrefixTrait + Clone, V> Node<P, V> {
     #[inline]
     pub(crate) fn new_leaf(key: P, value: V) -> Node<P, V> {
         Self {
-            prefix: key,
-            node_type: NodeType::Leaf(value),
+            node_type: NodeType::Leaf(LeafNode { key: key, value: value, ts:0 }),
         }
     }
 
@@ -76,9 +71,8 @@ impl<P: PartialTrait + Clone, V> Node<P, V> {
     #[inline]
     #[allow(dead_code)]
     pub fn new_node4(prefix: P) -> Self {
-        let nt = NodeType::Node4(FlatNode::new());
+        let nt = NodeType::Node4(FlatNode::new(prefix));
         Self {
-            prefix,
             node_type: nt,
         }
     }
@@ -92,9 +86,8 @@ impl<P: PartialTrait + Clone, V> Node<P, V> {
     #[inline]
     #[allow(dead_code)]
     pub fn new_node16(prefix: P) -> Self {
-        let nt = NodeType::Node16(FlatNode::new());
+        let nt = NodeType::Node16(FlatNode::new(prefix));
         Self {
-            prefix,
             node_type: nt,
         }
     }
@@ -109,9 +102,8 @@ impl<P: PartialTrait + Clone, V> Node<P, V> {
     #[inline]
     #[allow(dead_code)]
     pub fn new_node48(prefix: P) -> Self {
-        let nt = NodeType::Node48(Node48::new());
+        let nt = NodeType::Node48(Node48::new(prefix));
         Self {
-            prefix,
             node_type: nt,
         }
     }
@@ -126,9 +118,8 @@ impl<P: PartialTrait + Clone, V> Node<P, V> {
     #[inline]
     #[allow(dead_code)]
     pub fn new_node256(prefix: P) -> Self {
-        let nt = NodeType::Node256(Node256::new());
+        let nt = NodeType::Node256(Node256::new(prefix));
         Self {
-            prefix,
             node_type: nt,
         }
     }
@@ -136,9 +127,9 @@ impl<P: PartialTrait + Clone, V> Node<P, V> {
     #[inline]
     fn is_full(&self) -> bool {
         match &self.node_type {
-            NodeType::Node4(km) => self.num_children() >= km.width(),
-            NodeType::Node16(km) => self.num_children() >= km.width(),
-            NodeType::Node48(im) => self.num_children() >= im.width(),
+            NodeType::Node4(km) => self.num_children() >= km.size(),
+            NodeType::Node16(km) => self.num_children() >= km.size(),
+            NodeType::Node48(im) => self.num_children() >= im.size(),
             // Should not be possible.
             NodeType::Node256(_) => self.num_children() >= 256,
             NodeType::Leaf(_) => unreachable!("should not be possible"),
@@ -271,6 +262,26 @@ impl<P: PartialTrait + Clone, V> Node<P, V> {
         !self.is_leaf()
     }
 
+    fn prefix(&self) -> &P {
+        match &self.node_type {
+            NodeType::Node4(n) => &n.prefix,
+            NodeType::Node16(n) => &n.prefix,
+            NodeType::Node48(n) => &n.prefix,
+            NodeType::Node256(n) => &n.prefix,
+            NodeType::Leaf(n) => &n.key,
+        }
+    }
+
+    fn set_prefix(&mut self, prefix: P) {
+        match &mut self.node_type {
+            NodeType::Node4(n) => n.prefix = prefix,
+            NodeType::Node16(n) => n.prefix = prefix,
+            NodeType::Node48(n) => n.prefix = prefix,
+            NodeType::Node256(n) => n.prefix = prefix,
+            NodeType::Leaf(n) => n.key = prefix,
+        }
+    }
+
     // Shrinks the current ArtNode to the next smallest size.
     // ArtNodes of type NODE256 will shrink to NODE48
     // ArtNodes of type NODE48 will shrink to NODE16.
@@ -311,10 +322,10 @@ impl<P: PartialTrait + Clone, V> Node<P, V> {
     }
 
     pub fn value(&self) -> Option<&V> {
-        let NodeType::Leaf(value) = &self.node_type else {
+        let NodeType::Leaf(leaf) = &self.node_type else {
             return None;
         };
-        Some(value)
+        Some(&leaf.value)
     }
 
     pub fn node_type_name(&self) -> String {
@@ -328,7 +339,7 @@ impl<P: PartialTrait + Clone, V> Node<P, V> {
     }
 }
 
-impl<P: PartialTrait, V> Tree<P, V> {
+impl<P: PrefixTrait, V> Tree<P, V> {
     pub fn new() -> Self {
         Tree {
             root: None,
@@ -352,8 +363,8 @@ impl<P: PartialTrait, V> Tree<P, V> {
         value: V,
         depth: usize,
     ) -> Option<V> {
-        let cur_node_prefix = cur_node.prefix.clone();
-        let cur_node_partial_len = cur_node.prefix.length();
+        let cur_node_prefix = cur_node.prefix().clone();
+        let cur_node_partial_len = cur_node.prefix().length();
 
         let key_prefix = key.prefix_after(depth);
         let longest_common_prefix = cur_node_prefix.longest_common_prefix(key_prefix);
@@ -364,14 +375,14 @@ impl<P: PartialTrait, V> Tree<P, V> {
 
         let is_partial_match = min(cur_node_partial_len, key_prefix.len()) == longest_common_prefix;
 
-        if let NodeType::Leaf(ref mut v) = &mut cur_node.node_type {
+        if let NodeType::Leaf(ref mut leaf) = &mut cur_node.node_type {
             if is_partial_match && cur_node_prefix.length() == key_prefix.len() {
-                return Some(std::mem::replace(v, value));
+                return Some(std::mem::replace(&mut leaf.value, value));
             }
         }
 
         if !is_partial_match {
-            cur_node.prefix = new_key;
+            cur_node.set_prefix(new_key);
             let n4 = Node::new_node4(partial);
             let replacement_current = std::mem::replace(cur_node, n4);
 
@@ -397,7 +408,6 @@ impl<P: PartialTrait, V> Tree<P, V> {
             );
         };
 
-        // assert!(cur_node.is_inner());
         let new_leaf = Node::new_leaf(key_prefix[longest_common_prefix..key_prefix.len()].into(), value);
         cur_node.add_child(k, new_leaf);
         None
@@ -439,7 +449,7 @@ impl<P: PartialTrait, V> Tree<P, V> {
             return false;
         }
 
-        let prefix = cur_node_ptr.as_ref().unwrap().prefix.clone();
+        let prefix = cur_node_ptr.as_ref().unwrap().prefix().clone();
 
         let key_prefix = key.prefix_after(depth);
         let longest_common_prefix = prefix.longest_common_prefix(key_prefix);
@@ -459,7 +469,7 @@ impl<P: PartialTrait, V> Tree<P, V> {
         let next_child = &mut node.find_child_mut(k);
         if let Some(child) = next_child {
             if child.num_children() == 0 {
-                if child.prefix.length() == key_prefix.len() - longest_common_prefix {
+                if child.prefix().length() == key_prefix.len() - longest_common_prefix {
                     node.delete_child(k).expect("child not found");
                     return true;
                 }
@@ -481,9 +491,9 @@ impl<P: PartialTrait, V> Tree<P, V> {
         let mut depth = 0;
         loop {
             let key_prefix = key.prefix_after(depth);
-            let prefix = &cur_node.prefix;
-            let partial_common_match = prefix.longest_common_prefix(key_prefix);
-            if partial_common_match != prefix.length() {
+            let prefix = cur_node.prefix();
+            let lcp = prefix.longest_common_prefix(key_prefix);
+            if lcp != prefix.length() {
                 return None;
             }
 
@@ -563,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn test_string_delete() {
+    fn test_string_insert_delete() {
         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
         tree.insert(&VectorKey::from_str("a"), 1);
         tree.insert(&VectorKey::from_str("aa"), 1);
@@ -574,6 +584,21 @@ mod tests {
         assert!(tree.remove(&VectorKey::from_str("aa")));
         assert!(tree.remove(&VectorKey::from_str("aal")));
         assert!(tree.remove(&VectorKey::from_str("aalii")));
+
+        tree.insert(&VectorKey::from_str("abc"), 2);
+        tree.insert(&VectorKey::from_str("abcd"), 1);
+        tree.insert(&VectorKey::from_str("abcde"), 3);
+        tree.insert(&VectorKey::from_str("xyz"), 4);
+        tree.insert(&VectorKey::from_str("axyz"), 6);
+        tree.insert(&VectorKey::from_str("1245zzz"), 6);
+
+        assert_eq!(tree.remove(&VectorKey::from_str("abc")), true);
+        assert_eq!(tree.remove(&VectorKey::from_str("abcde")), true);
+        assert_eq!(tree.remove(&VectorKey::from_str("abcd")), true);
+        assert_eq!(tree.remove(&VectorKey::from_str("xyz")), true);
+        assert_eq!(tree.remove(&VectorKey::from_str("axyz")), true);
+        assert_eq!(tree.remove(&VectorKey::from_str("1245zzz")), true);
+
     }
 
     #[test]
@@ -606,74 +631,10 @@ mod tests {
     }
 
     #[test]
-    fn test_string_keys_get_set() {
-        let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
-        tree.insert(&VectorKey::from_str("abcd"), 1);
-        tree.insert(&VectorKey::from_str("abc"), 2);
-        tree.insert(&VectorKey::from_str("abcde"), 3);
-        tree.insert(&VectorKey::from_str("xyz"), 4);
-        tree.insert(&VectorKey::from_str("xyz"), 5);
-        tree.insert(&VectorKey::from_str("axyz"), 6);
-        tree.insert(&VectorKey::from_str("1245zzz"), 6);
-
-        assert_eq!(*tree.get(&VectorKey::from_str("abcd")).unwrap(), 1);
-        assert_eq!(*tree.get(&VectorKey::from_str("abc")).unwrap(), 2);
-        assert_eq!(*tree.get(&VectorKey::from_str("abcde")).unwrap(), 3);
-        assert_eq!(*tree.get(&VectorKey::from_str("axyz")).unwrap(), 6);
-        assert_eq!(*tree.get(&VectorKey::from_str("xyz")).unwrap(), 5);
-
-        assert!(tree.remove(&VectorKey::from_str("abcde")));
-        assert_eq!(tree.get(&VectorKey::from_str("abcde")), None);
-        assert_eq!(*tree.get(&VectorKey::from_str("abc")).unwrap(), 2);
-        assert_eq!(*tree.get(&VectorKey::from_str("axyz")).unwrap(), 6);
-        assert!(tree.remove(&VectorKey::from_str("abc")));
-        assert_eq!(tree.get(&VectorKey::from_str("abc")), None);
-    }
-
-    #[test]
     fn test_string_duplicate_insert() {
         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
         assert!(tree.insert(&VectorKey::from_str("abc"), 1).is_none());
         assert!(tree.insert(&VectorKey::from_str("abc"), 2).is_some());
-    }
-
-    #[test]
-    fn test_string_keys_set_remove() {
-        let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
-        tree.insert(&VectorKey::from_str("abc"), 2);
-        tree.insert(&VectorKey::from_str("abcd"), 1);
-        tree.insert(&VectorKey::from_str("abcde"), 3);
-        tree.insert(&VectorKey::from_str("xyz"), 4);
-        tree.insert(&VectorKey::from_str("axyz"), 6);
-        tree.insert(&VectorKey::from_str("1245zzz"), 6);
-
-        assert_eq!(tree.remove(&VectorKey::from_str("abc")), true);
-        assert_eq!(tree.remove(&VectorKey::from_str("abcde")), true);
-        assert_eq!(tree.remove(&VectorKey::from_str("abcd")), true);
-        assert_eq!(tree.remove(&VectorKey::from_str("xyz")), true);
-        assert_eq!(tree.remove(&VectorKey::from_str("axyz")), true);
-        assert_eq!(tree.remove(&VectorKey::from_str("1245zzz")), true);
-    }
-
-    #[test]
-    fn test_insert() {
-        let DUMMY_VALUE: i32 = 1;
-        let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
-        assert!(tree
-            .insert(&VectorKey::from_str("hello"), DUMMY_VALUE)
-            .is_none());
-        assert!(tree
-            .insert(&VectorKey::from_str("hi"), DUMMY_VALUE)
-            .is_none());
-        assert!(tree
-            .insert(&VectorKey::from_str("bye"), DUMMY_VALUE)
-            .is_none());
-        assert!(tree
-            .insert(&VectorKey::from_str("world"), DUMMY_VALUE)
-            .is_none());
-        assert!(tree
-            .insert(&VectorKey::from_str("real"), DUMMY_VALUE)
-            .is_none());
     }
 
     // #[test]
@@ -703,17 +664,17 @@ mod tests {
     //     let leaf2 = LeafNode::new(b"hell", 1);
     //     let leaf3 = LeafNode::new(b"hello world", 1);
 
-    //     let partial_key = b"hello"[0];
+    //     let prefix_key = b"hello"[0];
 
     //     let mut inner = InnerNode::new_node4();
-    //     inner.add_child(partial_key, Node::Leaf(Box::new(leaf)));
-    //     inner.add_child(partial_key, Node::Leaf(Box::new(leaf2)));
-    //     inner.add_child(partial_key, Node::Leaf(Box::new(leaf3)));
+    //     inner.add_child(prefix_key, Node::Leaf(Box::new(leaf)));
+    //     inner.add_child(prefix_key, Node::Leaf(Box::new(leaf2)));
+    //     inner.add_child(prefix_key, Node::Leaf(Box::new(leaf3)));
 
     //     assert_eq!(inner.meta.num_children, 3);
-    //     assert_eq!(inner.keys[0], partial_key);
-    //     assert_eq!(inner.keys[1], partial_key);
-    //     assert_eq!(inner.keys[2], partial_key);
+    //     assert_eq!(inner.keys[0], prefix_key);
+    //     assert_eq!(inner.keys[1], prefix_key);
+    //     assert_eq!(inner.keys[2], prefix_key);
     // }
 
     // #[test]
@@ -724,21 +685,21 @@ mod tests {
     //     let leaf4 = LeafNode::new(b"hella", 1);
     //     let leaf5 = LeafNode::new(b"hellb", 1);
 
-    //     let partial_key = b"hello"[0];
+    //     let prefix_key = b"hello"[0];
 
     //     let mut inner = InnerNode::new_node4();
-    //     inner.add_child(partial_key, Node::Leaf(Box::new(leaf)));
-    //     inner.add_child(partial_key, Node::Leaf(Box::new(leaf2)));
-    //     inner.add_child(partial_key, Node::Leaf(Box::new(leaf3)));
-    //     inner.add_child(partial_key, Node::Leaf(Box::new(leaf4)));
-    //     inner.add_child(partial_key, Node::Leaf(Box::new(leaf5)));
+    //     inner.add_child(prefix_key, Node::Leaf(Box::new(leaf)));
+    //     inner.add_child(prefix_key, Node::Leaf(Box::new(leaf2)));
+    //     inner.add_child(prefix_key, Node::Leaf(Box::new(leaf3)));
+    //     inner.add_child(prefix_key, Node::Leaf(Box::new(leaf4)));
+    //     inner.add_child(prefix_key, Node::Leaf(Box::new(leaf5)));
 
     //     assert_eq!(inner.node_type, NodeType::Node16);
     //     assert_eq!(inner.meta.num_children, 5);
-    //     assert_eq!(inner.keys[0], partial_key);
-    //     assert_eq!(inner.keys[1], partial_key);
-    //     assert_eq!(inner.keys[2], partial_key);
-    //     assert_eq!(inner.keys[3], partial_key);
+    //     assert_eq!(inner.keys[0], prefix_key);
+    //     assert_eq!(inner.keys[1], prefix_key);
+    //     assert_eq!(inner.keys[2], prefix_key);
+    //     assert_eq!(inner.keys[3], prefix_key);
     // }
 
     // #[test]
