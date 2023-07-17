@@ -22,7 +22,7 @@ const NODE256MIN: usize = NODE48MAX + 1;
 const NODE256MAX: usize = 256;
 
 // From the specification: Adaptive Radix tries consist of two types of nodes:
-// Inner nodes, which map partial(prefix) keys to other nodes,
+// Inner nodes, which map prefix(prefix) keys to other nodes,
 // and leaf nodes, which store the values corresponding to the key.
 struct Node<P: Prefix + Clone, V> {
     pub node_type: NodeType<P, V>, // Type of the node
@@ -124,9 +124,8 @@ impl<P: PrefixTrait + Clone, V> Node<P, V> {
             NodeType::Node4(km) => self.num_children() >= km.size(),
             NodeType::Node16(km) => self.num_children() >= km.size(),
             NodeType::Node48(im) => self.num_children() >= im.size(),
-            // Should not be possible.
             NodeType::Node256(_) => self.num_children() >= 256,
-            NodeType::Leaf(_) => unreachable!("should not be possible"),
+            NodeType::Leaf(_) => panic!("should not be reached"),
         }
     }
 
@@ -149,7 +148,7 @@ impl<P: PrefixTrait + Clone, V> Node<P, V> {
             NodeType::Node256(n) => {
                 n.add_child(key, child);
             }
-            NodeType::Leaf(_) => panic!("should not be possible"),
+            NodeType::Leaf(_) => panic!("should not be reached"),
         }
     }
 
@@ -176,7 +175,7 @@ impl<P: PrefixTrait + Clone, V> Node<P, V> {
             NodeType::Node256 { .. } => {
                 panic!("should not grow a node 256")
             }
-            NodeType::Leaf(_) => panic!("should not be possible"),
+            NodeType::Leaf(_) => panic!("should not be reached"),
         }
     }
 
@@ -244,18 +243,21 @@ impl<P: PrefixTrait + Clone, V> Node<P, V> {
 
                 node
             }
-            NodeType::Leaf(_) => unreachable!("Should not be possible"),
+            NodeType::Leaf(_) => panic!("should not be reached"),
         }
     }
 
+    #[inline]
     fn is_leaf(&self) -> bool {
         matches!(&self.node_type, NodeType::Leaf(_))
     }
 
+    #[inline]
     fn is_inner(&self) -> bool {
         !self.is_leaf()
     }
 
+    #[inline]
     fn prefix(&self) -> &P {
         match &self.node_type {
             NodeType::Node4(n) => &n.prefix,
@@ -266,6 +268,7 @@ impl<P: PrefixTrait + Clone, V> Node<P, V> {
         }
     }
 
+    #[inline]
     fn set_prefix(&mut self, prefix: P) {
         match &mut self.node_type {
             NodeType::Node4(n) => n.prefix = prefix,
@@ -301,10 +304,11 @@ impl<P: PrefixTrait + Clone, V> Node<P, V> {
                 let n48 = n.shrink();
                 self.node_type = NodeType::Node48(n48);
             }
-            NodeType::Leaf(_) => unreachable!("should not be possible"),
+            NodeType::Leaf(_) => panic!("should not be reached"),
         }
     }
 
+    #[inline]
     pub fn num_children(&self) -> usize {
         match &self.node_type {
             NodeType::Node4(n) => n.num_children(),
@@ -315,7 +319,8 @@ impl<P: PrefixTrait + Clone, V> Node<P, V> {
         }
     }
 
-    pub fn value(&self) -> Option<&V> {
+    #[inline]
+    pub fn get_value(&self) -> Option<&V> {
         let NodeType::Leaf(leaf) = &self.node_type else {
             return None;
         };
@@ -358,27 +363,25 @@ impl<P: PrefixTrait, V> Tree<P, V> {
         depth: usize,
     ) -> Option<V> {
         let cur_node_prefix = cur_node.prefix().clone();
-        let cur_node_partial_len = cur_node.prefix().length();
+        let cur_node_prefix_len = cur_node.prefix().length();
 
         let key_prefix = key.prefix_after(depth);
         let longest_common_prefix = cur_node_prefix.longest_common_prefix(key_prefix);
 
         let new_key = cur_node_prefix.prefix_after(longest_common_prefix);
-        let partial = cur_node_prefix.prefix_before(longest_common_prefix);
-        let partial_len = partial.length();
-
-        let is_partial_match = min(cur_node_partial_len, key_prefix.len()) == longest_common_prefix;
+        let prefix = cur_node_prefix.prefix_before(longest_common_prefix);
+        let is_prefix_match = min(cur_node_prefix_len, key_prefix.len()) == longest_common_prefix;
 
         if let NodeType::Leaf(ref mut leaf) = &mut cur_node.node_type {
-            if is_partial_match && cur_node_prefix.length() == key_prefix.len() {
+            if is_prefix_match && cur_node_prefix.length() == key_prefix.len() {
                 return Some(std::mem::replace(&mut leaf.value, value));
             }
         }
 
-        if !is_partial_match {
+        if !is_prefix_match {
             cur_node.set_prefix(new_key);
-            let n4 = Node::new_node4(partial);
-            let replacement_current = std::mem::replace(cur_node, n4);
+            let n4 = Node::new_node4(prefix);
+            let old_node = std::mem::replace(cur_node, n4);
 
             let k1 = cur_node_prefix.at(longest_common_prefix);
             let k2 = key_prefix[longest_common_prefix];
@@ -387,14 +390,13 @@ impl<P: PrefixTrait, V> Tree<P, V> {
                 value,
             );
 
-            cur_node.add_child(k1, replacement_current);
+            cur_node.add_child(k1, old_node);
             cur_node.add_child(k2, new_leaf);
 
             return None;
         }
 
         let k = key_prefix[longest_common_prefix];
-
         let child_for_key = cur_node.find_child_mut(k);
         if let Some(child) = child_for_key {
             return Tree::insert_recurse(child, key, value, depth + longest_common_prefix);
@@ -447,12 +449,13 @@ impl<P: PrefixTrait, V> Tree<P, V> {
 
         let key_prefix = key.prefix_after(depth);
         let longest_common_prefix = prefix.longest_common_prefix(key_prefix);
-        let is_partial_match = min(prefix.length(), key_prefix.len()) == longest_common_prefix;
+        let is_prefix_match = min(prefix.length(), key_prefix.len()) == longest_common_prefix;
+
         let Some(node) = cur_node_ptr else {
             return false;
         };
 
-        if is_partial_match && prefix.length() == key_prefix.len() {
+        if is_prefix_match && prefix.length() == key_prefix.len() {
             *cur_node_ptr = None;
             return true;
         }
@@ -491,7 +494,7 @@ impl<P: PrefixTrait, V> Tree<P, V> {
             }
 
             if prefix.length() == key_prefix.len() {
-                return cur_node.value();
+                return cur_node.get_value();
             }
 
             let k = key.at(depth + prefix.length());
@@ -507,8 +510,8 @@ impl<P: PrefixTrait, V> Tree<P, V> {
 
 #[cfg(test)]
 mod tests {
-    use crate::art::{ArrayPrefix, Node, NodeType, Tree, NODE4MAX};
-    use crate::{Key, VectorKey};
+    use crate::art::{ArrayPrefix, Tree};
+    use crate::VectorKey;
     use std::fs::File;
     use std::io::{self, BufRead, BufReader};
 
