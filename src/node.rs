@@ -1,10 +1,7 @@
-#[allow(warnings)]
-
 use std::cmp::min;
 use std::mem::MaybeUninit;
 
 use crate::{Prefix, VecArray};
-
 
 /*
     Node trait implementations
@@ -27,14 +24,30 @@ pub struct LeafNode<K: Prefix + Clone, V> {
 
 impl<K: Prefix + Clone, V> LeafNode<K, V> {
     pub fn new(key: K, value: V) -> Self {
-        Self { key, value, ts:0 }
+        Self { key, value, ts: 0 }
     }
 }
 
+// Source: https://www.the-paper-trail.org/post/art-paper-notes/
+//
+// Node4: For nodes with up to four children, ART stores all the keys in a list,
+// and the child pointers in a parallel list. Looking up the next character
+// in a string means searching the list of child keys, and then using the
+// index to look up the corresponding pointer.
+//
+// Node16: Keys in a Node16 are stored sorted, so binary search could be used to
+// find a particular key. Nodes with from 5 to 16 children have an identical layout
+// to Node4, just with 16 children per node
+//
+// A FlatNode is a node with a fixed number of children. It is used for nodes with
+// more than 16 children. The children are stored in a fixed-size array, and the
+// keys are stored in a parallel array. The keys are stored in sorted order, so
+// binary search can be used to find a particular key. The FlatNode is used for
+// storing Node4 and Node16 since they have identical layouts.
 
 pub struct FlatNode<P: Prefix + Clone, N, const WIDTH: usize> {
     pub prefix: P, // Prefix associated with the node (and Key in the leaf node)
-    pub ts: u64, // Timestamp for the flat node
+    pub ts: u64,   // Timestamp for the flat node
 
     // Keys and children
     keys: [u8; WIDTH],
@@ -46,8 +59,8 @@ impl<P: Prefix + Clone, N, const WIDTH: usize> FlatNode<P, N, WIDTH> {
     #[inline]
     pub fn new(prefix: P) -> Self {
         Self {
-            prefix: prefix,
-            ts:0,
+            prefix,
+            ts: 0,
             keys: [0; WIDTH],
             children: Box::new(unsafe { MaybeUninit::uninit().assume_init() }),
             num_children: 0,
@@ -76,8 +89,8 @@ impl<P: Prefix + Clone, N, const WIDTH: usize> FlatNode<P, N, WIDTH> {
     #[inline]
     fn index(&self, key: u8) -> Option<usize> {
         self.keys[0..min(WIDTH, self.num_children as usize)]
-        .iter()
-        .position(|&c| key == c)
+            .iter()
+            .position(|&c| key == c)
     }
 
     pub fn grow<const NEW_WIDTH: usize>(&mut self) -> Node48<P, N, NEW_WIDTH> {
@@ -156,12 +169,21 @@ impl<P: Prefix + Clone, N, const WIDTH: usize> Drop for FlatNode<P, N, WIDTH> {
     }
 }
 
+// Source: https://www.the-paper-trail.org/post/art-paper-notes/
+//
+// Node48: It can hold up to three times as many keys as a Node16. As the paper says,
+// when there are more than 16 children, searching for the key can become expensive,
+// so instead the keys are stored implicitly in an array of 256 indexes. The entries
+// in that array index a separate array of up to 48 pointers.
+//
+// A Node48 is a 256-entry array of pointers to children. The pointers are stored in
+// a Vector Array, which is a Vector of length WIDTH (48) that stores the pointers.
 pub struct Node48<P: Prefix + Clone, N, const WIDTH: usize> {
     pub prefix: P, // Prefix associated with the node
-    pub ts: u64, // Timestamp for node48
+    pub ts: u64,   // Timestamp for node48
 
     // Keys and children
-    keys: Box<VecArray<u8, 256>>,
+    child_ptr_indexes: Box<VecArray<u8, 256>>,
     children: Box<VecArray<N, WIDTH>>,
     num_children: u8,
 }
@@ -169,9 +191,9 @@ pub struct Node48<P: Prefix + Clone, N, const WIDTH: usize> {
 impl<P: Prefix + Clone, N, const WIDTH: usize> Node48<P, N, WIDTH> {
     pub fn new(prefix: P) -> Self {
         Self {
-            prefix: prefix,
-            ts:0,
-            keys: Box::new(VecArray::new()),
+            prefix,
+            ts: 0,
+            child_ptr_indexes: Box::new(VecArray::new()),
             children: Box::new(VecArray::new()),
             num_children: 0,
         }
@@ -192,7 +214,7 @@ impl<P: Prefix + Clone, N, const WIDTH: usize> Node48<P, N, WIDTH> {
     }
 
     fn resize<NM: NodeTrait<N>>(&mut self, nm: &mut NM) {
-        for (key, pos) in self.keys.iter() {
+        for (key, pos) in self.child_ptr_indexes.iter() {
             let node = self.children.erase(*pos as usize).unwrap();
             nm.add_child(key as u8, node);
         }
@@ -202,27 +224,27 @@ impl<P: Prefix + Clone, N, const WIDTH: usize> Node48<P, N, WIDTH> {
 impl<P: Prefix + Clone, N, const WIDTH: usize> NodeTrait<N> for Node48<P, N, WIDTH> {
     fn add_child(&mut self, key: u8, node: N) {
         let pos = self.children.first_free_pos();
-        self.keys.set(key as usize, pos as u8);
+        self.child_ptr_indexes.set(key as usize, pos as u8);
         self.children.set(pos, node);
         self.num_children += 1;
     }
 
     fn find_child(&self, key: u8) -> Option<&N> {
-        if let Some(pos) = self.keys.get(key as usize) {
+        if let Some(pos) = self.child_ptr_indexes.get(key as usize) {
             return self.children.get(*pos as usize);
         }
         None
     }
 
     fn find_child_mut(&mut self, key: u8) -> Option<&mut N> {
-        if let Some(pos) = self.keys.get(key as usize) {
+        if let Some(pos) = self.child_ptr_indexes.get(key as usize) {
             return self.children.get_mut(*pos as usize);
         }
         None
     }
 
     fn delete_child(&mut self, key: u8) -> Option<N> {
-        let pos = self.keys.erase(key as usize)?;
+        let pos = self.child_ptr_indexes.erase(key as usize)?;
 
         let old = self.children.erase(pos as usize);
         self.num_children -= 1;
@@ -246,14 +268,23 @@ impl<P: Prefix + Clone, N, const WIDTH: usize> Drop for Node48<P, N, WIDTH> {
             return;
         }
         self.num_children = 0;
-        self.keys.clear();
+        self.child_ptr_indexes.clear();
         self.children.clear();
     }
 }
 
+// Source: https://www.the-paper-trail.org/post/art-paper-notes/
+//
+// Node256: It is the traditional trie node, used when a node has
+// between 49 and 256 children. Looking up child pointers is obviously
+// very efficient - the most efficient of all the node types - and when
+// occupancy is at least 49 children the wasted space is less significant.
+//
+// A Node256 is a 256-entry array of pointers to children. The pointers are stored in
+// a Vector Array, which is a Vector of length WIDTH (256) that stores the pointers.
 pub struct Node256<P: Prefix + Clone, N> {
     pub prefix: P, // Prefix associated with the node
-    pub ts: u64, // Timestamp for node56
+    pub ts: u64,   // Timestamp for node56
 
     children: Box<VecArray<N, 256>>,
     num_children: usize,
@@ -262,8 +293,8 @@ pub struct Node256<P: Prefix + Clone, N> {
 impl<P: Prefix + Clone, N> Node256<P, N> {
     pub fn new(prefix: P) -> Self {
         Self {
-            prefix: prefix,
-            ts:0,
+            prefix,
+            ts: 0,
             children: Box::new(VecArray::new()),
             num_children: 0,
         }
@@ -284,7 +315,6 @@ impl<P: Prefix + Clone, N> Node256<P, N> {
         }
         indexed
     }
-
 }
 
 impl<P: Prefix + Clone, N> NodeTrait<N> for Node256<P, N> {
@@ -325,7 +355,7 @@ impl<P: Prefix + Clone, N> NodeTrait<N> for Node256<P, N> {
 
 #[cfg(test)]
 mod tests {
-    use super::{VecArray, NodeTrait};
+    use super::{NodeTrait, VecArray};
     use crate::ArrayPrefix;
 
     #[test]
@@ -381,7 +411,6 @@ mod tests {
         }
         assert_eq!(v.get(5), Some(&7));
     }
-
 
     #[test]
     fn erase() {
@@ -443,14 +472,28 @@ mod tests {
 
     #[test]
     fn test_flatnode() {
-        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::key("foo".as_bytes());
+        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
 
-
-        node_test(super::FlatNode::<ArrayPrefix<8>, usize, 4>::new(dummy_prefix.clone()), 4);
-        node_test(super::FlatNode::<ArrayPrefix<8>, usize, 16>::new(dummy_prefix.clone()), 16);
-        node_test(super::FlatNode::<ArrayPrefix<8>, usize, 32>::new(dummy_prefix.clone()), 32);
-        node_test(super::FlatNode::<ArrayPrefix<8>, usize, 48>::new(dummy_prefix.clone()), 48);
-        node_test(super::FlatNode::<ArrayPrefix<8>, usize, 64>::new(dummy_prefix.clone()), 64);
+        node_test(
+            super::FlatNode::<ArrayPrefix<8>, usize, 4>::new(dummy_prefix.clone()),
+            4,
+        );
+        node_test(
+            super::FlatNode::<ArrayPrefix<8>, usize, 16>::new(dummy_prefix.clone()),
+            16,
+        );
+        node_test(
+            super::FlatNode::<ArrayPrefix<8>, usize, 32>::new(dummy_prefix.clone()),
+            32,
+        );
+        node_test(
+            super::FlatNode::<ArrayPrefix<8>, usize, 48>::new(dummy_prefix.clone()),
+            48,
+        );
+        node_test(
+            super::FlatNode::<ArrayPrefix<8>, usize, 64>::new(dummy_prefix.clone()),
+            64,
+        );
 
         // resize from 16 to 4
         let mut node = super::FlatNode::<ArrayPrefix<8>, usize, 16>::new(dummy_prefix.clone());
@@ -485,14 +528,12 @@ mod tests {
             node.add_child(i as u8, i);
         }
 
-
         let resized = node.grow::<48>();
         assert_eq!(resized.num_children, 16);
         for i in 0..16 {
             assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i));
         }
 
-        
         let mut node = super::FlatNode::<ArrayPrefix<8>, usize, 4>::new(dummy_prefix.clone());
         node.add_child(1, 1);
         node.add_child(2, 2);
@@ -519,7 +560,7 @@ mod tests {
 
     #[test]
     fn test_node48() {
-        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::key("foo".as_bytes());
+        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
 
         // node_test(super::Node48::<usize, 48>::new(), 48);
         let mut n48 = super::Node48::<ArrayPrefix<8>, u8, 48>::new(dummy_prefix.clone());
@@ -575,9 +616,12 @@ mod tests {
 
     #[test]
     fn test_node256() {
-        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::key("foo".as_bytes());
+        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
 
-        node_test(super::Node256::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone()), 255);
+        node_test(
+            super::Node256::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone()),
+            255,
+        );
 
         let mut n256 = super::Node256::new(dummy_prefix.clone());
         for i in 0..255 {

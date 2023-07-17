@@ -1,10 +1,9 @@
 use core::panic;
-use std::mem;
 use std::cmp::min;
+use std::mem;
 
-use crate::{PrefixTrait, ArrayPrefix, Key, Prefix};
-use crate::node::{NodeTrait, Node256, Node48, FlatNode, LeafNode};
-
+use crate::node::{FlatNode, LeafNode, Node256, Node48, NodeTrait};
+use crate::{ArrayPrefix, Key, Prefix, PrefixTrait};
 
 // Minimum and maximum number of children for Node4
 const NODE4MIN: usize = 2;
@@ -22,7 +21,6 @@ const NODE48MAX: usize = 48;
 const NODE256MIN: usize = NODE48MAX + 1;
 const NODE256MAX: usize = 256;
 
-
 // From the specification: Adaptive Radix tries consist of two types of nodes:
 // Inner nodes, which map partial(prefix) keys to other nodes,
 // and leaf nodes, which store the values corresponding to the key.
@@ -34,9 +32,9 @@ enum NodeType<P: Prefix + Clone, V> {
     // Leaf node of the adaptive radix trie
     Leaf(LeafNode<P, V>),
     // Inner node of the adaptive radix trie
-    Node4(FlatNode<P, Node<P, V>, 4>),   // Node with 4 keys and 4 children
-    Node16(FlatNode<P, Node<P, V>, 16>),   // Node with 16 keys and 16 children
-    Node48(Node48<P, Node<P, V>, 48>),   // Node with 256 keys and 48 children
+    Node4(FlatNode<P, Node<P, V>, 4>), // Node with 4 keys and 4 children
+    Node16(FlatNode<P, Node<P, V>, 16>), // Node with 16 keys and 16 children
+    Node48(Node48<P, Node<P, V>, 48>), // Node with 256 keys and 48 children
     Node256(Node256<P, Node<P, V>>),   // Node with 256 keys and 256 children
 }
 
@@ -60,7 +58,11 @@ impl<P: PrefixTrait + Clone, V> Node<P, V> {
     #[inline]
     pub(crate) fn new_leaf(key: P, value: V) -> Node<P, V> {
         Self {
-            node_type: NodeType::Leaf(LeafNode { key: key, value: value, ts:0 }),
+            node_type: NodeType::Leaf(LeafNode {
+                key: key,
+                value: value,
+                ts: 0,
+            }),
         }
     }
 
@@ -72,9 +74,7 @@ impl<P: PrefixTrait + Clone, V> Node<P, V> {
     #[allow(dead_code)]
     pub fn new_node4(prefix: P) -> Self {
         let nt = NodeType::Node4(FlatNode::new(prefix));
-        Self {
-            node_type: nt,
-        }
+        Self { node_type: nt }
     }
 
     // From the specification: This node type is used for storing between 5 and
@@ -87,9 +87,7 @@ impl<P: PrefixTrait + Clone, V> Node<P, V> {
     #[allow(dead_code)]
     pub fn new_node16(prefix: P) -> Self {
         let nt = NodeType::Node16(FlatNode::new(prefix));
-        Self {
-            node_type: nt,
-        }
+        Self { node_type: nt }
     }
 
     // From the specification: As the number of entries in a node increases,
@@ -103,9 +101,7 @@ impl<P: PrefixTrait + Clone, V> Node<P, V> {
     #[allow(dead_code)]
     pub fn new_node48(prefix: P) -> Self {
         let nt = NodeType::Node48(Node48::new(prefix));
-        Self {
-            node_type: nt,
-        }
+        Self { node_type: nt }
     }
 
     // From the specification: The largest node type is simply an array of 256
@@ -119,9 +115,7 @@ impl<P: PrefixTrait + Clone, V> Node<P, V> {
     #[allow(dead_code)]
     pub fn new_node256(prefix: P) -> Self {
         let nt = NodeType::Node256(Node256::new(prefix));
-        Self {
-            node_type: nt,
-        }
+        Self { node_type: nt }
     }
 
     #[inline]
@@ -388,31 +382,31 @@ impl<P: PrefixTrait, V> Tree<P, V> {
 
             let k1 = cur_node_prefix.at(longest_common_prefix);
             let k2 = key_prefix[longest_common_prefix];
-            let new_leaf = Node::new_leaf(key_prefix[longest_common_prefix..key_prefix.len()].into(), value);
+            let new_leaf = Node::new_leaf(
+                key_prefix[longest_common_prefix..key_prefix.len()].into(),
+                value,
+            );
 
             cur_node.add_child(k1, replacement_current);
             cur_node.add_child(k2, new_leaf);
 
             return None;
-    }
+        }
 
         let k = key_prefix[longest_common_prefix];
 
         let child_for_key = cur_node.find_child_mut(k);
         if let Some(child) = child_for_key {
-            return Tree::insert_recurse(
-                child,
-                key,
-                value,
-                depth + longest_common_prefix,
-            );
+            return Tree::insert_recurse(child, key, value, depth + longest_common_prefix);
         };
 
-        let new_leaf = Node::new_leaf(key_prefix[longest_common_prefix..key_prefix.len()].into(), value);
+        let new_leaf = Node::new_leaf(
+            key_prefix[longest_common_prefix..key_prefix.len()].into(),
+            value,
+        );
         cur_node.add_child(k, new_leaf);
         None
     }
-
 
     pub fn remove<K: Key>(&mut self, key: &K) -> bool {
         if self.root.is_none() {
@@ -457,7 +451,6 @@ impl<P: PrefixTrait, V> Tree<P, V> {
         let Some(node) = cur_node_ptr else {
             return false;
         };
-
 
         if is_partial_match && prefix.length() == key_prefix.len() {
             *cur_node_ptr = None;
@@ -534,13 +527,11 @@ mod tests {
         let file_path = "testdata/words.txt";
         match read_words_from_file(file_path) {
             Ok(words) => {
-
                 for word in words {
                     let key = &VectorKey::from_str(&word);
 
                     tree.insert(&VectorKey::from_str(&word), 1);
                 }
-
             }
             Err(err) => {
                 eprintln!("Error reading file: {}", err);
@@ -598,7 +589,6 @@ mod tests {
         assert_eq!(tree.remove(&VectorKey::from_str("xyz")), true);
         assert_eq!(tree.remove(&VectorKey::from_str("axyz")), true);
         assert_eq!(tree.remove(&VectorKey::from_str("1245zzz")), true);
-
     }
 
     #[test]
