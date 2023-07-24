@@ -16,15 +16,24 @@ pub trait NodeTrait<N> {
     fn size(&self) -> usize;
 }
 
-pub struct LeafNode<K: Prefix + Clone, V> {
+#[derive(Clone)]
+pub struct LeafNode<K: Prefix + Clone, V: Clone> {
     pub key: K,
     pub value: V,
     pub ts: u64, // Timestamp for the leaf node
 }
 
-impl<K: Prefix + Clone, V> LeafNode<K, V> {
+impl<K: Prefix + Clone, V: Clone> LeafNode<K, V> {
     pub fn new(key: K, value: V) -> Self {
         Self { key, value, ts: 0 }
+    }
+
+    pub fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            value: self.value.clone(),
+            ts: self.ts,
+        }
     }
 }
 
@@ -262,16 +271,6 @@ impl<P: Prefix + Clone, N, const WIDTH: usize> NodeTrait<N> for Node48<P, N, WID
     }
 }
 
-impl<P: Prefix + Clone, N, const WIDTH: usize> Drop for Node48<P, N, WIDTH> {
-    fn drop(&mut self) {
-        if self.num_children == 0 {
-            return;
-        }
-        self.num_children = 0;
-        self.child_ptr_indexes.clear();
-        self.children.clear();
-    }
-}
 
 // Source: https://www.the-paper-trail.org/post/art-paper-notes/
 //
@@ -298,11 +297,6 @@ impl<P: Prefix + Clone, N> Node256<P, N> {
             children: Box::new(VecArray::new()),
             num_children: 0,
         }
-    }
-
-    #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = (u8, &N)> {
-        self.children.iter().map(|(key, node)| (key as u8, node))
     }
 
     pub fn shrink<const NEW_WIDTH: usize>(&mut self) -> Node48<P, N, NEW_WIDTH> {
@@ -361,7 +355,7 @@ mod tests {
     #[test]
     fn new() {
         let v: VecArray<i32, 10> = VecArray::new();
-        assert_eq!(v.storage.len(), 10);
+        assert_eq!(v.storage.capacity(), 10);
     }
 
     #[test]
