@@ -352,61 +352,59 @@ impl<P: PrefixTrait, V> Tree<P, V> {
             return None;
         };
 
-        let root = self.root.as_mut().unwrap();
-        return Tree::insert_recurse(root, key, value, 0);
-    }
+        let mut stack = vec![(self.root.as_mut().unwrap(), key, value, 0)];
 
-    fn insert_recurse<K: Key>(
-        cur_node: &mut Node<P, V>,
-        key: &K,
-        value: V,
-        depth: usize,
-    ) -> Option<V> {
-        let cur_node_prefix = cur_node.prefix().clone();
-        let cur_node_prefix_len = cur_node.prefix().length();
+        while let Some((cur_node, key, value, depth)) = stack.pop() {
+            let cur_node_prefix = cur_node.prefix().clone();
+            let cur_node_prefix_len = cur_node.prefix().length();
 
-        let key_prefix = key.prefix_after(depth);
-        let longest_common_prefix = cur_node_prefix.longest_common_prefix(key_prefix);
+            let key_prefix = key.prefix_after(depth);
+            let longest_common_prefix = cur_node_prefix.longest_common_prefix(key_prefix);
 
-        let new_key = cur_node_prefix.prefix_after(longest_common_prefix);
-        let prefix = cur_node_prefix.prefix_before(longest_common_prefix);
-        let is_prefix_match = min(cur_node_prefix_len, key_prefix.len()) == longest_common_prefix;
+            let new_key = cur_node_prefix.prefix_after(longest_common_prefix);
+            let prefix = cur_node_prefix.prefix_before(longest_common_prefix);
+            let is_prefix_match =
+                min(cur_node_prefix_len, key_prefix.len()) == longest_common_prefix;
 
-        if let NodeType::Leaf(ref mut leaf) = &mut cur_node.node_type {
-            if is_prefix_match && cur_node_prefix.length() == key_prefix.len() {
-                return Some(std::mem::replace(&mut leaf.value, value));
+            if let NodeType::Leaf(ref mut leaf) = &mut cur_node.node_type {
+                if is_prefix_match && cur_node_prefix.length() == key_prefix.len() {
+                    return Some(std::mem::replace(&mut leaf.value, value));
+                }
+            }
+
+            if !is_prefix_match {
+                cur_node.set_prefix(new_key);
+                let n4 = Node::new_node4(prefix);
+                let old_node = std::mem::replace(cur_node, n4);
+
+                let k1 = cur_node_prefix.at(longest_common_prefix);
+                let k2 = key_prefix[longest_common_prefix];
+                let new_leaf = Node::new_leaf(
+                    key_prefix[longest_common_prefix..key_prefix.len()].into(),
+                    value,
+                );
+
+                cur_node.add_child(k1, old_node);
+                cur_node.add_child(k2, new_leaf);
+
+                return None;
+            }
+
+            let k = key_prefix[longest_common_prefix];
+            if cur_node.find_child(k).is_some() {
+                let child = cur_node.find_child_mut(k).unwrap();
+                stack.push((child, key, value, depth + longest_common_prefix));
+            } else {
+                let new_leaf = Node::new_leaf(
+                    key_prefix[longest_common_prefix..key_prefix.len()].into(),
+                    value,
+                );
+
+                cur_node.add_child(k, new_leaf);
+
+                return None;
             }
         }
-
-        if !is_prefix_match {
-            cur_node.set_prefix(new_key);
-            let n4 = Node::new_node4(prefix);
-            let old_node = std::mem::replace(cur_node, n4);
-
-            let k1 = cur_node_prefix.at(longest_common_prefix);
-            let k2 = key_prefix[longest_common_prefix];
-            let new_leaf = Node::new_leaf(
-                key_prefix[longest_common_prefix..key_prefix.len()].into(),
-                value,
-            );
-
-            cur_node.add_child(k1, old_node);
-            cur_node.add_child(k2, new_leaf);
-
-            return None;
-        }
-
-        let k = key_prefix[longest_common_prefix];
-        let child_for_key = cur_node.find_child_mut(k);
-        if let Some(child) = child_for_key {
-            return Tree::insert_recurse(child, key, value, depth + longest_common_prefix);
-        };
-
-        let new_leaf = Node::new_leaf(
-            key_prefix[longest_common_prefix..key_prefix.len()].into(),
-            value,
-        );
-        cur_node.add_child(k, new_leaf);
         None
     }
 
@@ -417,62 +415,35 @@ impl<P: PrefixTrait, V> Tree<P, V> {
 
         let root = self.root.as_mut().unwrap();
         if root.is_leaf() {
-            // mem::take(root);
             self.root = None;
             return true;
         }
 
-        // // This is a special case where the root is an inner node and has no children
-        // // This is because currently the Node4 is not shrunk to a leaf
-        // if root.is_inner(){
-        //     let inner = root.inner_node().unwrap();
-        //     if inner.meta.num_children == 0{
-        //         mem::take(root);
-        //         self.root = None;
-        //         return true;
-        //     }
-        // }
+        let mut stack = vec![(self.root.as_mut().unwrap(), key, 0)];
 
-        return Tree::remove_recurse(&mut self.root.as_mut(), key, 0);
-    }
+        while let Some((cur_node, key, depth)) = stack.pop() {
+            let prefix = cur_node.prefix().clone();
 
-    fn remove_recurse<K: Key>(
-        cur_node_ptr: &mut Option<&mut Node<P, V>>,
-        key: &K,
-        mut depth: usize,
-    ) -> bool {
-        if cur_node_ptr.is_none() {
-            return false;
-        }
+            let key_prefix = key.prefix_after(depth);
+            let longest_common_prefix = prefix.longest_common_prefix(key_prefix);
+            let is_prefix_match = min(prefix.length(), key_prefix.len()) == longest_common_prefix;
 
-        let prefix = cur_node_ptr.as_ref().unwrap().prefix().clone();
-
-        let key_prefix = key.prefix_after(depth);
-        let longest_common_prefix = prefix.longest_common_prefix(key_prefix);
-        let is_prefix_match = min(prefix.length(), key_prefix.len()) == longest_common_prefix;
-
-        let Some(node) = cur_node_ptr else {
-            return false;
-        };
-
-        if is_prefix_match && prefix.length() == key_prefix.len() {
-            *cur_node_ptr = None;
-            return true;
-        }
-
-        let k = key_prefix[longest_common_prefix];
-
-        let next_child = &mut node.find_child_mut(k);
-        if let Some(child) = next_child {
-            if child.num_children() == 0 {
-                if child.prefix().length() == key_prefix.len() - longest_common_prefix {
-                    node.delete_child(k).expect("child not found");
-                    return true;
-                }
-                return false;
+            if is_prefix_match && prefix.length() == key_prefix.len() {
+                return true;
             }
 
-            return Tree::remove_recurse(next_child, key, depth + longest_common_prefix);
+            let k = key_prefix[longest_common_prefix];
+            if let Some(child) = cur_node.find_child(k) {
+                if child.num_children() == 0 {
+                    if child.prefix().length() == key_prefix.len() - longest_common_prefix {
+                        cur_node.delete_child(k).expect("child not found");
+                        return true;
+                    }
+                    return false;
+                }
+                let child = cur_node.find_child_mut(k).unwrap();
+                stack.push((child, key, depth + longest_common_prefix));
+            }
         }
 
         return false;
