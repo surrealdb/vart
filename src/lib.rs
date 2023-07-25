@@ -198,6 +198,7 @@ impl Key for VectorKey {
 /// A struct `VecArray` is a generic wrapper over a Vector that can store elements of type `X`.
 /// It has a pre-defined constant capacity `WIDTH`. The elements are stored in a `Vec<Option<X>>`,
 /// allowing for storage to be dynamically allocated and deallocated.
+#[derive(Clone)]
 pub struct VecArray<X, const WIDTH: usize> {
     storage: Vec<Option<X>>,
 }
