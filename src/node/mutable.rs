@@ -16,24 +16,14 @@ pub trait NodeTrait<N> {
     fn size(&self) -> usize;
 }
 
-#[derive(Clone)]
-pub struct LeafNode<K: Prefix + Clone, V: Clone> {
+pub struct LeafNode<K: Prefix + Clone, V> {
     pub key: K,
     pub value: V,
-    pub ts: u64, // Timestamp for the leaf node
 }
 
 impl<K: Prefix + Clone, V: Clone> LeafNode<K, V> {
     pub fn new(key: K, value: V) -> Self {
-        Self { key, value, ts: 0 }
-    }
-
-    pub fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            value: self.value.clone(),
-            ts: self.ts,
-        }
+        Self { key, value }
     }
 }
 

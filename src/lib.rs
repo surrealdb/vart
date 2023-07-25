@@ -1,7 +1,6 @@
 #[allow(warnings)]
-mod art;
-pub mod im_node;
 pub mod node;
+pub mod trie;
 
 use std::fmt::Debug;
 

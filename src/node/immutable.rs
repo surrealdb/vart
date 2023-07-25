@@ -13,7 +13,28 @@ pub trait ImNodeTrait<N> {
     fn delete_child(&self, key: u8) -> Self;
     fn num_children(&self) -> usize;
     fn size(&self) -> usize;
-    fn replace_child(&self, key: u8, node: Arc<N>)-> Self;
+    fn replace_child(&self, key: u8, node: Arc<N>) -> Self;
+}
+
+#[derive(Clone)]
+pub struct ImLeafNode<K: Prefix + Clone, V: Clone> {
+    pub key: K,
+    pub value: V,
+    pub ts: u64, // Timestamp for the leaf node
+}
+
+impl<K: Prefix + Clone, V: Clone> ImLeafNode<K, V> {
+    pub fn new(key: K, value: V) -> Self {
+        Self { key, value, ts: 0 }
+    }
+
+    pub fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            value: self.value.clone(),
+            ts: self.ts,
+        }
+    }
 }
 
 pub struct ImFlatNode<P: Prefix + Clone, N, const WIDTH: usize> {
@@ -62,16 +83,15 @@ impl<P: Prefix + Clone, N, const WIDTH: usize> ImFlatNode<P, N, WIDTH> {
         let mut n48 = ImNode48::new(self.prefix.clone());
         for i in 0..self.num_children as usize {
             if let Some(child) = self.children[i].as_ref() {
-                n48.add_child_mut(self.keys[i], child.clone());
+                n48.insert_child(self.keys[i], child.clone());
             }
         }
         n48
     }
 
+    // Helper function to insert a child node at the specified position
     #[inline]
-    fn add_child_mut(&mut self, key: u8, node: Arc<N>) {
-        let idx = self.find_pos(key).expect("node is full");
-
+    fn insert_child(&mut self, idx: usize, key: u8, node: Arc<N>) {
         for i in (idx..self.num_children as usize).rev() {
             self.keys[i + 1] = self.keys[i];
             self.children[i + 1] = self.children[i].clone();
@@ -94,7 +114,7 @@ impl<P: Prefix + Clone, N, const WIDTH: usize> ImNodeTrait<N> for ImFlatNode<P, 
         new_node
     }
 
-    fn replace_child(&self, key: u8, node: Arc<N>) -> Self{
+    fn replace_child(&self, key: u8, node: Arc<N>) -> Self {
         let mut new_node = self.clone();
         let idx = new_node.index(key).unwrap();
         new_node.keys[idx] = key;
@@ -106,14 +126,8 @@ impl<P: Prefix + Clone, N, const WIDTH: usize> ImNodeTrait<N> for ImFlatNode<P, 
         let mut new_node = self.clone();
         let idx = self.find_pos(key).expect("node is full");
 
-        for i in (idx..self.num_children as usize).rev() {
-            new_node.keys[i + 1] = self.keys[i];
-            new_node.children[i + 1] = self.children[i].clone();
-        }
-        new_node.keys[idx] = key;
-        new_node.children[idx] = Some(Arc::new(node)); // Wrap `node` in an `Arc`
-        new_node.num_children += 1;
-
+        // Convert the node to Arc<N> and insert it
+        new_node.insert_child(idx, key, Arc::new(node));
         new_node
     }
 
@@ -176,7 +190,7 @@ impl<P: Prefix + Clone, N> ImNode48<P, N> {
         }
     }
 
-    pub fn add_child_mut(&mut self, key: u8, node: Arc<N>) {
+    pub fn insert_child(&mut self, key: u8, node: Arc<N>) {
         let pos = self.children.first_free_pos();
 
         self.child_ptr_indexes.set(key as usize, pos as u8);
@@ -188,7 +202,7 @@ impl<P: Prefix + Clone, N> ImNode48<P, N> {
         let mut fnode = ImFlatNode::new(self.prefix.clone());
         for (key, pos) in self.child_ptr_indexes.iter() {
             let child = self.children.get(*pos as usize).unwrap().clone().unwrap();
-            fnode.add_child_mut(key as u8, child);
+            fnode.insert_child(*pos as usize, key as u8, child);
         }
         fnode
     }
@@ -197,7 +211,7 @@ impl<P: Prefix + Clone, N> ImNode48<P, N> {
         let mut n256 = ImNode256::new(self.prefix.clone());
         for (key, pos) in self.child_ptr_indexes.iter() {
             let child = self.children.get(*pos as usize).unwrap().clone().unwrap();
-            n256.add_child_mut(key as u8, child);
+            n256.insert_child(key as u8, child);
         }
         n256
     }
@@ -221,15 +235,9 @@ impl<P: Prefix + Clone, N> ImNodeTrait<N> for ImNode48<P, N> {
         new_node
     }
 
-
     fn add_child(&self, key: u8, node: N) -> Self {
         let mut new_node = self.clone();
-        let pos = new_node.children.first_free_pos();
-
-        new_node.child_ptr_indexes.set(key as usize, pos as u8);
-        new_node.children.set(pos, Some(Arc::new(node)));
-        new_node.num_children += 1;
-
+        new_node.insert_child(key, Arc::new(node));
         new_node
     }
 
@@ -282,20 +290,13 @@ impl<P: Prefix + Clone, N> ImNode256<P, N> {
         let keys: Vec<usize> = self.children.iter_keys().collect();
         for key in keys {
             let child = self.children.get(key).unwrap().clone().unwrap();
-            indexed.add_child_mut(key as u8, child);
+            indexed.insert_child(key as u8, child);
         }
         indexed
-
-        // for key in 0..256 {
-        //     if let Some(child) = self.children[key].clone() {
-        //         indexed.add_child(key as u8, child);
-        //     }
-        // }
-        // indexed
     }
 
     #[inline]
-    fn add_child_mut(&mut self, key: u8, node: Arc<N>) {
+    fn insert_child(&mut self, key: u8, node: Arc<N>) {
         self.children.set(key as usize, Some(node));
         self.num_children += 1;
     }
@@ -320,8 +321,7 @@ impl<P: Prefix + Clone, N> ImNodeTrait<N> for ImNode256<P, N> {
     #[inline]
     fn add_child(&self, key: u8, node: N) -> Self {
         let mut new_node = self.clone();
-        new_node.children.set(key as usize, Some(Arc::new(node)));
-        new_node.num_children += 1;
+        new_node.insert_child(key, Arc::new(node));
         new_node
     }
 
