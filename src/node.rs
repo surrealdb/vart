@@ -271,7 +271,6 @@ impl<P: Prefix + Clone, N, const WIDTH: usize> NodeTrait<N> for Node48<P, N, WID
     }
 }
 
-
 // Source: https://www.the-paper-trail.org/post/art-paper-notes/
 //
 // Node256: It is the traditional trie node, used when a node has
