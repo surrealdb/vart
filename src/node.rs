@@ -202,7 +202,7 @@ pub struct Node48<P: Prefix + Clone, N> {
     pub prefix: P,
     pub ts: u64,
     child_ptr_indexes: Box<VecArray<u8, 256>>,
-    children: Box<VecArray<Option<Arc<N>>, 48>>,
+    children: Box<VecArray<Arc<N>, 48>>,
     num_children: u8,
 }
 
@@ -221,14 +221,14 @@ impl<P: Prefix + Clone, N> Node48<P, N> {
         let pos = self.children.first_free_pos();
 
         self.child_ptr_indexes.set(key as usize, pos as u8);
-        self.children.set(pos, Some(node));
+        self.children.set(pos, node);
         self.num_children += 1;
     }
 
     pub fn shrink<const NEW_WIDTH: usize>(&self) -> FlatNode<P, N, NEW_WIDTH> {
         let mut fnode = FlatNode::new(self.prefix.clone());
         for (key, pos) in self.child_ptr_indexes.iter() {
-            let child = self.children.get(*pos as usize).unwrap().clone().unwrap();
+            let child = self.children.get(*pos as usize).unwrap().clone();
             fnode.insert_child(*pos as usize, key as u8, child);
         }
         fnode
@@ -237,7 +237,7 @@ impl<P: Prefix + Clone, N> Node48<P, N> {
     pub fn grow(&self) -> Node256<P, N> {
         let mut n256 = Node256::new(self.prefix.clone());
         for (key, pos) in self.child_ptr_indexes.iter() {
-            let child = self.children.get(*pos as usize).unwrap().clone().unwrap();
+            let child = self.children.get(*pos as usize).unwrap().clone();
             n256.insert_child(key as u8, child);
         }
         n256
@@ -258,7 +258,7 @@ impl<P: Prefix + Clone, N> NodeTrait<N> for Node48<P, N> {
     fn replace_child(&self, key: u8, node: Arc<N>) -> Self {
         let mut new_node = self.clone();
         let idx = new_node.child_ptr_indexes.get(key as usize).unwrap();
-        new_node.children.set(*idx as usize, Some(node));
+        new_node.children.set(*idx as usize, node);
         new_node
     }
 
@@ -281,7 +281,7 @@ impl<P: Prefix + Clone, N> NodeTrait<N> for Node48<P, N> {
     fn find_child(&self, key: u8) -> Option<&Arc<N>> {
         let idx = self.child_ptr_indexes.get(key as usize)?;
         let child = self.children.get(*idx as usize)?;
-        child.as_ref()
+        Some(child)
     }
 
     fn num_children(&self) -> usize {
@@ -307,7 +307,7 @@ pub struct Node256<P: Prefix + Clone, N> {
     pub prefix: P, // Prefix associated with the node
     pub ts: u64,   // Timestamp for node256
 
-    children: Box<VecArray<Option<Arc<N>>, 256>>,
+    children: Box<VecArray<Arc<N>, 256>>,
     num_children: usize,
 }
 
@@ -325,7 +325,7 @@ impl<P: Prefix + Clone, N> Node256<P, N> {
         let mut indexed = Node48::new(self.prefix.clone());
         let keys: Vec<usize> = self.children.iter_keys().collect();
         for key in keys {
-            let child = self.children.get(key).unwrap().clone().unwrap();
+            let child = self.children.get(key).unwrap().clone();
             indexed.insert_child(key as u8, child);
         }
         indexed
@@ -333,7 +333,7 @@ impl<P: Prefix + Clone, N> Node256<P, N> {
 
     #[inline]
     fn insert_child(&mut self, key: u8, node: Arc<N>) {
-        self.children.set(key as usize, Some(node));
+        self.children.set(key as usize, node);
         self.num_children += 1;
     }
 }
@@ -350,7 +350,7 @@ impl<P: Prefix + Clone, N> NodeTrait<N> for Node256<P, N> {
 
     fn replace_child(&self, key: u8, node: Arc<N>) -> Self {
         let mut new_node = self.clone();
-        new_node.children.set(key as usize, Some(node));
+        new_node.children.set(key as usize, node);
         new_node
     }
 
@@ -364,13 +364,13 @@ impl<P: Prefix + Clone, N> NodeTrait<N> for Node256<P, N> {
     #[inline]
     fn find_child(&self, key: u8) -> Option<&Arc<N>> {
         let child = self.children.get(key as usize)?;
-        child.as_ref()
+        Some(child)
     }
 
     #[inline]
     fn delete_child(&self, key: u8) -> Self {
         let mut new_node = self.clone();
-        let removed = new_node.children.erase(key as usize).unwrap();
+        let removed = new_node.children.erase(key as usize);
         if removed.is_some() {
             new_node.num_children -= 1;
         }
@@ -395,7 +395,7 @@ mod tests {
     #[test]
     fn new() {
         let v: VecArray<i32, 10> = VecArray::new();
-        assert_eq!(v.storage.len(), 10);
+        assert_eq!(v.storage.capacity(), 10);
     }
 
     #[test]
