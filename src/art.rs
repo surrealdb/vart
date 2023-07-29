@@ -2,7 +2,7 @@ use core::panic;
 use std::cmp::min;
 use std::sync::Arc;
 
-use crate::node::{FlatNode, LeafNode, Node256, Node48, NodeTrait};
+use crate::node::{FlatNode, LeafNode, Node256, Node48, NodeTrait, Timestamp};
 use crate::{Key, Prefix, PrefixTrait};
 
 // Minimum and maximum number of children for Node4
@@ -25,6 +25,18 @@ const NODE256MIN: usize = NODE48MAX + 1;
 // and leaf nodes, which store the values corresponding to the key.
 struct Node<P: Prefix + Clone, V: Clone> {
     pub node_type: NodeType<P, V>, // Type of the node
+}
+
+impl<P: Prefix + Clone, V: Clone> Timestamp for Node<P, V> {
+    fn ts(&self) -> u64 {
+        match &self.node_type {
+            NodeType::Leaf(leaf) => leaf.ts(),
+            NodeType::Node4(n) => n.ts(),
+            NodeType::Node16(n) => n.ts(),
+            NodeType::Node48(n) => n.ts(),
+            NodeType::Node256(n) => n.ts(),
+        }
+    }
 }
 
 enum NodeType<P: Prefix + Clone, V: Clone> {
@@ -460,29 +472,36 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         return (Arc::new(new_node), None);
     }
 
-
-
-    pub fn remove<K: Key>(&self, key: &K) -> (Tree<P, V>,bool) {
+    pub fn remove<K: Key>(&self, key: &K) -> (Tree<P, V>, bool) {
         match &self.root {
-            None => (Tree::new(),false),
+            None => (Tree::new(), false),
             Some(root) => {
                 if root.is_leaf() {
-                    ((Tree {
-                        root: None,
-                        size: self.size - 1,
-                    }), true)
+                    (
+                        (Tree {
+                            root: None,
+                            size: self.size - 1,
+                        }),
+                        true,
+                    )
                 } else {
                     let (new_root, removed) = Tree::remove_recurse(&root, key, 0);
                     if removed {
-                        ((Tree {
-                            root: new_root,
-                            size: self.size - 1,
-                        }), true)
+                        (
+                            (Tree {
+                                root: new_root,
+                                size: self.size - 1,
+                            }),
+                            true,
+                        )
                     } else {
-                        ((Tree {
-                            root: self.root.clone(),
-                            size: self.size - 1,
-                        }), true)
+                        (
+                            (Tree {
+                                root: self.root.clone(),
+                                size: self.size - 1,
+                            }),
+                            true,
+                        )
                     }
                 }
             }
@@ -508,11 +527,12 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
 
         let child = cur_node.find_child(k);
         if let Some(child_node) = child {
-            let (new_child, removed) = Tree::remove_recurse(child_node, key, depth + longest_common_prefix);
+            let (new_child, removed) =
+                Tree::remove_recurse(child_node, key, depth + longest_common_prefix);
             if removed {
-                if let Some(new_child_node) = new_child{
+                if let Some(new_child_node) = new_child {
                     let new_node = cur_node.clone().replace_child(k, new_child_node);
-                    return (Some(Arc::new(new_node)), true);    
+                    return (Some(Arc::new(new_node)), true);
                 }
             }
         }
