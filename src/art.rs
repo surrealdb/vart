@@ -1,5 +1,7 @@
 use core::panic;
 use std::cmp::min;
+use std::error::Error;
+use std::fmt;
 use std::sync::Arc;
 
 use crate::node::{FlatNode, LeafNode, Node256, Node48, NodeTrait, Timestamp};
@@ -19,6 +21,27 @@ const NODE48MAX: usize = 48;
 
 // Minimum and maximum number of children for Node256
 const NODE256MIN: usize = NODE48MAX + 1;
+
+// Define a custom error enum representing different error cases for the Trie
+#[derive(Debug)]
+pub enum TrieError {
+    IllegalArguments,
+    NotFound,
+    Other(String),
+}
+
+impl Error for TrieError {}
+
+// Implement the Display trait to define how the error should be formatted as a string
+impl fmt::Display for TrieError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            TrieError::IllegalArguments => write!(f, "Illegal arguments"),
+            TrieError::NotFound => write!(f, "Not found"),
+            TrieError::Other(ref message) => write!(f, "Other error: {}", message),
+        }
+    }
+}
 
 // From the specification: Adaptive Radix tries consist of two types of nodes:
 // Inner nodes, which map prefix(prefix) keys to other nodes,
@@ -52,7 +75,6 @@ enum NodeType<P: Prefix + Clone, V: Clone> {
 // Adaptive radix trie
 pub struct Tree<P: PrefixTrait, V: Clone> {
     root: Option<Arc<Node<P, V>>>, // Root node of the tree
-    size: u64,                     // Number of elements in the tree
 }
 
 impl<P: PrefixTrait + Clone, V: Clone> NodeType<P, V> {
@@ -71,21 +93,18 @@ impl<P: PrefixTrait + Clone, V: Clone> NodeType<P, V> {
 // Default implementation for the Tree struct
 impl<P: PrefixTrait, V: Clone> Default for Tree<P, V> {
     fn default() -> Self {
-        Tree {
-            root: None,
-            size: 0,
-        }
+        Tree { root: None }
     }
 }
 
 impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     #[inline]
-    pub(crate) fn new_leaf(key: P, value: V) -> Node<P, V> {
+    pub(crate) fn new_leaf(key: P, value: V, ts: u64) -> Node<P, V> {
         Self {
             node_type: NodeType::Leaf(LeafNode {
                 key: key,
                 value: value,
-                ts: 0,
+                ts: ts,
             }),
         }
     }
@@ -96,7 +115,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     // are stored at corresponding positions and the keys are sorted.
     #[inline]
     #[allow(dead_code)]
-    pub fn new_node4(prefix: P) -> Self {
+    pub(crate) fn new_node4(prefix: P) -> Self {
         let nt = NodeType::Node4(FlatNode::new(prefix));
         Self { node_type: nt }
     }
@@ -109,7 +128,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     // parallel comparisons using SIMD instructions.
     #[inline]
     #[allow(dead_code)]
-    pub fn new_node16(prefix: P) -> Self {
+    pub(crate) fn new_node16(prefix: P) -> Self {
         let nt = NodeType::Node16(FlatNode::new(prefix));
         Self { node_type: nt }
     }
@@ -123,7 +142,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     // contains up to 48 pointers.
     #[inline]
     #[allow(dead_code)]
-    pub fn new_node48(prefix: P) -> Self {
+    pub(crate) fn new_node48(prefix: P) -> Self {
         let nt = NodeType::Node48(Node48::new(prefix));
         Self { node_type: nt }
     }
@@ -137,7 +156,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     // only pointers need to be stored.
     #[inline]
     #[allow(dead_code)]
-    pub fn new_node256(prefix: P) -> Self {
+    pub(crate) fn new_node256(prefix: P) -> Self {
         let nt = NodeType::Node256(Node256::new(prefix));
         Self { node_type: nt }
     }
@@ -367,11 +386,11 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     }
 
     #[inline]
-    pub fn get_value(&self) -> Option<&V> {
+    pub fn get_value(&self) -> Option<(&V, &u64)> {
         let NodeType::Leaf(leaf) = &self.node_type else {
             return None;
         };
-        Some(&leaf.value)
+        Some((&leaf.value, &leaf.ts))
     }
 
     pub fn node_type_name(&self) -> String {
@@ -389,37 +408,14 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             node_type: self.node_type.clone(),
         }
     }
-}
-
-impl<P: PrefixTrait, V: Clone> Tree<P, V> {
-    pub fn new() -> Self {
-        Tree {
-            root: None,
-            size: 0,
-        }
-    }
-
-    pub fn insert<K: Key>(&self, key: &K, value: V) -> Tree<P, V> {
-        let new_root = match &self.root {
-            None => Arc::new(Node::new_leaf(key.as_slice().into(), value)),
-            Some(root) => {
-                let (new_node, _) = Tree::insert_recurse(root, key, value, 0);
-                new_node
-            }
-        };
-
-        Tree {
-            root: Some(new_root),
-            size: self.size + 1,
-        }
-    }
 
     fn insert_recurse<K: Key>(
         cur_node: &Arc<Node<P, V>>,
         key: &K,
         value: V,
+        commit_ts: u64,
         depth: usize,
-    ) -> (Arc<Node<P, V>>, Option<V>) {
+    ) -> (Result<(Arc<Node<P, V>>, Option<V>), TrieError>) {
         let cur_node_prefix = cur_node.prefix().clone();
         let cur_node_prefix_len = cur_node.prefix().length();
 
@@ -433,10 +429,10 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
 
         if let NodeType::Leaf(ref leaf) = &cur_node.node_type {
             if is_prefix_match && cur_node_prefix.length() == key_prefix.len() {
-                return (
-                    Arc::new(Node::new_leaf(key.as_slice().into(), value)),
+                return Ok((
+                    Arc::new(Node::new_leaf(key.as_slice().into(), value, commit_ts)),
                     Some(leaf.value.clone()),
-                );
+                ));
             }
         }
 
@@ -450,62 +446,34 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
             let new_leaf = Node::new_leaf(
                 key_prefix[longest_common_prefix..key_prefix.len()].into(),
                 value.clone(),
+                commit_ts,
             );
             n4 = n4.add_child(k1, old_node).add_child(k2, new_leaf);
-            return (Arc::new(n4), None);
+            return Ok((Arc::new(n4), None));
         }
 
         let k = key_prefix[longest_common_prefix];
         let child_for_key = cur_node.find_child(k);
         if let Some(child) = child_for_key {
-            let (new_child, old_value) =
-                Tree::insert_recurse(child, key, value, depth + longest_common_prefix);
-            let new_node = cur_node.replace_child(k, new_child);
-            return (Arc::new(new_node), old_value);
+            match Node::insert_recurse(child, key, value, commit_ts, depth + longest_common_prefix)
+            {
+                Ok((new_child, old_value)) => {
+                    let new_node = cur_node.replace_child(k, new_child);
+                    return Ok((Arc::new(new_node), old_value));
+                }
+                Err(err) => {
+                    return Err(err);
+                }
+            }
         };
 
         let new_leaf = Node::new_leaf(
             key_prefix[longest_common_prefix..key_prefix.len()].into(),
             value,
+            commit_ts,
         );
         let new_node = cur_node.add_child(k, new_leaf);
-        return (Arc::new(new_node), None);
-    }
-
-    pub fn remove<K: Key>(&self, key: &K) -> (Tree<P, V>, bool) {
-        match &self.root {
-            None => (Tree::new(), false),
-            Some(root) => {
-                if root.is_leaf() {
-                    (
-                        (Tree {
-                            root: None,
-                            size: self.size - 1,
-                        }),
-                        true,
-                    )
-                } else {
-                    let (new_root, removed) = Tree::remove_recurse(&root, key, 0);
-                    if removed {
-                        (
-                            (Tree {
-                                root: new_root,
-                                size: self.size - 1,
-                            }),
-                            true,
-                        )
-                    } else {
-                        (
-                            (Tree {
-                                root: self.root.clone(),
-                                size: self.size - 1,
-                            }),
-                            true,
-                        )
-                    }
-                }
-            }
-        }
+        return Ok((Arc::new(new_node), None));
     }
 
     fn remove_recurse<K: Key>(
@@ -528,23 +496,101 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         let child = cur_node.find_child(k);
         if let Some(child_node) = child {
             let (new_child, removed) =
-                Tree::remove_recurse(child_node, key, depth + longest_common_prefix);
+                Node::remove_recurse(child_node, key, depth + longest_common_prefix);
             if removed {
-                if let Some(new_child_node) = new_child {
-                    let new_node = cur_node.clone().replace_child(k, new_child_node);
-                    return (Some(Arc::new(new_node)), true);
-                }
+                let new_node = cur_node.delete_child(k);
+                return (Some(Arc::new(new_node)), true);
+
+                // if let Some(new_child_node) = new_child {
+                //     let new_node = cur_node.clone().delete_child(k, new_child_node);
+                //     return (Some(Arc::new(new_node)), true);
+                // }
             }
         }
 
         return (Some(cur_node.clone()), false);
     }
 
-    pub fn get<K: Key>(&self, key: &K) -> Option<&V> {
+    #[allow(dead_code)]
+    pub fn iter(&self) -> Box<dyn Iterator<Item = (u8, &Arc<Self>)> + '_> {
+        return match &self.node_type {
+            NodeType::Node4(n) => Box::new(n.iter()),
+            NodeType::Node16(n) => Box::new(n.iter()),
+            NodeType::Node48(n) => Box::new(n.iter()),
+            NodeType::Node256(n) => Box::new(n.iter()),
+            NodeType::Leaf(_) => Box::new(std::iter::empty()),
+        };
+    }
+}
+
+impl<P: PrefixTrait, V: Clone> Tree<P, V> {
+    pub fn new() -> Self {
+        Self { root: None }
+    }
+
+    pub fn insert<K: Key>(&mut self, key: &K, value: V, ts: u64) -> Result<Option<V>, TrieError> {
+        let (new_root, old_node) = match &self.root {
+            None => {
+                let mut commit_ts = ts;
+                if ts == 0 {
+                    commit_ts += 1;
+                }
+                (
+                    Arc::new(Node::new_leaf(key.as_slice().into(), value, commit_ts)),
+                    None,
+                )
+            }
+            Some(root) => {
+                // check if the given timestamp is older than the root's current timestamp
+                // if so, return an error and do not insert the new node
+                let curr_ts = root.ts();
+                let mut commit_ts = ts;
+                if ts == 0 {
+                    commit_ts = curr_ts + 1;
+                } else if curr_ts > ts {
+                    return Err(TrieError::Other(
+                        "given timestamp is older than root's current timestamp".to_string(),
+                    ));
+                }
+                match Node::insert_recurse(root, key, value, commit_ts, 0) {
+                    Ok((new_node, old_node)) => (new_node, old_node),
+                    Err(err) => {
+                        return Err(err);
+                    }
+                }
+            }
+        };
+
+        self.root = Some(new_root);
+        Ok(old_node)
+    }
+
+    pub fn remove<K: Key>(&mut self, key: &K) -> bool {
+        let (new_root, is_deleted) = match &self.root {
+            None => (None, false),
+            Some(root) => {
+                if root.is_leaf() {
+                    (None, true)
+                } else {
+                    let (new_root, removed) = Node::remove_recurse(&root, key, 0);
+                    if removed {
+                        (new_root, true)
+                    } else {
+                        (self.root.clone(), true)
+                    }
+                }
+            }
+        };
+
+        self.root = new_root;
+        is_deleted
+    }
+
+    pub fn get<K: Key>(&self, key: &K) -> Option<(&V, &u64)> {
         Tree::get_recurse(self.root.as_ref()?, key)
     }
 
-    fn get_recurse<'a, K: Key>(cur_node: &'a Node<P, V>, key: &K) -> Option<&'a V> {
+    fn get_recurse<'a, K: Key>(cur_node: &'a Node<P, V>, key: &K) -> Option<(&'a V, &'a u64)> {
         let mut cur_node = cur_node;
         let mut depth = 0;
         loop {
@@ -562,6 +608,13 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
             let k = key.at(depth + prefix.length());
             depth += prefix.length();
             cur_node = cur_node.find_child(k)?;
+        }
+    }
+
+    pub fn ts(&self) -> u64 {
+        match &self.root {
+            None => 0,
+            Some(root) => root.ts(),
         }
     }
 }
@@ -595,7 +648,21 @@ mod tests {
             Ok(words) => {
                 for word in words {
                     let key = &VectorKey::from_str(&word);
-                    tree = tree.insert(&key.clone(), 1);
+                    tree.insert(&key.clone(), 1, 0);
+                }
+            }
+            Err(err) => {
+                eprintln!("Error reading file: {}", err);
+            }
+        }
+        assert_eq!(tree.ts(), 235886);
+
+        match read_words_from_file(file_path) {
+            Ok(words) => {
+                for word in words {
+                    let key = VectorKey::from_str(&word);
+                    let (val, ts) = tree.get(&key).unwrap();
+                    assert_eq!(*val, 1);
                 }
             }
             Err(err) => {
@@ -607,7 +674,7 @@ mod tests {
             Ok(words) => {
                 for word in words {
                     let key = VectorKey::from_str(&word);
-                    assert_eq!(*tree.get(&key).unwrap(), 1);
+                    assert_eq!(tree.remove(&key), true);
                 }
             }
             Err(err) => {
@@ -615,114 +682,73 @@ mod tests {
             }
         }
 
-        match read_words_from_file(file_path) {
-            Ok(words) => {
-                for word in words {
-                    let key = VectorKey::from_str(&word);
-                    let (tree, is_removed) = tree.remove(&key);
-                    assert!(is_removed);
-                }
-            }
-            Err(err) => {
-                eprintln!("Error reading file: {}", err);
-            }
-        }
+        assert_eq!(tree.ts(), 0);
     }
 
     #[test]
     fn test_string_insert_delete() {
         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
-        tree = tree.insert(&VectorKey::from_str("a"), 1);
-        tree = tree.insert(&VectorKey::from_str("aa"), 1);
-        tree = tree.insert(&VectorKey::from_str("aal"), 1);
-        tree = tree.insert(&VectorKey::from_str("aalii"), 1);
+        tree.insert(&VectorKey::from_str("a"), 1, 0);
+        tree.insert(&VectorKey::from_str("aa"), 1, 0);
+        tree.insert(&VectorKey::from_str("aal"), 1, 0);
+        tree.insert(&VectorKey::from_str("aalii"), 1, 0);
 
-        let (tree, is_removed) = tree.remove(&VectorKey::from_str("a"));
-        assert!(is_removed);
-        let (tree, is_removed) = tree.remove(&VectorKey::from_str("aa"));
-        assert!(is_removed);
-        let (tree, is_removed) = tree.remove(&VectorKey::from_str("aal"));
-        assert!(is_removed);
-        let (mut tree, is_removed) = tree.remove(&VectorKey::from_str("aalii"));
-        assert!(is_removed);
+        assert_eq!(tree.remove(&VectorKey::from_str("a")), true);
+        assert_eq!(tree.remove(&VectorKey::from_str("aa")), true);
+        assert_eq!(tree.remove(&VectorKey::from_str("aal")), true);
+        assert_eq!(tree.remove(&VectorKey::from_str("aalii")), true);
 
-        tree = tree.insert(&VectorKey::from_str("abc"), 2);
-        tree = tree.insert(&VectorKey::from_str("abcd"), 1);
-        tree = tree.insert(&VectorKey::from_str("abcde"), 3);
-        tree = tree.insert(&VectorKey::from_str("xyz"), 4);
-        tree = tree.insert(&VectorKey::from_str("axyz"), 6);
-        tree = tree.insert(&VectorKey::from_str("1245zzz"), 6);
+        tree.insert(&VectorKey::from_str("abc"), 2, 0);
+        tree.insert(&VectorKey::from_str("abcd"), 1, 0);
+        tree.insert(&VectorKey::from_str("abcde"), 3, 0);
+        tree.insert(&VectorKey::from_str("xyz"), 4, 0);
+        tree.insert(&VectorKey::from_str("axyz"), 6, 0);
 
-        let (tree, is_removed) = tree.remove(&VectorKey::from_str("abc"));
-        assert!(is_removed);
-        let (tree, is_removed) = tree.remove(&VectorKey::from_str("abcde"));
-        assert!(is_removed);
-        let (tree, is_removed) = tree.remove(&VectorKey::from_str("abcd"));
-        assert!(is_removed);
-        let (tree, is_removed) = tree.remove(&VectorKey::from_str("xyz"));
-        assert!(is_removed);
-        let (tree, is_removed) = tree.remove(&VectorKey::from_str("axyz"));
-        assert!(is_removed);
-        let (tree, is_removed) = tree.remove(&VectorKey::from_str("1245zzz"));
-        assert!(is_removed);
+        assert_eq!(tree.remove(&VectorKey::from_str("abc")), true);
+        assert_eq!(tree.remove(&VectorKey::from_str("abcde")), true);
+        assert_eq!(tree.remove(&VectorKey::from_str("abcd")), true);
+        assert_eq!(tree.remove(&VectorKey::from_str("xyz")), true);
+        assert_eq!(tree.remove(&VectorKey::from_str("axyz")), true);
     }
 
     #[test]
     fn test_string_long() {
         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
-        tree = tree.insert(&VectorKey::from_str("amyelencephalia"), 1);
-        tree = tree.insert(&VectorKey::from_str("amyelencephalic"), 2);
-        tree = tree.insert(&VectorKey::from_str("amyelencephalous"), 3);
+        tree.insert(&VectorKey::from_str("amyelencephalia"), 1, 0);
+        tree.insert(&VectorKey::from_str("amyelencephalic"), 2, 0);
+        tree.insert(&VectorKey::from_str("amyelencephalous"), 3, 0);
 
-        assert_eq!(
-            *tree.get(&VectorKey::from_str("amyelencephalia")).unwrap(),
-            1
-        );
-        assert_eq!(
-            *tree.get(&VectorKey::from_str("amyelencephalic")).unwrap(),
-            2
-        );
-        assert_eq!(
-            *tree.get(&VectorKey::from_str("amyelencephalous")).unwrap(),
-            3
-        );
+        let (val, ts) = tree.get(&VectorKey::from_str("amyelencephalia")).unwrap();
+        assert_eq!(*val, 1);
+
+        let (val, ts) = tree.get(&VectorKey::from_str("amyelencephalic")).unwrap();
+        assert_eq!(*val, 2);
+
+        let (val, ts) = tree.get(&VectorKey::from_str("amyelencephalous")).unwrap();
+        assert_eq!(*val, 3);
     }
 
     #[test]
     fn test_root_set_get() {
         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
         let key = VectorKey::from_str("abc");
-        tree = tree.insert(&key, 1);
-        assert_eq!(*tree.get(&key).unwrap(), 1);
+        tree.insert(&key, 1, 0);
+        let (val, ts) = tree.get(&key).unwrap();
+        assert_eq!(*val, 1);
     }
 
-    // #[test]
-    // fn test_string_duplicate_insert() {
-    //     let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
-    //     assert!(tree.insert(&VectorKey::from_str("abc"), 1).is_none());
-    //     assert!(tree.insert(&VectorKey::from_str("abc"), 2).is_some());
-    // }
-
-    //     // #[test]
-    //     // fn test_find_child_mut() {
-    //     //     // Create a sample innerNode
-    //     //     let mut inner_node = InnerNode::new_node48();
-    //     //     let leaf = LeafNode::new(b"hello", 1);
-
-    //     //     // Add a child node at index 42
-    //     //     inner_node.add_child(42, Node::Leaf(Box::new(leaf)));
-
-    //     //     // Test finding the child with key 42
-    //     //     let found_child = inner_node.find_child_mut(42).unwrap();
-    //     //     // Assert the type of the node
-    //     //     match found_child {
-    //     //         Node::Empty => panic!("Expected a non-empty node"),
-    //     //         Node::Leaf(_) => {
-    //     //             // The type of the node is Leaf
-    //     //         }
-    //     //         Node::Inner(_) => panic!("Expected a Leaf node"),
-    //     //     }
-    //     // }
+    #[test]
+    fn test_string_duplicate_insert() {
+        let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
+        let result = tree
+            .insert(&VectorKey::from_str("abc"), 1, 0)
+            .expect("Failed to insert");
+        assert!(result.is_none());
+        let result = tree
+            .insert(&VectorKey::from_str("abc"), 1, 0)
+            .expect("Failed to insert");
+        assert!(result.is_some());
+    }
 
     //     // #[test]
     //     // fn test_add_child() {
@@ -1114,4 +1140,137 @@ mod tests {
 
     //     //     assert!(tree.root.is_none());
     //     // }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct KVT {
+        K: Vec<u8>, // Key
+        ts: u64,    // Timestamp
+    }
+
+    #[test]
+    fn test_timed_insertion() {
+        let mut tree: Tree<ArrayPrefix<32>, i32> = Tree::<ArrayPrefix<32>, i32>::new();
+
+        let kvts = vec![
+            KVT {
+                K: b"key1_0".to_vec(),
+                ts: 0,
+            },
+            KVT {
+                K: b"key2_0".to_vec(),
+                ts: 0,
+            },
+            KVT {
+                K: b"key3_0".to_vec(),
+                ts: 0,
+            },
+            KVT {
+                K: b"key4_0".to_vec(),
+                ts: 0,
+            },
+            KVT {
+                K: b"key5_0".to_vec(),
+                ts: 0,
+            },
+            KVT {
+                K: b"key6_0".to_vec(),
+                ts: 0,
+            },
+        ];
+
+        for kvt in &kvts {
+            assert!(tree
+                .insert(&VectorKey::from(kvt.K.to_vec()), 1, kvt.ts)
+                .is_ok());
+        }
+
+        let mut curr_ts = 1;
+        for kvt in &kvts {
+            let (val, ts) = tree.get(&VectorKey::from(kvt.K.to_vec())).unwrap();
+            assert_eq!(*val, 1);
+
+            if kvt.ts == 0 {
+                // zero-valued timestamps should be associated with current time plus one
+                assert_eq!(curr_ts, *ts);
+            } else {
+                assert_eq!(kvt.ts, *ts);
+            }
+
+            curr_ts += 1;
+        }
+
+        // root's ts should match the greatest inserted timestamp
+        assert_eq!(kvts.len() as u64, tree.ts());
+    }
+
+    #[test]
+    fn test_timed_insertion_update_same_key() {
+        let mut tree: Tree<ArrayPrefix<32>, i32> = Tree::<ArrayPrefix<32>, i32>::new();
+
+        let key1 = &VectorKey::from_str("key_1");
+
+        // insert key1 with ts 0
+        assert!(tree.insert(key1, 1, 0).is_ok());
+        // update key1 with ts 0
+        assert!(tree.insert(key1, 1, 0).is_ok());
+
+        // get key1 should return ts 2 as the same key was inserted and updated
+        let (val, ts) = tree.get(key1).unwrap();
+        assert_eq!(*val, 1);
+        assert_eq!(*ts, 2);
+
+        // update key1 with older timestamp should fail
+        assert!(tree.insert(key1, 1, 1).is_err());
+        assert_eq!(tree.ts(), 2);
+
+        // update key1 with newer timestamp should pass
+        assert!(tree.insert(key1, 1, 8).is_ok());
+        let (val, ts) = tree.get(key1).unwrap();
+        assert_eq!(*val, 1);
+        assert_eq!(*ts, 8);
+
+        assert_eq!(tree.ts(), 8);
+    }
+
+    #[test]
+    fn test_timed_insertion_update_non_increasing_ts() {
+        let mut tree: Tree<ArrayPrefix<32>, i32> = Tree::<ArrayPrefix<32>, i32>::new();
+
+        let key1 = &VectorKey::from_str("key_1");
+        let key2 = &VectorKey::from_str("key_2");
+
+        assert!(tree.insert(key1, 1, 10).is_ok());
+        let initial_ts = tree.ts();
+
+        assert!(tree.insert(key1, 1, 2).is_err());
+        assert_eq!(initial_ts, tree.ts());
+        let (val, ts) = tree.get(key1).unwrap();
+        assert_eq!(*val, 1);
+        assert_eq!(*ts, 10);
+
+        assert!(tree.insert(key2, 1, 15).is_ok());
+        let initial_ts = tree.ts();
+
+        assert!(tree.insert(key2, 1, 11).is_err());
+        assert_eq!(initial_ts, tree.ts());
+        let (val, ts) = tree.get(key2).unwrap();
+        assert_eq!(*val, 1);
+        assert_eq!(*ts, 15);
+
+        // check if the max timestamp of the tree is the max of the two inserted timestamps
+        assert_eq!(tree.ts(), 15);
+    }
+
+    #[test]
+    fn test_timed_deletion_root_ts() {
+        let mut tree: Tree<ArrayPrefix<32>, i32> = Tree::<ArrayPrefix<32>, i32>::new();
+
+        assert!(tree.insert(&VectorKey::from_str("key_1"), 1, 0).is_ok());
+        assert!(tree.insert(&VectorKey::from_str("key_2"), 1, 0).is_ok());
+        assert_eq!(tree.ts(), 2);
+
+        assert!(tree.remove(&VectorKey::from_str("key_1")));
+        assert!(tree.remove(&VectorKey::from_str("key_2")));
+        assert_eq!(tree.ts(), 0);
+    }
 }

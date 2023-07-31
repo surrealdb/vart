@@ -143,7 +143,7 @@ impl<P: Prefix + Clone, N: Timestamp, const WIDTH: usize> FlatNode<P, N, WIDTH> 
     }
 
     #[inline]
-    fn reset_ts_to_max_child_ts(&mut self) {
+    fn update_ts_to_max_child_ts(&mut self) {
         self.ts = self.max_child_ts();
     }
 
@@ -164,6 +164,15 @@ impl<P: Prefix + Clone, N: Timestamp, const WIDTH: usize> FlatNode<P, N, WIDTH> 
             self.ts = new_ts;
         }
     }
+
+    #[inline]
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (u8, &Arc<N>)> {
+        self.keys
+            .iter()
+            .zip(self.children.iter())
+            .take(self.num_children as usize)
+            .map(|(&k, c)| (k, c.as_ref().unwrap()))
+    }
 }
 
 impl<P: Prefix + Clone, N: Timestamp, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N, WIDTH> {
@@ -183,8 +192,7 @@ impl<P: Prefix + Clone, N: Timestamp, const WIDTH: usize> NodeTrait<N> for FlatN
         let idx = new_node.index(key).unwrap();
         new_node.keys[idx] = key;
         new_node.children[idx] = Some(node);
-        // Update the timestamp if the new child has a greater timestamp
-        new_node.reset_ts_to_max_child_ts();
+        new_node.update_ts_to_max_child_ts();
 
         new_node
     }
@@ -226,8 +234,7 @@ impl<P: Prefix + Clone, N: Timestamp, const WIDTH: usize> NodeTrait<N> for FlatN
         new_node.keys[WIDTH - 1] = 0;
         new_node.children[WIDTH - 1] = None;
         new_node.num_children -= 1;
-        // Update the timestamp if the new child has a greater timestamp
-        new_node.reset_ts_to_max_child_ts();
+        new_node.update_ts_to_max_child_ts();
 
         new_node
     }
@@ -290,7 +297,8 @@ impl<P: Prefix + Clone, N: Timestamp> Node48<P, N> {
         let mut fnode = FlatNode::new(self.prefix.clone());
         for (key, pos) in self.child_ptr_indexes.iter() {
             let child = self.children.get(*pos as usize).unwrap().clone();
-            fnode.insert_child(*pos as usize, key as u8, child);
+            let idx = fnode.find_pos(key as u8).expect("node is full");
+            fnode.insert_child(idx as usize, key as u8, child);
         }
         fnode.update_ts();
         fnode
@@ -314,7 +322,7 @@ impl<P: Prefix + Clone, N: Timestamp> Node48<P, N> {
     }
 
     #[inline]
-    fn reset_ts_to_max_child_ts(&mut self) {
+    fn update_ts_to_max_child_ts(&mut self) {
         self.ts = self.max_child_ts();
     }
 
@@ -335,6 +343,12 @@ impl<P: Prefix + Clone, N: Timestamp> Node48<P, N> {
             self.ts = new_ts;
         }
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (u8, &Arc<N>)> {
+        self.child_ptr_indexes
+            .iter()
+            .map(move |(key, pos)| (key as u8, self.children.get(*pos as usize).unwrap()))
+    }
 }
 
 impl<P: Prefix + Clone, N: Timestamp> NodeTrait<N> for Node48<P, N> {
@@ -352,9 +366,7 @@ impl<P: Prefix + Clone, N: Timestamp> NodeTrait<N> for Node48<P, N> {
         let mut new_node = self.clone();
         let idx = new_node.child_ptr_indexes.get(key as usize).unwrap();
         new_node.children.set(*idx as usize, node);
-
-        // Update the timestamp if the new child has a greater timestamp
-        new_node.reset_ts_to_max_child_ts();
+        new_node.update_ts_to_max_child_ts();
 
         new_node
     }
@@ -376,7 +388,7 @@ impl<P: Prefix + Clone, N: Timestamp> NodeTrait<N> for Node48<P, N> {
         new_node.children.erase(*pos as usize);
         new_node.num_children -= 1;
 
-        new_node.reset_ts_to_max_child_ts();
+        new_node.update_ts_to_max_child_ts();
         new_node
     }
 
@@ -454,7 +466,7 @@ impl<P: Prefix + Clone, N: Timestamp> Node256<P, N> {
     }
 
     #[inline]
-    fn reset_ts_to_max_child_ts(&mut self) {
+    fn update_ts_to_max_child_ts(&mut self) {
         self.ts = self.max_child_ts();
     }
 
@@ -475,6 +487,10 @@ impl<P: Prefix + Clone, N: Timestamp> Node256<P, N> {
             self.ts = new_ts;
         }
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (u8, &Arc<N>)> {
+        self.children.iter().map(|(key, node)| (key as u8, node))
+    }
 }
 
 impl<P: Prefix + Clone, N: Timestamp> NodeTrait<N> for Node256<P, N> {
@@ -491,7 +507,7 @@ impl<P: Prefix + Clone, N: Timestamp> NodeTrait<N> for Node256<P, N> {
         let mut new_node = self.clone();
 
         new_node.children.set(key as usize, node);
-        new_node.reset_ts_to_max_child_ts();
+        new_node.update_ts_to_max_child_ts();
         new_node
     }
 
@@ -519,7 +535,7 @@ impl<P: Prefix + Clone, N: Timestamp> NodeTrait<N> for Node256<P, N> {
         if removed.is_some() {
             new_node.num_children -= 1;
         }
-        new_node.reset_ts_to_max_child_ts();
+        new_node.update_ts_to_max_child_ts();
         new_node
     }
 
@@ -780,13 +796,17 @@ mod tests {
 
         // resize from 48 to 16
         let mut node = Node48::<ArrayPrefix<8>, u8>::new(dummy_prefix.clone());
-        for i in 0..16 {
+        for i in 0..18 {
             node = node.add_child(i as u8, i);
         }
+        assert_eq!(node.num_children, 18);
+        node = node.delete_child(0);
+        node = node.delete_child(1);
+        assert_eq!(node.num_children, 16);
 
         let resized = node.shrink::<16>();
         assert_eq!(resized.num_children, 16);
-        for i in 0..16 {
+        for i in 2..18 {
             assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i.into()));
         }
 
