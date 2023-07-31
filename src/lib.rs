@@ -320,12 +320,4 @@ impl<X, const WIDTH: usize> VecArray<X, WIDTH> {
             .enumerate()
             .filter_map(|(i, x)| x.as_ref().map(|v| (i, v)))
     }
-
-    pub fn iter_k(&self) -> impl DoubleEndedIterator<Item = (usize, &X)> {
-        self.storage
-            .iter()
-            .enumerate()
-            .filter(|(_, x)| x.is_some()) // Only keep items that are not None
-            .map(|(i, x)| (i, x.as_ref().unwrap())) // Unwrap the Some value to get &X
-    }
 }
