@@ -1,14 +1,14 @@
 use core::panic;
 use std::cmp::min;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
-use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
 use std::sync::RwLock;
+use std::sync::{Arc, Mutex};
 
-use crate::{Key, Prefix, PrefixTrait};
-use crate::snapshot::{Snapshot, SnapshotPointer};
 use crate::node::{FlatNode, LeafNode, Node256, Node48, NodeTrait, Timestamp};
+use crate::snapshot::{Snapshot, SnapshotPointer};
+use crate::{Key, Prefix, PrefixTrait};
 
 // Minimum and maximum number of children for Node4
 const NODE4MIN: usize = 2;
@@ -53,7 +53,9 @@ impl fmt::Display for TrieError {
             TrieError::SnapshotNotFound => write!(f, "Snapshot not found"),
             TrieError::SnapshotMutexError => write!(f, "Failed to lock snapshot mutex"),
             TrieError::SnapshotAlreadyClosed => write!(f, "Snapshot already closed"),
-            TrieError::SnapshotReadersNotClosed => write!(f, "Readers in the snapshot are not closed"),
+            TrieError::SnapshotReadersNotClosed => {
+                write!(f, "Readers in the snapshot are not closed")
+            }
             TrieError::Other(ref message) => write!(f, "Other error: {}", message),
         }
     }
@@ -91,7 +93,8 @@ enum NodeType<P: Prefix + Clone, V: Clone> {
 // Adaptive radix trie
 pub struct Tree<P: PrefixTrait, V: Clone> {
     root: Option<Arc<Node<P, V>>>, // Root node of the tree
-    pub (crate) snapshots: Mutex<Vec<Option<Snapshot<P, V>>>>,
+    pub(crate) snapshots: Mutex<Vec<Option<Snapshot<P, V>>>>, // TODO: use a RWLock instead, and use a hashmap
+    // max_snapshot_id: usize,
     max_active_snapshots: usize,
     // mutex: RwLock<()>
 }
@@ -120,11 +123,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     #[inline]
     pub(crate) fn new_leaf(key: P, value: V, ts: u64) -> Node<P, V> {
         Self {
-            node_type: NodeType::Leaf(LeafNode {
-                key: key,
-                value: value,
-                ts: ts,
-            }),
+            node_type: NodeType::Leaf(LeafNode { key, value, ts }),
         }
     }
 
@@ -438,13 +437,12 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
         let cur_node_prefix = cur_node.prefix().clone();
         let cur_node_prefix_len = cur_node.prefix().length();
 
-            let key_prefix = key.prefix_after(depth);
-            let longest_common_prefix = cur_node_prefix.longest_common_prefix(key_prefix);
+        let key_prefix = key.prefix_after(depth);
+        let longest_common_prefix = cur_node_prefix.longest_common_prefix(key_prefix);
 
-            let new_key = cur_node_prefix.prefix_after(longest_common_prefix);
-            let prefix = cur_node_prefix.prefix_before(longest_common_prefix);
-            let is_prefix_match =
-                min(cur_node_prefix_len, key_prefix.len()) == longest_common_prefix;
+        let new_key = cur_node_prefix.prefix_after(longest_common_prefix);
+        let prefix = cur_node_prefix.prefix_before(longest_common_prefix);
+        let is_prefix_match = min(cur_node_prefix_len, key_prefix.len()) == longest_common_prefix;
 
         if let NodeType::Leaf(ref leaf) = &cur_node.node_type {
             if is_prefix_match && cur_node_prefix.length() == key_prefix.len() {
@@ -457,14 +455,14 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
 
         if !is_prefix_match {
             let mut old_node = cur_node.clone_node();
-            old_node.set_prefix(new_key.clone());
-            let mut n4 = Node::new_node4(prefix.clone());
+            old_node.set_prefix(new_key);
+            let mut n4 = Node::new_node4(prefix);
 
             let k1 = cur_node_prefix.at(longest_common_prefix);
             let k2 = key_prefix[longest_common_prefix];
             let new_leaf = Node::new_leaf(
                 key_prefix[longest_common_prefix..key_prefix.len()].into(),
-                value.clone(),
+                value,
                 commit_ts,
             );
             n4 = n4.add_child(k1, old_node).add_child(k2, new_leaf);
@@ -492,7 +490,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             commit_ts,
         );
         let new_node = cur_node.add_child(k, new_leaf);
-        return Ok((Arc::new(new_node), None));
+        Ok((Arc::new(new_node), None))
     }
 
     fn remove_recurse<K: Key>(
@@ -514,7 +512,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
 
         let child = cur_node.find_child(k);
         if let Some(child_node) = child {
-            let (new_child, removed) =
+            let (_new_child, removed) =
                 Node::remove_recurse(child_node, key, depth + longest_common_prefix);
             if removed {
                 let new_node = cur_node.delete_child(k);
@@ -527,7 +525,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             }
         }
 
-        return (Some(cur_node.clone()), false);
+        (Some(cur_node.clone()), false)
     }
 
     pub fn get_recurse<'a, K: Key>(cur_node: &'a Node<P, V>, key: &K) -> Option<(&'a V, &'a u64)> {
@@ -551,7 +549,6 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
         }
     }
 
-
     #[allow(dead_code)]
     pub fn iter(&self) -> Box<dyn Iterator<Item = (u8, &Arc<Self>)> + '_> {
         return match &self.node_type {
@@ -573,7 +570,6 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         }
     }
 
-
     pub fn insert<K: Key>(&mut self, key: &K, value: V, ts: u64) -> Result<Option<V>, TrieError> {
         let (new_root, old_node) = match &self.root {
             None => {
@@ -593,7 +589,8 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
                 let mut commit_ts = ts;
                 if ts == 0 {
                     commit_ts = curr_ts + 1;
-                } else if curr_ts >= ts { // TODO: check if this should be > because this means insertions with the ts equal to the root's ts will fail
+                } else if curr_ts >= ts {
+                    // TODO: check if this should be > because this means insertions with the ts equal to the root's ts will fail
                     return Err(TrieError::Other(
                         "given timestamp is older than root's current timestamp".to_string(),
                     ));
@@ -618,7 +615,7 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
                 if root.is_leaf() {
                     (None, true)
                 } else {
-                    let (new_root, removed) = Node::remove_recurse(&root, key, 0);
+                    let (new_root, removed) = Node::remove_recurse(root, key, 0);
                     if removed {
                         (new_root, true)
                     } else {
@@ -636,7 +633,6 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         Node::get_recurse(self.root.as_ref()?, key)
     }
 
-
     pub fn ts(&self) -> u64 {
         match &self.root {
             None => 0,
@@ -645,20 +641,21 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
     }
 
     pub fn create_snapshot(&self) -> Result<SnapshotPointer<P, V>, TrieError> {
-        let mut snapshots = self.snapshots.lock().map_err(|_| TrieError::SnapshotMutexError)?;
+        let mut snapshots = self
+            .snapshots
+            .lock()
+            .map_err(|_| TrieError::SnapshotMutexError)?;
         if snapshots.len() >= self.max_active_snapshots {
             return Err(TrieError::Other(
                 "max number of active snapshots reached".to_string(),
             ));
         }
         let new_snapshot = self.new_snapshot(snapshots.len())?;
-        let index = new_snapshot.id.clone();
+        let index = new_snapshot.id;
         snapshots.push(Some(new_snapshot));
-
 
         Ok(SnapshotPointer::new(self, index))
     }
-
 
     fn new_snapshot(&self, snapshot_id: usize) -> Result<Snapshot<P, V>, TrieError> {
         if self.root.is_none() {
@@ -679,21 +676,27 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
             mutex: RwLock::new(()),
         };
 
-
         Ok(snapshot)
     }
 
-
     pub(crate) fn close(&self, snapshot_id: usize) -> Result<(), TrieError> {
-        let mut snapshots = self.snapshots.lock().map_err(|_| TrieError::SnapshotMutexError)?;
-        let refer = snapshots.get_mut(snapshot_id).ok_or(TrieError::SnapshotNotFound)?;
+        let mut snapshots = self
+            .snapshots
+            .lock()
+            .map_err(|_| TrieError::SnapshotMutexError)?;
+        let refer = snapshots
+            .get_mut(snapshot_id)
+            .ok_or(TrieError::SnapshotNotFound)?;
         *refer = None;
         Ok(())
     }
 
     // Method to get the count of snapshots
     pub fn snapshot_count(&self) -> Result<usize, TrieError> {
-        let snapshots = self.snapshots.lock().map_err(|_| TrieError::SnapshotMutexError)?;
+        let snapshots = self
+            .snapshots
+            .lock()
+            .map_err(|_| TrieError::SnapshotMutexError)?;
         Ok(snapshots.len())
     }
 }
@@ -829,60 +832,84 @@ mod tests {
         assert!(result.is_some());
     }
 
-    //     // Inserting a single value into the tree and removing it should result in a nil tree root.
-    //     #[test]
-    //     fn test_insert_and_remove() {
-    //         let key = &VectorKey::from_str("test");
+    // Inserting a single value into the tree and removing it should result in a nil tree root.
+    #[test]
+    fn test_insert_and_remove() {
+        let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
 
-    //         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
-    //         tree.insert(key, 1);
+        let key = &VectorKey::from_str("test");
+        tree.insert(key, 1, 0);
 
-    //         assert_eq!(tree.remove(key), true);
-    //         assert!(tree.get(key).is_none());
-    //     }
+        assert_eq!(tree.remove(key), true);
+        assert!(tree.get(key).is_none());
+    }
 
-    //     // Inserting Two values into the tree and removing one of them
-    //     // should result in a tree root of type LEAF
-    //     #[test]
-    //     fn test_insert2_and_remove1_and_root_should_be_node4() {
-    //         let key1 = &VectorKey::from_str("test1");
-    //         let key2 = &VectorKey::from_str("test2");
+    // Inserting Two values into the tree and removing one of them
+    // should result in a tree root of type LEAF
+    #[test]
+    fn test_insert2_and_remove1_and_root_should_be_node4() {
+        let key1 = &VectorKey::from_str("test1");
+        let key2 = &VectorKey::from_str("test2");
 
-    //         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
-    //         tree.insert(key1, 1);
-    //         tree.insert(key2, 1);
+        let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
+        tree.insert(key1, 1, 0);
+        tree.insert(key2, 1, 0);
 
-    //         assert_eq!(tree.remove(key1), true);
-    //         assert!(tree.root.is_some());
-    //         let root = tree.root.unwrap();
-    //         assert_eq!(root.node_type_name(), "Node4");
-    //     }
+        assert_eq!(tree.remove(key1), true);
+        assert!(tree.root.is_some());
+        let root = tree.root.unwrap();
+        assert_eq!(root.node_type_name(), "Node4");
+    }
 
-    //     //     // Inserting Two values into a tree and deleting them both
-    //     //     // should result in a nil tree root
-    //     //     // This tests the expansion of the root into a NODE4 and
-    //     //     // successfully collapsing into a LEAF and then nil upon successive removals
-    //     //     #[test]
-    //     //     fn test_insert2_and_remove2_and_root_should_be_nil() {
-    //     //         let key1 = &VectorKey::from_str("test1");
-    //     //         let key2 = &VectorKey::from_str("test2");
+    // // Inserting Two values into a tree and deleting them both
+    // // should result in a nil tree root
+    // // This tests the expansion of the root into a NODE4 and
+    // // successfully collapsing into a LEAF and then nil upon successive removals
+    // #[test]
+    // fn test_insert2_and_remove2_and_root_should_be_nil() {
+    //     let key1 = &VectorKey::from_str("test1");
+    //     let key2 = &VectorKey::from_str("test2");
 
-    //     //         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
-    //     //         tree.insert(key1, 1);
-    //     //         tree.insert(key2, 1);
+    //     let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
+    //     tree.insert(key1, 1, 0);
+    //     tree.insert(key2, 1, 0);
 
-    //     //         assert_eq!(tree.remove(key1), true);
-    //     //         assert_eq!(tree.remove(key2), true);
+    //     assert_eq!(tree.remove(key1), true);
+    //     assert_eq!(tree.remove(key2), true);
 
-    //     //         assert!(tree.root.is_none());
-    //     //     }
+    //     assert!(tree.root.is_none());
+    // }
 
-    //     // Inserting Five values into a tree and deleting one of them
-    //     // should result in a tree root of type NODE4
+    // Inserting Five values into a tree and deleting one of them
+    // should result in a tree root of type NODE4
+    // This tests the expansion of the root into a NODE16 and
+    // successfully collapsing into a NODE4 upon successive removals
+    #[test]
+    fn test_insert5_and_remove1_and_root_should_be_node4() {
+        let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
+
+        for i in 0..5u32 {
+            let key = &VectorKey::from_slice(&i.to_be_bytes());
+            tree.insert(key, 1, 0);
+        }
+
+        assert_eq!(
+            tree.remove(&VectorKey::from_slice(&1u32.to_be_bytes())),
+            true
+        );
+
+        assert!(tree.root.is_some());
+        let root = tree.root.unwrap();
+        assert!(root.is_inner());
+        assert_eq!(root.node_type_name(), "Node4");
+    }
+
+    //     // Inserting Five values into a tree and deleting all of them
+    //     // should result in a tree root of type nil
     //     // This tests the expansion of the root into a NODE16 and
-    //     // successfully collapsing into a NODE4 upon successive removals
+    //     // successfully collapsing into a NODE4, Leaf, then nil
     //     #[test]
-    //     fn test_insert5_and_remove1_and_root_should_be_node4() {
+    //     fn test_insert5_and_remove5_and_root_should_be_nil() {
     //         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
 
     //         for i in 0..5u32 {
@@ -890,136 +917,112 @@ mod tests {
     //             tree.insert(key, 1);
     //         }
 
-    //         assert_eq!(
-    //             tree.remove(&VectorKey::from_slice(&1u32.to_be_bytes())),
-    //             true
-    //         );
-
-    //         assert!(tree.root.is_some());
-    //         let root = tree.root.unwrap();
-    //         assert!(root.is_inner());
-    //         assert_eq!(root.node_type_name(), "Node4");
-    //     }
-
-    //     //     // Inserting Five values into a tree and deleting all of them
-    //     //     // should result in a tree root of type nil
-    //     //     // This tests the expansion of the root into a NODE16 and
-    //     //     // successfully collapsing into a NODE4, Leaf, then nil
-    //     //     #[test]
-    //     //     fn test_insert5_and_remove5_and_root_should_be_nil() {
-    //     //         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
-
-    //     //         for i in 0..5u32 {
-    //     //             let key = &VectorKey::from_slice(&i.to_be_bytes());
-    //     //             tree.insert(key, 1);
-    //     //         }
-
-    //     //         for i in 0..5u32 {
-    //     //             let key = &VectorKey::from_slice(&i.to_be_bytes());
-    //     //             tree.remove(key);
-    //     //         }
-
-    //     //         assert!(tree.root.is_none());
-    //     //     }
-
-    //     // Inserting 17 values into a tree and deleting one of them should
-    //     // result in a tree root of type NODE16
-    //     // This tests the expansion of the root into a NODE48, and
-    //     // successfully collapsing into a NODE16
-    //     #[test]
-    //     fn test_insert17_and_remove1_and_root_should_be_node16() {
-    //         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
-
-    //         for i in 0..17u32 {
+    //         for i in 0..5u32 {
     //             let key = &VectorKey::from_slice(&i.to_be_bytes());
-    //             tree.insert(key, 1);
+    //             tree.remove(key);
     //         }
 
-    //         assert_eq!(
-    //             tree.remove(&VectorKey::from_slice(&2u32.to_be_bytes())),
-    //             true
-    //         );
-
-    //         assert!(tree.root.is_some());
-    //         let root = tree.root.unwrap();
-    //         assert!(root.is_inner());
-    //         assert_eq!(root.node_type_name(), "Node16");
+    //         assert!(tree.root.is_none());
     //     }
 
-    //     #[test]
-    //     fn test_insert17_and_root_should_be_node48() {
-    //         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
+    // Inserting 17 values into a tree and deleting one of them should
+    // result in a tree root of type NODE16
+    // This tests the expansion of the root into a NODE48, and
+    // successfully collapsing into a NODE16
+    #[test]
+    fn test_insert17_and_remove1_and_root_should_be_node16() {
+        let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
 
-    //         for i in 0..17u32 {
-    //             let key = VectorKey::from_slice(&i.to_be_bytes());
-    //             tree.insert(&key, 1);
-    //         }
+        for i in 0..17u32 {
+            let key = &VectorKey::from_slice(&i.to_be_bytes());
+            tree.insert(key, 1, 0);
+        }
 
-    //         assert!(tree.root.is_some());
-    //         let root = tree.root.unwrap();
-    //         assert!(root.is_inner());
-    //         assert_eq!(root.node_type_name(), "Node48");
+        assert_eq!(
+            tree.remove(&VectorKey::from_slice(&2u32.to_be_bytes())),
+            true
+        );
+
+        assert!(tree.root.is_some());
+        let root = tree.root.unwrap();
+        assert!(root.is_inner());
+        assert_eq!(root.node_type_name(), "Node16");
+    }
+
+    #[test]
+    fn test_insert17_and_root_should_be_node48() {
+        let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
+
+        for i in 0..17u32 {
+            let key = VectorKey::from_slice(&i.to_be_bytes());
+            tree.insert(&key, 1, 0);
+        }
+
+        assert!(tree.root.is_some());
+        let root = tree.root.unwrap();
+        assert!(root.is_inner());
+        assert_eq!(root.node_type_name(), "Node48");
+    }
+
+    // // Inserting 17 values into a tree and removing them all should
+    // // result in a tree of root type nil
+    // // This tests the expansion of the root into a NODE48, and
+    // // successfully collapsing into a NODE16, NODE4, Leaf, and then nil
+    // #[test]
+    // fn test_insert17_and_remove17_and_root_should_be_nil() {
+    //     let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
+
+    //     for i in 0..17u32 {
+    //         let key = VectorKey::from_slice(&i.to_be_bytes());
+    //         tree.insert(&key, 1);
     //     }
 
-    //     // // Inserting 17 values into a tree and removing them all should
-    //     // // result in a tree of root type nil
-    //     // // This tests the expansion of the root into a NODE48, and
-    //     // // successfully collapsing into a NODE16, NODE4, Leaf, and then nil
-    //     // #[test]
-    //     // fn test_insert17_and_remove17_and_root_should_be_nil() {
-    //     //     let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
-
-    //     //     for i in 0..17u32 {
-    //     //         let key = VectorKey::from_slice(&i.to_be_bytes());
-    //     //         tree.insert(&key, 1);
-    //     //     }
-
-    //     //     for i in 0..17u32 {
-    //     //         let key = VectorKey::from_slice(&i.to_be_bytes());
-    //     //         tree.remove(&key);
-    //     //     }
-
-    //     //     assert!(tree.root.is_none());
-    //     // }
-
-    //     // Inserting 49 values into a tree and removing one of them should
-    //     // result in a tree root of type NODE48
-    //     // This tests the expansion of the root into a NODE256, and
-    //     // successfully collapasing into a NODE48
-    //     #[test]
-    //     fn test_insert49_and_remove1_and_root_should_be_node48() {
-    //         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
-
-    //         for i in 0..49u32 {
-    //             let key = &VectorKey::from_slice(&i.to_be_bytes());
-    //             tree.insert(key, 1);
-    //         }
-
-    //         assert_eq!(
-    //             tree.remove(&VectorKey::from_slice(&2u32.to_be_bytes())),
-    //             true
-    //         );
-
-    //         assert!(tree.root.is_some());
-    //         let root = tree.root.unwrap();
-    //         assert!(root.is_inner());
-    //         assert_eq!(root.node_type_name(), "Node48");
+    //     for i in 0..17u32 {
+    //         let key = VectorKey::from_slice(&i.to_be_bytes());
+    //         tree.remove(&key);
     //     }
 
-    //     #[test]
-    //     fn test_insert49_and_root_should_be_node248() {
-    //         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
+    //     assert!(tree.root.is_none());
+    // }
 
-    //         for i in 0..49u32 {
-    //             let key = &VectorKey::from_slice(&i.to_be_bytes());
-    //             tree.insert(key, 1);
-    //         }
+    // Inserting 49 values into a tree and removing one of them should
+    // result in a tree root of type NODE48
+    // This tests the expansion of the root into a NODE256, and
+    // successfully collapasing into a NODE48
+    #[test]
+    fn test_insert49_and_remove1_and_root_should_be_node48() {
+        let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
 
-    //         assert!(tree.root.is_some());
-    //         let root = tree.root.unwrap();
-    //         assert!(root.is_inner());
-    //         assert_eq!(root.node_type_name(), "Node256");
-    //     }
+        for i in 0..49u32 {
+            let key = &VectorKey::from_slice(&i.to_be_bytes());
+            tree.insert(key, 1, 0);
+        }
+
+        assert_eq!(
+            tree.remove(&VectorKey::from_slice(&2u32.to_be_bytes())),
+            true
+        );
+
+        assert!(tree.root.is_some());
+        let root = tree.root.unwrap();
+        assert!(root.is_inner());
+        assert_eq!(root.node_type_name(), "Node48");
+    }
+
+    #[test]
+    fn test_insert49_and_root_should_be_node248() {
+        let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
+
+        for i in 0..49u32 {
+            let key = &VectorKey::from_slice(&i.to_be_bytes());
+            tree.insert(key, 1, 0);
+        }
+
+        assert!(tree.root.is_some());
+        let root = tree.root.unwrap();
+        assert!(root.is_inner());
+        assert_eq!(root.node_type_name(), "Node256");
+    }
 
     //     // // Inserting 49 values into a tree and removing all of them should
     //     // // result in a nil tree root
@@ -1186,21 +1189,4 @@ mod tests {
         assert!(tree.remove(&VectorKey::from_str("key_2")));
         assert_eq!(tree.ts(), 0);
     }
-
-    #[test]
-    fn test_snapshot_creation() {
-        let mut tree: Tree<ArrayPrefix<32>, i32> = Tree::<ArrayPrefix<32>, i32>::new();
-        assert!(tree.insert(&VectorKey::from_str("key_1"), 1, 0).is_ok());
-        assert!(tree.insert(&VectorKey::from_str("key_2"), 1, 0).is_ok());
-        assert!(tree.insert(&VectorKey::from_str("key_3"), 1, 0).is_ok());
-
-        let mut snap1 = tree.create_snapshot().unwrap();
-        assert!(snap1.insert(&VectorKey::from_str("key_1"), 1).is_ok());
-
-
-        assert_eq!(tree.snapshot_count().unwrap(), 1);
-        assert_eq!(tree.ts(), 3);
-        assert_eq!(snap1.ts().unwrap(), 4);
-    }
-
 }

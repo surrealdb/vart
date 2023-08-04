@@ -298,7 +298,7 @@ impl<P: Prefix + Clone, N: Timestamp> Node48<P, N> {
         for (key, pos) in self.child_ptr_indexes.iter() {
             let child = self.children.get(*pos as usize).unwrap().clone();
             let idx = fnode.find_pos(key as u8).expect("node is full");
-            fnode.insert_child(idx as usize, key as u8, child);
+            fnode.insert_child(idx, key as u8, child);
         }
         fnode.update_ts();
         fnode
