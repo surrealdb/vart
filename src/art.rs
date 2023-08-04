@@ -2,10 +2,13 @@ use core::panic;
 use std::cmp::min;
 use std::error::Error;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::RwLock;
 
-use crate::node::{FlatNode, LeafNode, Node256, Node48, NodeTrait, Timestamp};
 use crate::{Key, Prefix, PrefixTrait};
+use crate::snapshot::{Snapshot, SnapshotPointer};
+use crate::node::{FlatNode, LeafNode, Node256, Node48, NodeTrait, Timestamp};
 
 // Minimum and maximum number of children for Node4
 const NODE4MIN: usize = 2;
@@ -22,11 +25,19 @@ const NODE48MAX: usize = 48;
 // Minimum and maximum number of children for Node256
 const NODE256MIN: usize = NODE48MAX + 1;
 
+// Maximum number of active snapshots
+const DEFAULT_MAX_ACTIVE_SNAPSHOTS: usize = 100;
+
 // Define a custom error enum representing different error cases for the Trie
 #[derive(Debug)]
 pub enum TrieError {
     IllegalArguments,
     NotFound,
+    MutexError,
+    SnapshotNotFound,
+    SnapshotMutexError,
+    SnapshotAlreadyClosed,
+    SnapshotReadersNotClosed,
     Other(String),
 }
 
@@ -38,6 +49,11 @@ impl fmt::Display for TrieError {
         match *self {
             TrieError::IllegalArguments => write!(f, "Illegal arguments"),
             TrieError::NotFound => write!(f, "Not found"),
+            TrieError::MutexError => write!(f, "Failed to lock mutex"),
+            TrieError::SnapshotNotFound => write!(f, "Snapshot not found"),
+            TrieError::SnapshotMutexError => write!(f, "Failed to lock snapshot mutex"),
+            TrieError::SnapshotAlreadyClosed => write!(f, "Snapshot already closed"),
+            TrieError::SnapshotReadersNotClosed => write!(f, "Readers in the snapshot are not closed"),
             TrieError::Other(ref message) => write!(f, "Other error: {}", message),
         }
     }
@@ -46,8 +62,8 @@ impl fmt::Display for TrieError {
 // From the specification: Adaptive Radix tries consist of two types of nodes:
 // Inner nodes, which map prefix(prefix) keys to other nodes,
 // and leaf nodes, which store the values corresponding to the key.
-struct Node<P: Prefix + Clone, V: Clone> {
-    pub node_type: NodeType<P, V>, // Type of the node
+pub struct Node<P: Prefix + Clone, V: Clone> {
+    node_type: NodeType<P, V>, // Type of the node
 }
 
 impl<P: Prefix + Clone, V: Clone> Timestamp for Node<P, V> {
@@ -75,6 +91,9 @@ enum NodeType<P: Prefix + Clone, V: Clone> {
 // Adaptive radix trie
 pub struct Tree<P: PrefixTrait, V: Clone> {
     root: Option<Arc<Node<P, V>>>, // Root node of the tree
+    pub (crate) snapshots: Mutex<Vec<Option<Snapshot<P, V>>>>,
+    max_active_snapshots: usize,
+    // mutex: RwLock<()>
 }
 
 impl<P: PrefixTrait + Clone, V: Clone> NodeType<P, V> {
@@ -93,7 +112,7 @@ impl<P: PrefixTrait + Clone, V: Clone> NodeType<P, V> {
 // Default implementation for the Tree struct
 impl<P: PrefixTrait, V: Clone> Default for Tree<P, V> {
     fn default() -> Self {
-        Tree { root: None }
+        Tree::new()
     }
 }
 
@@ -409,13 +428,13 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
         }
     }
 
-    fn insert_recurse<K: Key>(
+    pub(crate) fn insert_recurse<K: Key>(
         cur_node: &Arc<Node<P, V>>,
         key: &K,
         value: V,
         commit_ts: u64,
         depth: usize,
-    ) -> (Result<(Arc<Node<P, V>>, Option<V>), TrieError>) {
+    ) -> Result<(Arc<Node<P, V>>, Option<V>), TrieError> {
         let cur_node_prefix = cur_node.prefix().clone();
         let cur_node_prefix_len = cur_node.prefix().length();
 
@@ -511,6 +530,28 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
         return (Some(cur_node.clone()), false);
     }
 
+    pub fn get_recurse<'a, K: Key>(cur_node: &'a Node<P, V>, key: &K) -> Option<(&'a V, &'a u64)> {
+        let mut cur_node = cur_node;
+        let mut depth = 0;
+        loop {
+            let key_prefix = key.prefix_after(depth);
+            let prefix = cur_node.prefix();
+            let lcp = prefix.longest_common_prefix(key_prefix);
+            if lcp != prefix.length() {
+                return None;
+            }
+
+            if prefix.length() == key_prefix.len() {
+                return cur_node.get_value();
+            }
+
+            let k = key.at(depth + prefix.length());
+            depth += prefix.length();
+            cur_node = cur_node.find_child(k)?;
+        }
+    }
+
+
     #[allow(dead_code)]
     pub fn iter(&self) -> Box<dyn Iterator<Item = (u8, &Arc<Self>)> + '_> {
         return match &self.node_type {
@@ -525,8 +566,13 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
 
 impl<P: PrefixTrait, V: Clone> Tree<P, V> {
     pub fn new() -> Self {
-        Self { root: None }
+        Tree {
+            root: None,
+            snapshots: Mutex::new(Vec::new()),
+            max_active_snapshots: DEFAULT_MAX_ACTIVE_SNAPSHOTS,
+        }
     }
+
 
     pub fn insert<K: Key>(&mut self, key: &K, value: V, ts: u64) -> Result<Option<V>, TrieError> {
         let (new_root, old_node) = match &self.root {
@@ -547,7 +593,7 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
                 let mut commit_ts = ts;
                 if ts == 0 {
                     commit_ts = curr_ts + 1;
-                } else if curr_ts > ts {
+                } else if curr_ts >= ts { // TODO: check if this should be > because this means insertions with the ts equal to the root's ts will fail
                     return Err(TrieError::Other(
                         "given timestamp is older than root's current timestamp".to_string(),
                     ));
@@ -587,35 +633,68 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
     }
 
     pub fn get<K: Key>(&self, key: &K) -> Option<(&V, &u64)> {
-        Tree::get_recurse(self.root.as_ref()?, key)
+        Node::get_recurse(self.root.as_ref()?, key)
     }
 
-    fn get_recurse<'a, K: Key>(cur_node: &'a Node<P, V>, key: &K) -> Option<(&'a V, &'a u64)> {
-        let mut cur_node = cur_node;
-        let mut depth = 0;
-        loop {
-            let key_prefix = key.prefix_after(depth);
-            let prefix = cur_node.prefix();
-            let lcp = prefix.longest_common_prefix(key_prefix);
-            if lcp != prefix.length() {
-                return None;
-            }
-
-            if prefix.length() == key_prefix.len() {
-                return cur_node.get_value();
-            }
-
-            let k = key.at(depth + prefix.length());
-            depth += prefix.length();
-            cur_node = cur_node.find_child(k)?;
-        }
-    }
 
     pub fn ts(&self) -> u64 {
         match &self.root {
             None => 0,
             Some(root) => root.ts(),
         }
+    }
+
+    pub fn create_snapshot(&self) -> Result<SnapshotPointer<P, V>, TrieError> {
+        let mut snapshots = self.snapshots.lock().map_err(|_| TrieError::SnapshotMutexError)?;
+        if snapshots.len() >= self.max_active_snapshots {
+            return Err(TrieError::Other(
+                "max number of active snapshots reached".to_string(),
+            ));
+        }
+        let new_snapshot = self.new_snapshot(snapshots.len())?;
+        let index = new_snapshot.id.clone();
+        snapshots.push(Some(new_snapshot));
+
+
+        Ok(SnapshotPointer::new(self, index))
+    }
+
+
+    fn new_snapshot(&self, snapshot_id: usize) -> Result<Snapshot<P, V>, TrieError> {
+        if self.root.is_none() {
+            return Err(TrieError::Other(
+                "cannot create snapshot from empty tree".to_string(),
+            ));
+        }
+
+        let root = self.root.as_ref().unwrap();
+
+        let snapshot = Snapshot {
+            id: snapshot_id,
+            ts: root.ts() + 1,
+            root: root.clone(),
+            readers: HashMap::new(),
+            max_reader_id: 0,
+            closed: false,
+            mutex: RwLock::new(()),
+        };
+
+
+        Ok(snapshot)
+    }
+
+
+    pub(crate) fn close(&self, snapshot_id: usize) -> Result<(), TrieError> {
+        let mut snapshots = self.snapshots.lock().map_err(|_| TrieError::SnapshotMutexError)?;
+        let refer = snapshots.get_mut(snapshot_id).ok_or(TrieError::SnapshotNotFound)?;
+        *refer = None;
+        Ok(())
+    }
+
+    // Method to get the count of snapshots
+    pub fn snapshot_count(&self) -> Result<usize, TrieError> {
+        let snapshots = self.snapshots.lock().map_err(|_| TrieError::SnapshotMutexError)?;
+        Ok(snapshots.len())
     }
 }
 
@@ -749,184 +828,6 @@ mod tests {
             .expect("Failed to insert");
         assert!(result.is_some());
     }
-
-    //     // #[test]
-    //     // fn test_add_child() {
-    //     //     let leaf = LeafNode::new(b"hello", 1);
-    //     //     let leaf2 = LeafNode::new(b"hell", 1);
-    //     //     let leaf3 = LeafNode::new(b"hello world", 1);
-
-    //     //     let prefix_key = b"hello"[0];
-
-    //     //     let mut inner = InnerNode::new_node4();
-    //     //     inner.add_child(prefix_key, Node::Leaf(Box::new(leaf)));
-    //     //     inner.add_child(prefix_key, Node::Leaf(Box::new(leaf2)));
-    //     //     inner.add_child(prefix_key, Node::Leaf(Box::new(leaf3)));
-
-    //     //     assert_eq!(inner.meta.num_children, 3);
-    //     //     assert_eq!(inner.keys[0], prefix_key);
-    //     //     assert_eq!(inner.keys[1], prefix_key);
-    //     //     assert_eq!(inner.keys[2], prefix_key);
-    //     // }
-
-    //     // #[test]
-    //     // fn test_grow() {
-    //     //     let leaf = LeafNode::new(b"hello", 1);
-    //     //     let leaf2 = LeafNode::new(b"hell", 1);
-    //     //     let leaf3 = LeafNode::new(b"hello world", 1);
-    //     //     let leaf4 = LeafNode::new(b"hella", 1);
-    //     //     let leaf5 = LeafNode::new(b"hellb", 1);
-
-    //     //     let prefix_key = b"hello"[0];
-
-    //     //     let mut inner = InnerNode::new_node4();
-    //     //     inner.add_child(prefix_key, Node::Leaf(Box::new(leaf)));
-    //     //     inner.add_child(prefix_key, Node::Leaf(Box::new(leaf2)));
-    //     //     inner.add_child(prefix_key, Node::Leaf(Box::new(leaf3)));
-    //     //     inner.add_child(prefix_key, Node::Leaf(Box::new(leaf4)));
-    //     //     inner.add_child(prefix_key, Node::Leaf(Box::new(leaf5)));
-
-    //     //     assert_eq!(inner.node_type, NodeType::Node16);
-    //     //     assert_eq!(inner.meta.num_children, 5);
-    //     //     assert_eq!(inner.keys[0], prefix_key);
-    //     //     assert_eq!(inner.keys[1], prefix_key);
-    //     //     assert_eq!(inner.keys[2], prefix_key);
-    //     //     assert_eq!(inner.keys[3], prefix_key);
-    //     // }
-
-    //     // #[test]
-    //     // fn test_n4() {
-    //     //     let test_key: ArrayPrefix<16> = ArrayPrefix::key("abc".as_bytes());
-    //     //     let meta = Meta::new(test_key.clone(), 0);
-
-    //     //     let mut n4 = InnerNode::new_node4(meta);
-    //     //     let mut n4 = Node::Inner(Box::new(n4));
-
-    //     //     n4.add_child(5, Node::Leaf(Box::new(LeafNode::new(test_key.clone(), 1))));
-    //     //     n4.add_child(4, Node::Leaf(Box::new(LeafNode::new(test_key.clone(), 2))));
-    //     //     n4.add_child(3, Node::Leaf(Box::new(LeafNode::new(test_key.clone(), 3))));
-    //     //     n4.add_child(2, Node::Leaf(Box::new(LeafNode::new(test_key.clone(), 4))));
-
-    //     //     assert_eq!(*n4.find_child(5).unwrap().value().unwrap(), 1);
-    //     //     assert_eq!(*n4.find_child(4).unwrap().value().unwrap(), 2);
-    //     //     assert_eq!(*n4.find_child(3).unwrap().value().unwrap(), 3);
-    //     //     assert_eq!(*n4.find_child(2).unwrap().value().unwrap(), 4);
-
-    //     //     n4.delete_child(5);
-    //     //     assert!(n4.find_child(5).is_none());
-    //     //     assert_eq!(*n4.find_child(4).unwrap().value().unwrap(), 2);
-    //     //     assert_eq!(*n4.find_child(3).unwrap().value().unwrap(), 3);
-    //     //     assert_eq!(*n4.find_child(2).unwrap().value().unwrap(), 4);
-
-    //     //     n4.delete_child(2);
-    //     //     assert!(n4.find_child(5).is_none());
-    //     //     assert!(n4.find_child(2).is_none());
-
-    //     //     n4.add_child(2, Node::Leaf(Box::new(LeafNode::new(test_key, 4))));
-    //     //     n4.delete_child(3);
-    //     //     assert!(n4.find_child(5).is_none());
-    //     //     assert!(n4.find_child(3).is_none());
-    //     // }
-
-    //     // #[test]
-    //     // fn test_node16() {
-    //     //     let test_key: ArrayPrefix<16> = ArrayPrefix::key("abc".as_bytes());
-    //     //     let meta = Meta::new(test_key.clone(), 0);
-
-    //     //     let mut n16 = InnerNode::new_node16(meta);
-    //     //     let mut n16 = Node::Inner(Box::new(n16));
-
-    //     //     // Fill up the node with keys in reverse order.
-    //     //     for i in (0..16).rev() {
-    //     //         n16.add_child(i, Node::Leaf(Box::new(LeafNode::new(test_key.clone(), i))));
-    //     //     }
-
-    //     //     for i in 0..16 {
-    //     //         assert_eq!(*n16.find_child(i).unwrap().value().unwrap(), i);
-    //     //     }
-
-    //     //     // Delete from end doesn't affect position of others.
-    //     //     n16.delete_child(15);
-    //     //     n16.delete_child(14);
-    //     //     assert!(n16.find_child(15).is_none());
-    //     //     assert!(n16.find_child(14).is_none());
-    //     //     for i in 0..14 {
-    //     //         assert_eq!(*n16.find_child(i).unwrap().value().unwrap(), i);
-    //     //     }
-
-    //     //     n16.delete_child(0);
-    //     //     n16.delete_child(1);
-    //     //     assert!(n16.find_child(0).is_none());
-    //     //     assert!(n16.find_child(1).is_none());
-    //     //     for i in 2..14 {
-    //     //         assert_eq!(*n16.find_child(i).unwrap().value().unwrap(), i);
-    //     //     }
-
-    //     //     // Delete from the middle
-    //     //     n16.delete_child(5);
-    //     //     n16.delete_child(6);
-    //     //     assert!(n16.find_child(5).is_none());
-    //     //     assert!(n16.find_child(6).is_none());
-    //     //     for i in 2..5 {
-    //     //         assert_eq!(*n16.find_child(i).unwrap().value().unwrap(), i);
-    //     //     }
-    //     //     for i in 7..14 {
-    //     //         assert_eq!(*n16.find_child(i).unwrap().value().unwrap(), i);
-    //     //     }
-    //     // }
-
-    //     // #[test]
-    //     // fn test_node48() {
-    //     //     let test_key: ArrayPrefix<16> = ArrayPrefix::key("abc".as_bytes());
-    //     //     let meta = Meta::new(test_key.clone(), 0);
-
-    //     //     let mut n48 = InnerNode::new_node48(meta);
-    //     //     let mut n48 = Node::Inner(Box::new(n48));
-
-    //     //     // indexes in n48 have no sort order, so we don't look at that
-    //     //     for i in 0..48 {
-    //     //         n48.add_child(i, Node::Leaf(Box::new(LeafNode::new(test_key.clone(), i))));
-    //     //     }
-
-    //     //     for i in 0..48 {
-    //     //         assert_eq!(*n48.find_child(i).unwrap().value().unwrap(), i);
-    //     //     }
-
-    //     //     n48.delete_child(47);
-    //     //     n48.delete_child(46);
-    //     //     assert!(n48.find_child(47).is_none());
-    //     //     assert!(n48.find_child(46).is_none());
-    //     //     for i in 0..46 {
-    //     //         assert_eq!(*n48.find_child(i).unwrap().value().unwrap(), i);
-    //     //     }
-    //     // }
-
-    //     // #[test]
-    //     // fn test_node256() {
-    //     //     let test_key: ArrayPrefix<16> = ArrayPrefix::key("abc".as_bytes());
-    //     //     let meta = Meta::new(test_key.clone(), 0);
-
-    //     //     let mut n256 = InnerNode::new_node256(meta);
-    //     //     let mut n256 = Node::Inner(Box::new(n256));
-
-    //     //     for i in 0..=255 {
-    //     //         n256.add_child(i, Node::Leaf(Box::new(LeafNode::new(test_key.clone(), i))));
-    //     //     }
-    //     //     for i in 0..=255 {
-    //     //         assert_eq!(*n256.find_child(i).unwrap().value().unwrap(), i);
-    //     //     }
-
-    //     //     n256.delete_child(47);
-    //     //     n256.delete_child(46);
-    //     //     assert!(n256.find_child(47).is_none());
-    //     //     assert!(n256.find_child(46).is_none());
-    //     //     for i in 0..46 {
-    //     //         assert_eq!(*n256.find_child(i).unwrap().value().unwrap(), i);
-    //     //     }
-    //     //     for i in 48..=255 {
-    //     //         assert_eq!(*n256.find_child(i).unwrap().value().unwrap(), i);
-    //     //     }
-    //     // }
 
     //     // Inserting a single value into the tree and removing it should result in a nil tree root.
     //     #[test]
@@ -1143,7 +1044,7 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq)]
     struct KVT {
-        K: Vec<u8>, // Key
+        k: Vec<u8>, // Key
         ts: u64,    // Timestamp
     }
 
@@ -1153,40 +1054,40 @@ mod tests {
 
         let kvts = vec![
             KVT {
-                K: b"key1_0".to_vec(),
+                k: b"key1_0".to_vec(),
                 ts: 0,
             },
             KVT {
-                K: b"key2_0".to_vec(),
+                k: b"key2_0".to_vec(),
                 ts: 0,
             },
             KVT {
-                K: b"key3_0".to_vec(),
+                k: b"key3_0".to_vec(),
                 ts: 0,
             },
             KVT {
-                K: b"key4_0".to_vec(),
+                k: b"key4_0".to_vec(),
                 ts: 0,
             },
             KVT {
-                K: b"key5_0".to_vec(),
+                k: b"key5_0".to_vec(),
                 ts: 0,
             },
             KVT {
-                K: b"key6_0".to_vec(),
+                k: b"key6_0".to_vec(),
                 ts: 0,
             },
         ];
 
         for kvt in &kvts {
             assert!(tree
-                .insert(&VectorKey::from(kvt.K.to_vec()), 1, kvt.ts)
+                .insert(&VectorKey::from(kvt.k.to_vec()), 1, kvt.ts)
                 .is_ok());
         }
 
         let mut curr_ts = 1;
         for kvt in &kvts {
-            let (val, ts) = tree.get(&VectorKey::from(kvt.K.to_vec())).unwrap();
+            let (val, ts) = tree.get(&VectorKey::from(kvt.k.to_vec())).unwrap();
             assert_eq!(*val, 1);
 
             if kvt.ts == 0 {
@@ -1262,6 +1163,18 @@ mod tests {
     }
 
     #[test]
+    fn test_timed_insertion_update_equal_to_root_ts() {
+        let mut tree: Tree<ArrayPrefix<32>, i32> = Tree::<ArrayPrefix<32>, i32>::new();
+
+        let key1 = &VectorKey::from_str("key_1");
+        let key2 = &VectorKey::from_str("key_2");
+
+        assert!(tree.insert(key1, 1, 10).is_ok());
+        let initial_ts = tree.ts();
+        assert!(tree.insert(key2, 1, initial_ts).is_err());
+    }
+
+    #[test]
     fn test_timed_deletion_root_ts() {
         let mut tree: Tree<ArrayPrefix<32>, i32> = Tree::<ArrayPrefix<32>, i32>::new();
 
@@ -1273,4 +1186,21 @@ mod tests {
         assert!(tree.remove(&VectorKey::from_str("key_2")));
         assert_eq!(tree.ts(), 0);
     }
+
+    #[test]
+    fn test_snapshot_creation() {
+        let mut tree: Tree<ArrayPrefix<32>, i32> = Tree::<ArrayPrefix<32>, i32>::new();
+        assert!(tree.insert(&VectorKey::from_str("key_1"), 1, 0).is_ok());
+        assert!(tree.insert(&VectorKey::from_str("key_2"), 1, 0).is_ok());
+        assert!(tree.insert(&VectorKey::from_str("key_3"), 1, 0).is_ok());
+
+        let mut snap1 = tree.create_snapshot().unwrap();
+        assert!(snap1.insert(&VectorKey::from_str("key_1"), 1).is_ok());
+
+
+        assert_eq!(tree.snapshot_count().unwrap(), 1);
+        assert_eq!(tree.ts(), 3);
+        assert_eq!(snap1.ts().unwrap(), 4);
+    }
+
 }
