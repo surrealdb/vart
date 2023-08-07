@@ -195,6 +195,62 @@ impl Key for VectorKey {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct ArrayKey<const N: usize> {
+    data: [u8; N],
+    len: usize,
+}
+
+impl<const N: usize> Key for ArrayKey<N> {
+    fn at(&self, pos: usize) -> u8 {
+        self.data[pos]
+    }
+
+    fn length(&self) -> usize {
+        self.len
+    }
+
+    fn prefix_after(&self, pos: usize) -> &[u8] {
+        &self.data[pos..self.len]
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.data[..self.len]
+    }
+}
+
+impl<const N: usize> ArrayKey<N> {
+    pub fn from_slice(data: &[u8]) -> Self {
+        assert!(data.len() <= N, "data length is greater than array length");
+        let mut arr = [0; N];
+        arr[0..data.len()].copy_from_slice(data);
+        Self {
+            data: arr,
+            len: data.len(),
+        }
+    }
+}
+
+impl<const N: usize> From<u8> for ArrayKey<N> {
+    fn from(data: u8) -> Self {
+        Self::from_slice(data.to_be_bytes().as_ref())
+    }
+}
+
+
+impl<const N: usize> From<u16> for ArrayKey<N> {
+    fn from(data: u16) -> Self {
+        Self::from_slice(data.to_be_bytes().as_ref())
+    }
+}
+
+impl<const N: usize> From<u64> for ArrayKey<N> {
+    fn from(data: u64) -> Self {
+        Self::from_slice(data.to_be_bytes().as_ref())
+    }
+}
+
+
 /*
     Vec Array implementation
 */

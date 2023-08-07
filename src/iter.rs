@@ -42,10 +42,6 @@ pub struct Iter<'a, P: PrefixTrait + 'a, V: Clone> {
 
 struct IterInner<'a, P: PrefixTrait + 'a, V: Clone> {
     node_iter_stack: Vec<Box<dyn Iterator<Item = (u8, &'a Arc<Node<P, V>>)> + 'a>>,
-
-    // Pushed and popped with prefix portions as we descend the tree,
-    cur_key: Vec<u8>,
-    cur_prefix_length: usize,
 }
 
 impl<'a, P: PrefixTrait + 'a, V: Clone> IterInner<'a, P, V> {
@@ -55,8 +51,6 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> IterInner<'a, P, V> {
 
         Self {
             node_iter_stack,
-            cur_key: Vec::new(),
-            cur_prefix_length: 0,
         }
     }
 }
@@ -89,10 +83,6 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for IterInner<'a, P, V> {
     type Item = (Vec<u8>, &'a V, &'a u64);
 
     fn next(&mut self) -> Option<Self::Item> {
-        // Grab the last iterator from the stack, and see if there's more to iterate off of it.
-        // If not, pop it off, and continue the loop.
-        // If there is, loop through it looking for nodes; if the node is a leaf, return its value.
-        // If it's a node, grab its child iterator, and push it onto the stack and continue the loop.
         loop {
             let Some(last_iter) = self.node_iter_stack.last_mut() else {
                 return None;
@@ -100,14 +90,15 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for IterInner<'a, P, V> {
 
             let Some((_k, node)) = last_iter.next() else {
                 self.node_iter_stack.pop();
-                self.cur_key.truncate(self.cur_prefix_length);
                 continue;
             };
 
-            if let Some(v) = node.get_value() {
-                let mut key = self.cur_key.clone();
-                key.extend_from_slice(node.prefix().as_byte_slice());
-                return Some((key, v.0, v.1));
+            if node.is_leaf() {
+                if let Some(v) = node.get_value() {
+                    return Some((v.0.as_byte_slice().to_vec(), v.1, v.2));
+                }    
+            } else {
+                self.node_iter_stack.push(node.iter());
             }
         }
     }

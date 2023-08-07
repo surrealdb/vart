@@ -143,7 +143,7 @@ impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
         let _guard = self.mutex.read().unwrap();
 
         // Use a recursive function to get the value and timestamp from the root node
-        let (value, ts) = Node::get_recurse(self.root.as_ref(), key)?;
+        let (_, value, ts) = Node::get_recurse(self.root.as_ref(), key)?;
 
         // Return the value and timestamp wrapped in an Option
         Some((value.clone(), ts.clone()))

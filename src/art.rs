@@ -123,9 +123,9 @@ impl<P: PrefixTrait, V: Clone> Default for Tree<P, V> {
 
 impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     #[inline]
-    pub(crate) fn new_leaf(key: P, value: V, ts: u64) -> Node<P, V> {
+    pub(crate) fn new_leaf(prefix:P, key: P, value: V, ts: u64) -> Node<P, V> {
         Self {
-            node_type: NodeType::Leaf(LeafNode { key, value, ts }),
+            node_type: NodeType::Leaf(LeafNode { prefix, key, value, ts }),
         }
     }
 
@@ -187,7 +187,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node4(km) => self.num_children() >= km.size(),
             NodeType::Node16(km) => self.num_children() >= km.size(),
             NodeType::Node48(im) => self.num_children() >= im.size(),
-            NodeType::Node256(_) => self.num_children() >= 256,
+            NodeType::Node256(_) => self.num_children() > 256,
             NodeType::Leaf(_) => panic!("should not be reached"),
         }
     }
@@ -334,12 +334,12 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     }
 
     #[inline]
-    fn is_leaf(&self) -> bool {
+    pub(crate) fn is_leaf(&self) -> bool {
         matches!(&self.node_type, NodeType::Leaf(_))
     }
 
     #[inline]
-    fn is_inner(&self) -> bool {
+    pub(crate) fn is_inner(&self) -> bool {
         !self.is_leaf()
     }
 
@@ -350,7 +350,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node16(n) => &n.prefix,
             NodeType::Node48(n) => &n.prefix,
             NodeType::Node256(n) => &n.prefix,
-            NodeType::Leaf(n) => &n.key,
+            NodeType::Leaf(n) => &n.prefix,
         }
     }
 
@@ -361,7 +361,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node16(n) => n.prefix = prefix,
             NodeType::Node48(n) => n.prefix = prefix,
             NodeType::Node256(n) => n.prefix = prefix,
-            NodeType::Leaf(n) => n.key = prefix,
+            NodeType::Leaf(n) => n.prefix = prefix,
         }
     }
 
@@ -406,11 +406,12 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     }
 
     #[inline]
-    pub fn get_value(&self) -> Option<(&V, &u64)> {
+    pub fn get_value(&self) -> Option<(&P, &V, &u64)> {
         let NodeType::Leaf(leaf) = &self.node_type else {
             return None;
         };
-        Some((&leaf.value, &leaf.ts))
+        // TODO: should return copy of value or reference?
+        Some((&leaf.key, &leaf.value, &leaf.ts))
     }
 
     pub fn node_type_name(&self) -> String {
@@ -449,7 +450,11 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
         if let NodeType::Leaf(ref leaf) = &cur_node.node_type {
             if is_prefix_match && cur_node_prefix.length() == key_prefix.len() {
                 return Ok((
-                    Arc::new(Node::new_leaf(key.as_slice().into(), value, commit_ts)),
+                    Arc::new(Node::new_leaf(
+                        key.as_slice().into(), 
+                        key.as_slice().into(),
+                        value, 
+                        commit_ts)),
                     Some(leaf.value.clone()),
                 ));
             }
@@ -463,7 +468,8 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             let k1 = cur_node_prefix.at(longest_common_prefix);
             let k2 = key_prefix[longest_common_prefix];
             let new_leaf = Node::new_leaf(
-                key_prefix[longest_common_prefix..key_prefix.len()].into(),
+                key_prefix[longest_common_prefix..].into(),
+                key.as_slice().into(),
                 value,
                 commit_ts,
             );
@@ -487,7 +493,8 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
         };
 
         let new_leaf = Node::new_leaf(
-            key_prefix[longest_common_prefix..key_prefix.len()].into(),
+            key_prefix[longest_common_prefix..].into(),
+            key.as_slice().into(),
             value,
             commit_ts,
         );
@@ -530,7 +537,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
         (Some(cur_node.clone()), false)
     }
 
-    pub fn get_recurse<'a, K: Key>(cur_node: &'a Node<P, V>, key: &K) -> Option<(&'a V, &'a u64)> {
+    pub fn get_recurse<'a, K: Key>(cur_node: &'a Node<P, V>, key: &K) -> Option<(&'a P, &'a V, &'a u64)> {
         let mut cur_node = cur_node;
         let mut depth = 0;
         loop {
@@ -580,7 +587,11 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
                     commit_ts += 1;
                 }
                 (
-                    Arc::new(Node::new_leaf(key.as_slice().into(), value, commit_ts)),
+                    Arc::new(Node::new_leaf(
+                        key.as_slice().into(), 
+                        key.as_slice().into(),
+                        value, 
+                        commit_ts)),
                     None,
                 )
             }
@@ -631,7 +642,7 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         is_deleted
     }
 
-    pub fn get<K: Key>(&self, key: &K) -> Option<(&V, &u64)> {
+    pub fn get<K: Key>(&self, key: &K) -> Option<(&P, &V, &u64)> {
         Node::get_recurse(self.root.as_ref()?, key)
     }
 
@@ -747,7 +758,7 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
 mod tests {
     use super::Tree;
     use crate::ArrayPrefix;
-    use crate::VectorKey;
+    use crate::{VectorKey, ArrayKey};
     use std::fs::File;
     use std::io::{self, BufRead, BufReader};
 
@@ -768,7 +779,7 @@ mod tests {
             Ok(words) => {
                 for word in words {
                     let key = &VectorKey::from_str(&word);
-                    tree.insert(&key.clone(), 1, 0);
+                    tree.insert(key, 1, 0);
                 }
             }
             Err(err) => {
@@ -781,7 +792,7 @@ mod tests {
             Ok(words) => {
                 for word in words {
                     let key = VectorKey::from_str(&word);
-                    let (val, _ts) = tree.get(&key).unwrap();
+                    let (_, val, _ts) = tree.get(&key).unwrap();
                     assert_eq!(*val, 1);
                 }
             }
@@ -838,13 +849,13 @@ mod tests {
         tree.insert(&VectorKey::from_str("amyelencephalic"), 2, 0);
         tree.insert(&VectorKey::from_str("amyelencephalous"), 3, 0);
 
-        let (val, _ts) = tree.get(&VectorKey::from_str("amyelencephalia")).unwrap();
+        let (_, val, _ts) = tree.get(&VectorKey::from_str("amyelencephalia")).unwrap();
         assert_eq!(*val, 1);
 
-        let (val, _ts) = tree.get(&VectorKey::from_str("amyelencephalic")).unwrap();
+        let (_, val, _ts) = tree.get(&VectorKey::from_str("amyelencephalic")).unwrap();
         assert_eq!(*val, 2);
 
-        let (val, _ts) = tree.get(&VectorKey::from_str("amyelencephalous")).unwrap();
+        let (_, val, _ts) = tree.get(&VectorKey::from_str("amyelencephalous")).unwrap();
         assert_eq!(*val, 3);
     }
 
@@ -853,7 +864,7 @@ mod tests {
         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
         let key = VectorKey::from_str("abc");
         tree.insert(&key, 1, 0);
-        let (val, _ts) = tree.get(&key).unwrap();
+        let (_, val, _ts) = tree.get(&key).unwrap();
         assert_eq!(*val, 1);
     }
 
@@ -1128,7 +1139,7 @@ mod tests {
 
         let mut curr_ts = 1;
         for kvt in &kvts {
-            let (val, ts) = tree.get(&VectorKey::from(kvt.k.to_vec())).unwrap();
+            let (_,val, ts) = tree.get(&VectorKey::from(kvt.k.to_vec())).unwrap();
             assert_eq!(*val, 1);
 
             if kvt.ts == 0 {
@@ -1157,7 +1168,7 @@ mod tests {
         assert!(tree.insert(key1, 1, 0).is_ok());
 
         // get key1 should return ts 2 as the same key was inserted and updated
-        let (val, ts) = tree.get(key1).unwrap();
+        let (_,val, ts) = tree.get(key1).unwrap();
         assert_eq!(*val, 1);
         assert_eq!(*ts, 2);
 
@@ -1167,7 +1178,7 @@ mod tests {
 
         // update key1 with newer timestamp should pass
         assert!(tree.insert(key1, 1, 8).is_ok());
-        let (val, ts) = tree.get(key1).unwrap();
+        let (_,val, ts) = tree.get(key1).unwrap();
         assert_eq!(*val, 1);
         assert_eq!(*ts, 8);
 
@@ -1186,7 +1197,7 @@ mod tests {
 
         assert!(tree.insert(key1, 1, 2).is_err());
         assert_eq!(initial_ts, tree.ts());
-        let (val, ts) = tree.get(key1).unwrap();
+        let (_,val, ts) = tree.get(key1).unwrap();
         assert_eq!(*val, 1);
         assert_eq!(*ts, 10);
 
@@ -1195,7 +1206,7 @@ mod tests {
 
         assert!(tree.insert(key2, 1, 11).is_err());
         assert_eq!(initial_ts, tree.ts());
-        let (val, ts) = tree.get(key2).unwrap();
+        let (_,val, ts) = tree.get(key2).unwrap();
         assert_eq!(*val, 1);
         assert_eq!(*ts, 15);
 
@@ -1227,4 +1238,62 @@ mod tests {
         assert!(tree.remove(&VectorKey::from_str("key_2")));
         assert_eq!(tree.ts(), 0);
     }
+
+    fn from_be_bytes_key(k: &Vec<u8>) -> u64 {
+        let k = if k.len() < 8 {
+            let mut new_k = vec![0; 8];
+            new_k[8 - k.len()..].copy_from_slice(k);
+            new_k
+        } else {
+            k.clone()
+        };
+        let k = k.as_slice();
+
+        u64::from_be_bytes(k[0..8].try_into().unwrap())
+    }
+
+    #[test]
+    fn test_iter_seq_u16() {
+        let mut tree = Tree::<ArrayPrefix<16>, u16>::new();
+        for i in 0..=u16::MAX {
+            let key: ArrayKey<32> = i.into();
+            tree.insert(&key, i, 0);
+        }
+
+        let mut len = 0usize;
+        let mut expected = 0u16;
+
+        let tree_iter = tree.iter();
+        for (tree_entry) in tree_iter {
+            let k = from_be_bytes_key(&tree_entry.0);
+            assert_eq!(expected as u64, k);
+            expected = expected.wrapping_add(1);
+            len += 1;
+        }
+        assert_eq!(len, u16::MAX as usize + 1);
+    }
+
+
+
+    #[test]
+    fn test_iter_seq_u8() {
+        let mut tree = Tree::<ArrayPrefix<16>, u8>::new();
+        for i in 0..=u8::MAX {
+            let key: ArrayKey<32> = i.into();
+            tree.insert(&key, i, 0);
+        }
+
+        let mut len = 0usize;
+        let mut expected = 0u8;
+
+        let tree_iter = tree.iter();
+        for (tree_entry) in tree_iter {
+            let k = from_be_bytes_key(&tree_entry.0);
+            assert_eq!(expected as u64, k);
+            expected = expected.wrapping_add(1);
+            len += 1;
+        }
+        assert_eq!(len, u8::MAX as usize + 1);
+    }
+
 }
