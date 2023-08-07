@@ -2,6 +2,7 @@
 mod art;
 pub mod node;
 pub mod snapshot;
+pub mod iter;
 
 use std::fmt::Debug;
 
@@ -16,6 +17,7 @@ pub trait Prefix {
     fn prefix_before(&self, length: usize) -> Self;
     fn prefix_after(&self, start: usize) -> Self;
     fn longest_common_prefix(&self, slice: &[u8]) -> usize;
+    fn as_byte_slice(&self) -> &[u8];
 }
 
 /// The `Key` trait provides a specific abstraction for keys, which are sequences of bytes.
@@ -77,13 +79,14 @@ impl<const SIZE: usize> ArrayPrefix<SIZE> {
         }
     }
 
-    // Returns slice of the internal data up to the actual length
-    pub fn as_byte_slice(&self) -> &[u8] {
-        &self.content[..self.len]
-    }
 }
 
 impl<const SIZE: usize> Prefix for ArrayPrefix<SIZE> {
+    // Returns slice of the internal data up to the actual length
+    fn as_byte_slice(&self) -> &[u8] {
+        &self.content[..self.len]
+    }
+
     // Creates a new instance of ArrayPrefix consisting only of the initial part of the content
     fn prefix_before(&self, length: usize) -> Self {
         assert!(length <= self.len);

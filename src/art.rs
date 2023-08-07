@@ -1,14 +1,16 @@
 use core::panic;
 use std::cmp::min;
-use std::collections::HashMap;
+use std::collections::{HashMap, Bound};
 use std::error::Error;
 use std::fmt;
 use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
+use std::ops::RangeBounds;
 
 use crate::node::{FlatNode, LeafNode, Node256, Node48, NodeTrait, Timestamp};
 use crate::snapshot::{Snapshot, SnapshotPointer};
 use crate::{Key, Prefix, PrefixTrait};
+use crate::iter::{Iter, Range};
 
 // Minimum and maximum number of children for Node4
 const NODE4MIN: usize = 2;
@@ -80,7 +82,7 @@ impl<P: Prefix + Clone, V: Clone> Timestamp for Node<P, V> {
     }
 }
 
-enum NodeType<P: Prefix + Clone, V: Clone> {
+pub(crate) enum NodeType<P: Prefix + Clone, V: Clone> {
     // Leaf node of the adaptive radix trie
     Leaf(LeafNode<P, V>),
     // Inner node of the adaptive radix trie
@@ -342,7 +344,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     }
 
     #[inline]
-    fn prefix(&self) -> &P {
+    pub(crate) fn prefix(&self) -> &P {
         match &self.node_type {
             NodeType::Node4(n) => &n.prefix,
             NodeType::Node16(n) => &n.prefix,
@@ -699,6 +701,42 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
             .map_err(|_| TrieError::SnapshotMutexError)?;
         Ok(snapshots.len())
     }
+
+    pub fn iter(&self) -> Iter<P, V> {
+        Iter::new(self.root.as_ref())
+    }
+
+    pub fn range<'a, K: Key, R>(&'a self, range: R) -> Range<K, P, V>
+    where
+        R: RangeBounds<K> + 'a,
+    {
+        if self.root.is_none() {
+            return Range::empty();
+        }
+
+        let mut iter = self.iter();
+
+        let start_key = match range.start_bound() {
+            Bound::Included(start_key) | Bound::Excluded(start_key) => start_key,
+            Bound::Unbounded => {
+                let bound = range.end_bound().cloned();
+                return Range::for_iter(iter, bound);
+            }
+        };
+
+        while let Some((k, _, _)) = iter.next() {
+            if start_key.as_slice() == k.as_slice() {
+                if let Bound::Excluded(_) = range.start_bound() {
+                    iter.next();
+                }
+                let bound = range.end_bound().cloned();
+                return Range::for_iter(iter, bound);
+            }
+        }
+
+        Range::empty()
+    }
+
 }
 
 /*
@@ -743,7 +781,7 @@ mod tests {
             Ok(words) => {
                 for word in words {
                     let key = VectorKey::from_str(&word);
-                    let (val, ts) = tree.get(&key).unwrap();
+                    let (val, _ts) = tree.get(&key).unwrap();
                     assert_eq!(*val, 1);
                 }
             }
@@ -800,13 +838,13 @@ mod tests {
         tree.insert(&VectorKey::from_str("amyelencephalic"), 2, 0);
         tree.insert(&VectorKey::from_str("amyelencephalous"), 3, 0);
 
-        let (val, ts) = tree.get(&VectorKey::from_str("amyelencephalia")).unwrap();
+        let (val, _ts) = tree.get(&VectorKey::from_str("amyelencephalia")).unwrap();
         assert_eq!(*val, 1);
 
-        let (val, ts) = tree.get(&VectorKey::from_str("amyelencephalic")).unwrap();
+        let (val, _ts) = tree.get(&VectorKey::from_str("amyelencephalic")).unwrap();
         assert_eq!(*val, 2);
 
-        let (val, ts) = tree.get(&VectorKey::from_str("amyelencephalous")).unwrap();
+        let (val, _ts) = tree.get(&VectorKey::from_str("amyelencephalous")).unwrap();
         assert_eq!(*val, 3);
     }
 
@@ -815,7 +853,7 @@ mod tests {
         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
         let key = VectorKey::from_str("abc");
         tree.insert(&key, 1, 0);
-        let (val, ts) = tree.get(&key).unwrap();
+        let (val, _ts) = tree.get(&key).unwrap();
         assert_eq!(*val, 1);
     }
 
