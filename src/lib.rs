@@ -1,8 +1,8 @@
 // #[allow(warnings)]
 mod art;
+pub mod iter;
 pub mod node;
 pub mod snapshot;
-pub mod iter;
 
 use std::fmt::Debug;
 
@@ -78,7 +78,6 @@ impl<const SIZE: usize> ArrayPrefix<SIZE> {
             len: src.len(),
         }
     }
-
 }
 
 impl<const SIZE: usize> Prefix for ArrayPrefix<SIZE> {
@@ -237,7 +236,6 @@ impl<const N: usize> From<u8> for ArrayKey<N> {
     }
 }
 
-
 impl<const N: usize> From<u16> for ArrayKey<N> {
     fn from(data: u16) -> Self {
         Self::from_slice(data.to_be_bytes().as_ref())
@@ -249,7 +247,6 @@ impl<const N: usize> From<u64> for ArrayKey<N> {
         Self::from_slice(data.to_be_bytes().as_ref())
     }
 }
-
 
 /*
     Vec Array implementation

@@ -1,16 +1,16 @@
 use core::panic;
 use std::cmp::min;
-use std::collections::{HashMap, Bound};
+use std::collections::{Bound, HashMap};
 use std::error::Error;
 use std::fmt;
+use std::ops::RangeBounds;
 use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
-use std::ops::RangeBounds;
 
+use crate::iter::{Iter, Range};
 use crate::node::{FlatNode, LeafNode, Node256, Node48, NodeTrait, Timestamp};
 use crate::snapshot::{Snapshot, SnapshotPointer};
 use crate::{Key, Prefix, PrefixTrait};
-use crate::iter::{Iter, Range};
 
 // Minimum and maximum number of children for Node4
 const NODE4MIN: usize = 2;
@@ -123,9 +123,14 @@ impl<P: PrefixTrait, V: Clone> Default for Tree<P, V> {
 
 impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     #[inline]
-    pub(crate) fn new_leaf(prefix:P, key: P, value: V, ts: u64) -> Node<P, V> {
+    pub(crate) fn new_leaf(prefix: P, key: P, value: V, ts: u64) -> Node<P, V> {
         Self {
-            node_type: NodeType::Leaf(LeafNode { prefix, key, value, ts }),
+            node_type: NodeType::Leaf(LeafNode {
+                prefix,
+                key,
+                value,
+                ts,
+            }),
         }
     }
 
@@ -451,10 +456,11 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             if is_prefix_match && cur_node_prefix.length() == key_prefix.len() {
                 return Ok((
                     Arc::new(Node::new_leaf(
-                        key.as_slice().into(), 
                         key.as_slice().into(),
-                        value, 
-                        commit_ts)),
+                        key.as_slice().into(),
+                        value,
+                        commit_ts,
+                    )),
                     Some(leaf.value.clone()),
                 ));
             }
@@ -537,7 +543,10 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
         (Some(cur_node.clone()), false)
     }
 
-    pub fn get_recurse<'a, K: Key>(cur_node: &'a Node<P, V>, key: &K) -> Option<(&'a P, &'a V, &'a u64)> {
+    pub fn get_recurse<'a, K: Key>(
+        cur_node: &'a Node<P, V>,
+        key: &K,
+    ) -> Option<(&'a P, &'a V, &'a u64)> {
         let mut cur_node = cur_node;
         let mut depth = 0;
         loop {
@@ -588,10 +597,11 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
                 }
                 (
                     Arc::new(Node::new_leaf(
-                        key.as_slice().into(), 
                         key.as_slice().into(),
-                        value, 
-                        commit_ts)),
+                        key.as_slice().into(),
+                        value,
+                        commit_ts,
+                    )),
                     None,
                 )
             }
@@ -747,7 +757,6 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
 
         Range::empty()
     }
-
 }
 
 /*
@@ -757,8 +766,11 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
 #[cfg(test)]
 mod tests {
     use super::Tree;
-    use crate::ArrayPrefix;
-    use crate::{VectorKey, ArrayKey};
+    use crate::{ArrayKey, VectorKey};
+    use crate::{ArrayPrefix, Prefix};
+
+    use rand::{thread_rng, Rng};
+    use std::collections::{btree_map, BTreeMap};
     use std::fs::File;
     use std::io::{self, BufRead, BufReader};
 
@@ -1139,7 +1151,7 @@ mod tests {
 
         let mut curr_ts = 1;
         for kvt in &kvts {
-            let (_,val, ts) = tree.get(&VectorKey::from(kvt.k.to_vec())).unwrap();
+            let (_, val, ts) = tree.get(&VectorKey::from(kvt.k.to_vec())).unwrap();
             assert_eq!(*val, 1);
 
             if kvt.ts == 0 {
@@ -1168,7 +1180,7 @@ mod tests {
         assert!(tree.insert(key1, 1, 0).is_ok());
 
         // get key1 should return ts 2 as the same key was inserted and updated
-        let (_,val, ts) = tree.get(key1).unwrap();
+        let (_, val, ts) = tree.get(key1).unwrap();
         assert_eq!(*val, 1);
         assert_eq!(*ts, 2);
 
@@ -1178,7 +1190,7 @@ mod tests {
 
         // update key1 with newer timestamp should pass
         assert!(tree.insert(key1, 1, 8).is_ok());
-        let (_,val, ts) = tree.get(key1).unwrap();
+        let (_, val, ts) = tree.get(key1).unwrap();
         assert_eq!(*val, 1);
         assert_eq!(*ts, 8);
 
@@ -1197,7 +1209,7 @@ mod tests {
 
         assert!(tree.insert(key1, 1, 2).is_err());
         assert_eq!(initial_ts, tree.ts());
-        let (_,val, ts) = tree.get(key1).unwrap();
+        let (_, val, ts) = tree.get(key1).unwrap();
         assert_eq!(*val, 1);
         assert_eq!(*ts, 10);
 
@@ -1206,7 +1218,7 @@ mod tests {
 
         assert!(tree.insert(key2, 1, 11).is_err());
         assert_eq!(initial_ts, tree.ts());
-        let (_,val, ts) = tree.get(key2).unwrap();
+        let (_, val, ts) = tree.get(key2).unwrap();
         assert_eq!(*val, 1);
         assert_eq!(*ts, 15);
 
@@ -1273,8 +1285,6 @@ mod tests {
         assert_eq!(len, u16::MAX as usize + 1);
     }
 
-
-
     #[test]
     fn test_iter_seq_u8() {
         let mut tree = Tree::<ArrayPrefix<16>, u8>::new();
@@ -1296,4 +1306,31 @@ mod tests {
         assert_eq!(len, u8::MAX as usize + 1);
     }
 
+    #[test]
+    fn test_range() {
+        let mut tree = Tree::<ArrayPrefix<16>, u64>::new();
+        let count = 10000;
+        let mut rng = thread_rng();
+        let mut keys_inserted = BTreeMap::new();
+        for i in 0..count {
+            let _value = i;
+            let rnd_val = rng.gen_range(0..count);
+            let rnd_key: ArrayKey<16> = rnd_val.into();
+            if tree.get(&rnd_key).is_none() && tree.insert(&rnd_key, rnd_val, 0).unwrap().is_none()
+            {
+                let result = tree.get(&rnd_key);
+                assert!(result.is_some());
+                keys_inserted.insert(rnd_val, rnd_val);
+            }
+        }
+
+        let end_key: ArrayKey<16> = 100u64.into();
+        let art_range = tree.range(..end_key);
+        let btree_range = keys_inserted.range(..100);
+        for (art_entry, btree_entry) in art_range.zip(btree_range) {
+            let art_key = from_be_bytes_key(&art_entry.0);
+            assert_eq!(art_key, *btree_entry.0);
+            assert_eq!(art_entry.1, btree_entry.1);
+        }
+    }
 }

@@ -4,14 +4,14 @@ use std::sync::Arc;
 use crate::art::Node;
 use crate::{Key, PrefixTrait};
 
-pub struct NodeIter<'a, V> {
-    node: Box<dyn DoubleEndedIterator<Item = &'a V> + 'a>,
+pub struct NodeIter<'a, P: PrefixTrait, V: Clone> {
+    node: Box<dyn Iterator<Item = (u8, &'a Arc<Node<P, V>>)> + 'a>,
 }
 
-impl<'a, V> NodeIter<'a, V> {
+impl<'a, P: PrefixTrait, V: Clone> NodeIter<'a, P, V> {
     fn new<I>(iter: I) -> Self
     where
-        I: DoubleEndedIterator<Item = &'a V> + 'a,
+        I: Iterator<Item = (u8, &'a Arc<Node<P, V>>) > + 'a,
     {
         Self {
             node: Box::new(iter),
@@ -19,54 +19,37 @@ impl<'a, V> NodeIter<'a, V> {
     }
 }
 
-impl<'a, V> DoubleEndedIterator for NodeIter<'a, V> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.node.next_back()
-    }
-}
+// impl<'a, P: PrefixTrait, V: Clone> Iterator for NodeIter<'a, P, V> {
+//     fn next_back(&mut self) -> Option<Self::Item> {
+//         self.node.next_back()
+//     }
+// }
 
-impl<'a, V> Iterator for NodeIter<'a, V> {
-    type Item = &'a V;
+impl<'a, P: PrefixTrait, V: Clone> Iterator for NodeIter<'a, P, V> {
+    type Item = (u8, &'a Arc<Node<P, V>>);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.node.next()
     }
 }
 
-
-
 pub struct Iter<'a, P: PrefixTrait + 'a, V: Clone> {
     inner: Box<dyn Iterator<Item = (Vec<u8>, &'a V, &'a u64)> + 'a>,
     _marker: std::marker::PhantomData<P>,
 }
 
-struct IterInner<'a, P: PrefixTrait + 'a, V: Clone> {
-    node_iter_stack: Vec<Box<dyn Iterator<Item = (u8, &'a Arc<Node<P, V>>)> + 'a>>,
-}
-
-impl<'a, P: PrefixTrait + 'a, V: Clone> IterInner<'a, P, V> {
-    pub fn new(node: &'a Node<P, V>) -> Self {
-        let mut node_iter_stack = Vec::new();
-        node_iter_stack.push(node.iter());
-
-        Self {
-            node_iter_stack,
-        }
-    }
-}
-
 impl<'a, P: PrefixTrait + 'a, V: Clone> Iter<'a, P, V> {
     pub(crate) fn new(node: Option<&'a Arc<Node<P, V>>>) -> Self {
-        if node.is_none() {
-            return Self {
+        if let Some(node) = node {
+            Self {
+                inner: Box::new(IterState::new(node)),
+                _marker: Default::default(),
+            }
+        } else {
+            Self {
                 inner: Box::new(std::iter::empty()),
                 _marker: Default::default(),
-            };
-        }
-
-        Self {
-            inner: Box::new(IterInner::new(node.unwrap())),
-            _marker: Default::default(),
+            }
         }
     }
 }
@@ -79,26 +62,40 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
     }
 }
 
-impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for IterInner<'a, P, V> {
+struct IterState<'a, P: PrefixTrait + 'a, V: Clone> {
+    inner_node_iter: Vec<NodeIter<'a, P, V>>,
+}
+
+impl<'a, P: PrefixTrait + 'a, V: Clone> IterState<'a, P, V> {
+    pub fn new(node: &'a Node<P, V>) -> Self {
+        let mut inner_node_iter = Vec::new();
+        inner_node_iter.push(NodeIter::new(node.iter()));
+
+        Self { inner_node_iter }
+    }
+}
+
+impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
     type Item = (Vec<u8>, &'a V, &'a u64);
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            let Some(last_iter) = self.node_iter_stack.last_mut() else {
+            let Some(last_iter) = self.inner_node_iter.last_mut() else {
                 return None;
             };
 
-            let Some((_k, node)) = last_iter.next() else {
-                self.node_iter_stack.pop();
+            let Some((_, node)) = last_iter.next() else{
+                self.inner_node_iter.pop();
                 continue;
+
             };
 
             if node.is_leaf() {
                 if let Some(v) = node.get_value() {
                     return Some((v.0.as_byte_slice().to_vec(), v.1, v.2));
-                }    
+                }
             } else {
-                self.node_iter_stack.push(node.iter());
+                self.inner_node_iter.push(NodeIter::new(node.iter()));
             }
         }
     }
@@ -142,7 +139,9 @@ impl<'a, K: Key, P: PrefixTrait, V: Clone> RangeInner<'a, K, P, V> {
     }
 }
 
-impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeInnerTrait<'a, K, P, V> for RangeInner<'a, K, P, V> {
+impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeInnerTrait<'a, K, P, V>
+    for RangeInner<'a, K, P, V>
+{
     fn next(&mut self) -> InnerResult<'a, V> {
         let Some(next) = self.iter.next() else {
             return InnerResult::Iter(None)

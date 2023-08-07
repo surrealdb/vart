@@ -30,7 +30,12 @@ pub struct LeafNode<K: Prefix + Clone, V: Clone> {
 
 impl<K: Prefix + Clone, V: Clone> LeafNode<K, V> {
     pub fn new(prefix: K, key: K, value: V) -> Self {
-        Self { prefix, key, value, ts: 0 }
+        Self {
+            prefix,
+            key,
+            value,
+            ts: 0,
+        }
     }
 
     pub fn clone(&self) -> Self {
@@ -1007,13 +1012,17 @@ mod tests {
         let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
 
         // Prepare some child nodes
-        let mut leaf1 = LeafNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(),dummy_prefix.clone(), 1);
+        let mut leaf1 =
+            LeafNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone(), 1);
         leaf1.ts = 5;
-        let mut leaf2 = LeafNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(),dummy_prefix.clone(), 1);
+        let mut leaf2 =
+            LeafNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone(), 1);
         leaf2.ts = 10;
-        let mut leaf3 = LeafNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(),dummy_prefix.clone(), 1);
+        let mut leaf3 =
+            LeafNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone(), 1);
         leaf3.ts = 3;
-        let mut leaf4 = LeafNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(),dummy_prefix.clone(), 1);
+        let mut leaf4 =
+            LeafNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone(), 1);
         leaf4.ts = 7;
 
         let mut parent = FlatNode {
