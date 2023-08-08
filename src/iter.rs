@@ -11,7 +11,7 @@ pub struct NodeIter<'a, P: PrefixTrait, V: Clone> {
 impl<'a, P: PrefixTrait, V: Clone> NodeIter<'a, P, V> {
     fn new<I>(iter: I) -> Self
     where
-        I: Iterator<Item = (u8, &'a Arc<Node<P, V>>) > + 'a,
+        I: Iterator<Item = (u8, &'a Arc<Node<P, V>>)> + 'a,
     {
         Self {
             node: Box::new(iter),
@@ -100,7 +100,6 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
         }
     }
 }
-
 
 enum InnerResult<'a, V: Clone> {
     OneMore,

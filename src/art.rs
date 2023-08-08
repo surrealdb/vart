@@ -4,8 +4,9 @@ use std::collections::{Bound, HashMap};
 use std::error::Error;
 use std::fmt;
 use std::ops::RangeBounds;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::{Arc, Mutex};
 
 use crate::iter::{Iter, Range};
 use crate::node::{FlatNode, LeafNode, Node256, Node48, NodeTrait, Timestamp};
@@ -28,7 +29,7 @@ const NODE48MAX: usize = 48;
 const NODE256MIN: usize = NODE48MAX + 1;
 
 // Maximum number of active snapshots
-const DEFAULT_MAX_ACTIVE_SNAPSHOTS: usize = 100;
+const DEFAULT_MAX_ACTIVE_SNAPSHOTS: u64 = 100;
 
 // Define a custom error enum representing different error cases for the Trie
 #[derive(Debug)]
@@ -95,10 +96,9 @@ pub(crate) enum NodeType<P: Prefix + Clone, V: Clone> {
 // Adaptive radix trie
 pub struct Tree<P: PrefixTrait, V: Clone> {
     root: Option<Arc<Node<P, V>>>, // Root node of the tree
-    pub(crate) snapshots: Mutex<Vec<Option<Snapshot<P, V>>>>, // TODO: use a RWLock instead, and use a hashmap
-    // max_snapshot_id: usize,
-    max_active_snapshots: usize,
-    // mutex: RwLock<()>
+    pub(crate) snapshots: RwLock<HashMap<u64, Snapshot<P, V>>>, // TODO: use a RWLock instead, and use a hashmap
+    max_snapshot_id: AtomicU64,
+    max_active_snapshots: u64,
 }
 
 impl<P: PrefixTrait + Clone, V: Clone> NodeType<P, V> {
@@ -583,7 +583,8 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
     pub fn new() -> Self {
         Tree {
             root: None,
-            snapshots: Mutex::new(Vec::new()),
+            max_snapshot_id: AtomicU64::new(0),
+            snapshots: RwLock::new(HashMap::new()),
             max_active_snapshots: DEFAULT_MAX_ACTIVE_SNAPSHOTS,
         }
     }
@@ -664,23 +665,43 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
     }
 
     pub fn create_snapshot(&self) -> Result<SnapshotPointer<P, V>, TrieError> {
-        let mut snapshots = self
-            .snapshots
-            .lock()
-            .map_err(|_| TrieError::SnapshotMutexError)?;
-        if snapshots.len() >= self.max_active_snapshots {
+        let max_snapshot_id = self.max_snapshot_id.load(Ordering::SeqCst);
+
+        if max_snapshot_id >= self.max_active_snapshots {
             return Err(TrieError::Other(
-                "max number of active snapshots reached".to_string(),
+                "max number of snapshots reached".to_string(),
             ));
         }
-        let new_snapshot = self.new_snapshot(snapshots.len())?;
-        let index = new_snapshot.id;
-        snapshots.push(Some(new_snapshot));
 
-        Ok(SnapshotPointer::new(self, index))
+        let mut snapshots = self
+            .snapshots
+            .write()
+            .map_err(|_| TrieError::SnapshotMutexError)?;
+
+        // Increment the count atomically
+        let new_snapshot_id = self.max_snapshot_id.fetch_add(1, Ordering::SeqCst);
+        let new_snapshot = self.new_snapshot(new_snapshot_id)?;
+        snapshots.insert(new_snapshot_id, new_snapshot);
+
+        Ok(SnapshotPointer::new(self, new_snapshot_id))
     }
 
-    fn new_snapshot(&self, snapshot_id: usize) -> Result<Snapshot<P, V>, TrieError> {
+    pub(crate) fn get_snapshot(
+        &self,
+        snapshot_id: u64,
+    ) -> Result<SnapshotPointer<P, V>, TrieError> {
+        let snapshots = self
+            .snapshots
+            .read()
+            .map_err(|_| TrieError::SnapshotMutexError)?;
+
+        let _snapshot = snapshots
+            .get(&snapshot_id)
+            .ok_or(TrieError::SnapshotNotFound)?;
+        Ok(SnapshotPointer::new(self, snapshot_id))
+    }
+
+    fn new_snapshot(&self, snapshot_id: u64) -> Result<Snapshot<P, V>, TrieError> {
         if self.root.is_none() {
             return Err(TrieError::Other(
                 "cannot create snapshot from empty tree".to_string(),
@@ -702,15 +723,12 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         Ok(snapshot)
     }
 
-    pub(crate) fn close(&self, snapshot_id: usize) -> Result<(), TrieError> {
+    pub(crate) fn close(&self, snapshot_id: u64) -> Result<(), TrieError> {
         let mut snapshots = self
             .snapshots
-            .lock()
+            .write()
             .map_err(|_| TrieError::SnapshotMutexError)?;
-        let refer = snapshots
-            .get_mut(snapshot_id)
-            .ok_or(TrieError::SnapshotNotFound)?;
-        *refer = None;
+        snapshots.remove(&snapshot_id);
         Ok(())
     }
 
@@ -718,7 +736,7 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
     pub fn snapshot_count(&self) -> Result<usize, TrieError> {
         let snapshots = self
             .snapshots
-            .lock()
+            .read()
             .map_err(|_| TrieError::SnapshotMutexError)?;
         Ok(snapshots.len())
     }

@@ -14,13 +14,13 @@ pub trait Reader {
 
 /// Represents a pointer to a specific snapshot within the Trie structure.
 pub struct SnapshotPointer<'a, P: PrefixTrait, V: Clone> {
-    id: usize,
+    id: u64,
     tree: &'a Tree<P, V>,
 }
 
 impl<'a, P: PrefixTrait, V: Clone> SnapshotPointer<'a, P, V> {
     /// Creates a new SnapshotPointer instance pointing to a specific snapshot in the Tree.
-    pub fn new(tree: &'a Tree<P, V>, snapshot_id: usize) -> SnapshotPointer<'a, P, V> {
+    pub fn new(tree: &'a Tree<P, V>, snapshot_id: u64) -> SnapshotPointer<'a, P, V> {
         SnapshotPointer {
             id: snapshot_id,
             tree,
@@ -33,14 +33,11 @@ impl<'a, P: PrefixTrait, V: Clone> SnapshotPointer<'a, P, V> {
         let snapshots = self
             .tree
             .snapshots
-            .lock()
+            .read()
             .map_err(|_| TrieError::SnapshotMutexError)?;
 
         // Try to get the snapshot at the specified id, returning `SnapshotNotFound` if not found
-        let snapshot = snapshots.get(self.id).ok_or(TrieError::SnapshotNotFound)?;
-
-        // Try to get the immutable reference to the snapshot, returning `SnapshotNotFound` if not found
-        let snapshot = snapshot.as_ref().ok_or(TrieError::SnapshotNotFound)?;
+        let snapshot = snapshots.get(&self.id).ok_or(TrieError::SnapshotNotFound)?;
 
         // Return the timestamp of the snapshot
         Ok(snapshot.ts())
@@ -52,16 +49,13 @@ impl<'a, P: PrefixTrait, V: Clone> SnapshotPointer<'a, P, V> {
         let mut snapshots = self
             .tree
             .snapshots
-            .lock()
+            .write()
             .map_err(|_| TrieError::SnapshotMutexError)?;
 
         // Try to get the mutable reference to the snapshot, returning `SnapshotNotFound` if not found
         let snapshot = snapshots
-            .get_mut(self.id)
+            .get_mut(&self.id)
             .ok_or(TrieError::SnapshotNotFound)?;
-
-        // Try to get the mutable reference to the snapshot, returning `SnapshotNotFound` if not found
-        let snapshot = snapshot.as_mut().ok_or(TrieError::SnapshotNotFound)?;
 
         // Insert the key-value pair into the snapshot
         snapshot.insert(key, value)?;
@@ -74,14 +68,12 @@ impl<'a, P: PrefixTrait, V: Clone> SnapshotPointer<'a, P, V> {
         let snapshots = self
             .tree
             .snapshots
-            .lock()
+            .read()
             .map_err(|_| TrieError::SnapshotMutexError)?;
 
         // Try to get the snapshot at the specified id, returning `SnapshotNotFound` if not found
-        let snapshot = snapshots.get(self.id).ok_or(TrieError::SnapshotNotFound)?;
+        let snapshot = snapshots.get(&self.id).ok_or(TrieError::SnapshotNotFound)?;
 
-        // Try to get the immutable reference to the snapshot, returning `SnapshotNotFound` if not found
-        let snapshot = snapshot.as_ref().ok_or(TrieError::SnapshotNotFound)?;
         Ok(snapshot.get(key))
     }
 
@@ -95,7 +87,7 @@ impl<'a, P: PrefixTrait, V: Clone> SnapshotPointer<'a, P, V> {
 
 /// Represents a snapshot of the data within the Trie.
 pub struct Snapshot<P: PrefixTrait, V: Clone> {
-    pub(crate) id: usize,
+    pub(crate) id: u64,
     pub(crate) ts: u64,
     pub(crate) root: Arc<Node<P, V>>,
     pub(crate) readers: HashMap<u32, Box<dyn Reader>>,
@@ -106,7 +98,7 @@ pub struct Snapshot<P: PrefixTrait, V: Clone> {
 
 impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
     /// Creates a new Snapshot instance with the provided snapshot_id and root node.
-    pub fn new_snapshot(snapshot_id: usize, root: Arc<Node<P, V>>) -> Snapshot<P, V> {
+    pub fn new_snapshot(snapshot_id: u64, root: Arc<Node<P, V>>) -> Snapshot<P, V> {
         Snapshot {
             id: snapshot_id,
             ts: root.ts() + 1,
@@ -223,49 +215,57 @@ mod tests {
             );
         }
 
+        let snap1_id = &0u64;
+        let snap2_id = &1u64;
+
         // keys inserted after snapshot creation should not be visible to other snapshots
         assert!(tree.insert(&VectorKey::from_str("key_2"), 1, 0).is_ok());
-        let mut snapshots = tree.snapshots.lock().unwrap();
-
         {
-            let snap1 = snapshots.get(0).unwrap().as_ref().unwrap();
-            assert!(snap1.get(&VectorKey::from_str("key_2")).is_none());
+            let mut snapshots = tree.snapshots.write().unwrap();
 
-            let snap2 = snapshots.get(1).unwrap().as_ref().unwrap();
-            assert!(snap2.get(&VectorKey::from_str("key_2")).is_none());
+            {
+                let snap1 = snapshots.get(snap1_id).unwrap();
+                assert!(snap1.get(&VectorKey::from_str("key_2")).is_none());
+
+                let snap2 = snapshots.get(snap2_id).unwrap();
+                assert!(snap2.get(&VectorKey::from_str("key_2")).is_none());
+            }
+
+            // keys inserted after snapshot creation should be visible to the snapshot that inserted them
+            {
+                let snap1 = snapshots.get_mut(snap1_id).unwrap();
+                assert!(snap1.insert(&VectorKey::from_str("key_3_snap1"), 2).is_ok());
+                assert_eq!(
+                    snap1.get(&VectorKey::from_str("key_3_snap1")).unwrap(),
+                    (2, 2)
+                );
+
+                let snap2 = snapshots.get_mut(snap2_id).unwrap();
+                assert!(snap2.insert(&VectorKey::from_str("key_3_snap2"), 3).is_ok());
+                assert_eq!(
+                    snap2.get(&VectorKey::from_str("key_3_snap2")).unwrap(),
+                    (3, 2)
+                );
+            }
+
+            // keys inserted after snapshot creation should not be visible to other snapshots
+            {
+                let snap1 = snapshots.get(snap1_id).unwrap();
+                assert!(snap1.get(&VectorKey::from_str("key_3_snap2")).is_none());
+
+                let snap2 = snapshots.get(snap2_id).unwrap();
+                assert!(snap2.get(&VectorKey::from_str("key_3_snap1")).is_none());
+            }
         }
 
-        // keys inserted after snapshot creation should be visible to the snapshot that inserted them
         {
-            let snap1 = snapshots.get_mut(0).unwrap().as_mut().unwrap();
-            assert!(snap1.insert(&VectorKey::from_str("key_3_snap1"), 2).is_ok());
-            assert_eq!(
-                snap1.get(&VectorKey::from_str("key_3_snap1")).unwrap(),
-                (2, 2)
-            );
+            let mut snap1 = tree.get_snapshot(*snap1_id).unwrap();
+            assert!(snap1.close().is_ok());
 
-            let snap2 = snapshots.get_mut(1).unwrap().as_mut().unwrap();
-            assert!(snap2.insert(&VectorKey::from_str("key_3_snap2"), 3).is_ok());
-            assert_eq!(
-                snap2.get(&VectorKey::from_str("key_3_snap2")).unwrap(),
-                (3, 2)
-            );
+            let mut snap2 = tree.get_snapshot(*snap2_id).unwrap();
+            assert!(snap2.close().is_ok());
         }
 
-        // keys inserted after snapshot creation should not be visible to other snapshots
-        {
-            let snap1 = snapshots.get(0).unwrap().as_ref().unwrap();
-            assert!(snap1.get(&VectorKey::from_str("key_3_snap2")).is_none());
-
-            let snap2 = snapshots.get(1).unwrap().as_ref().unwrap();
-            assert!(snap2.get(&VectorKey::from_str("key_3_snap1")).is_none());
-        }
-
-        // solve this using hashmap
-        // assert!(snap1.close().is_ok());
-        // assert!(snap2.close().is_ok());
-        // assert_eq!(snap1.get(&VectorKey::from_str("key_1_snap1")).unwrap().unwrap(), (2, 2));
-
-        // assert_eq!(tree.snapshot_count().unwrap(), 0);
+        assert_eq!(tree.snapshot_count().unwrap(), 0);
     }
 }
