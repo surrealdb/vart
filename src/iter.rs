@@ -1,8 +1,36 @@
 use std::collections::Bound;
 use std::sync::Arc;
 
-use crate::art::Node;
+use crate::art::{Node, TrieError};
+use crate::snapshot::Snapshot;
 use crate::{Key, PrefixTrait};
+
+// TODO: need to add more tests for snapshot readers
+pub struct IterationPointer<'a, P: PrefixTrait, V: Clone> {
+    id: u64,
+    root: Arc<Node<P, V>>,
+    snap: &'a Snapshot<P, V>,
+}
+
+impl<'a, P: PrefixTrait, V: Clone> IterationPointer<'a, P, V> {
+    pub fn new(
+        snap: &'a Snapshot<P, V>,
+        root: Arc<Node<P, V>>,
+        id: u64,
+    ) -> IterationPointer<'a, P, V> {
+        IterationPointer { id, root, snap }
+    }
+
+    pub fn iter(&self) -> Iter<P, V> {
+        Iter::new(Some(&self.root))
+    }
+
+    pub fn close(&mut self) -> Result<(), TrieError> {
+        // Call the close method of the Tree with the id of the snapshot to close it
+        self.snap.close_reader(self.id)?;
+        Ok(())
+    }
+}
 
 pub struct NodeIter<'a, P: PrefixTrait, V: Clone> {
     node: Box<dyn Iterator<Item = (u8, &'a Arc<Node<P, V>>)> + 'a>,
@@ -101,56 +129,57 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
     }
 }
 
-enum InnerResult<'a, V: Clone> {
-    OneMore,
-    Iter(Option<(Vec<u8>, &'a V, &'a u64)>),
+enum RangeResult<'a, V: Clone> {
+    Continue,
+    Yield(Option<(Vec<u8>, &'a V, &'a u64)>),
 }
 
-struct RangeInner<'a, K: Key + 'a, P: PrefixTrait, V: Clone> {
+struct RangeIterator<'a, K: Key + 'a, P: PrefixTrait, V: Clone> {
     iter: Iter<'a, P, V>,
-    end: Bound<K>,
+    end_bound: Bound<K>,
     _marker: std::marker::PhantomData<P>,
 }
 
-struct RangeInnerNone {}
+struct EmptyRangeIterator;
 
-trait RangeInnerTrait<'a, K: Key + 'a, P: PrefixTrait, V: Clone> {
-    fn next(&mut self) -> InnerResult<'a, V>;
+trait RangeIteratorTrait<'a, K: Key + 'a, P: PrefixTrait, V: Clone> {
+    fn next(&mut self) -> RangeResult<'a, V>;
 }
 
 pub struct Range<'a, K: Key + 'a, P: PrefixTrait, V: Clone> {
-    inner: Box<dyn RangeInnerTrait<'a, K, P, V> + 'a>,
+    inner: Box<dyn RangeIteratorTrait<'a, K, P, V> + 'a>,
 }
 
-impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeInnerTrait<'a, K, P, V> for RangeInnerNone {
-    fn next(&mut self) -> InnerResult<'a, V> {
-        InnerResult::Iter(None)
+impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeIteratorTrait<'a, K, P, V> for EmptyRangeIterator {
+    fn next(&mut self) -> RangeResult<'a, V> {
+        RangeResult::Yield(None)
     }
 }
 
-impl<'a, K: Key, P: PrefixTrait, V: Clone> RangeInner<'a, K, P, V> {
-    pub fn new(iter: Iter<'a, P, V>, end: Bound<K>) -> Self {
+impl<'a, K: Key, P: PrefixTrait, V: Clone> RangeIterator<'a, K, P, V> {
+    pub fn new(iter: Iter<'a, P, V>, end_bound: Bound<K>) -> Self {
         Self {
             iter,
-            end,
+            end_bound,
             _marker: Default::default(),
         }
     }
 }
 
-impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeInnerTrait<'a, K, P, V>
-    for RangeInner<'a, K, P, V>
-{
-    fn next(&mut self) -> InnerResult<'a, V> {
-        let Some(next) = self.iter.next() else {
-            return InnerResult::Iter(None)
-        };
-        let next_key = next.0.as_slice();
-        match &self.end {
-            Bound::Included(k) if next_key == k.as_slice() => InnerResult::OneMore,
-            Bound::Excluded(k) if next_key == k.as_slice() => InnerResult::Iter(None),
-            Bound::Unbounded => InnerResult::Iter(Some(next)),
-            _ => InnerResult::Iter(Some(next)),
+impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeIteratorTrait<'a, K, P, V> for RangeIterator<'a, K, P, V> {
+    fn next(&mut self) -> RangeResult<'a, V> {
+        let next_item = self.iter.next();
+        match next_item {
+            Some((key, value, ts)) => {
+                let next_key_slice = key.as_slice();
+                match &self.end_bound {
+                    Bound::Included(k) if next_key_slice == k.as_slice() => RangeResult::Continue,
+                    Bound::Excluded(k) if next_key_slice == k.as_slice() => RangeResult::Yield(None),
+                    Bound::Unbounded => RangeResult::Yield(Some((key, value, ts))),
+                    _ => RangeResult::Yield(Some((key, value, ts))),
+                }
+            }
+            None => RangeResult::Yield(None),
         }
     }
 }
@@ -160,12 +189,12 @@ impl<'a, K: Key, P: PrefixTrait + 'a, V: Clone + 'a> Iterator for Range<'a, K, P
 
     fn next(&mut self) -> Option<(Vec<u8>, &'a V, &'a u64)> {
         match self.inner.next() {
-            InnerResult::OneMore => {
-                let r = self.next();
-                self.inner = Box::new(RangeInnerNone {});
-                r
+            RangeResult::Continue => {
+                let res = self.next();
+                self.inner = Box::new(EmptyRangeIterator);
+                res
             }
-            InnerResult::Iter(i) => i,
+            RangeResult::Yield(item) => item,
         }
     }
 }
@@ -173,13 +202,13 @@ impl<'a, K: Key, P: PrefixTrait + 'a, V: Clone + 'a> Iterator for Range<'a, K, P
 impl<'a, K: Key + 'a, P: PrefixTrait + 'a, V: Clone> Range<'a, K, P, V> {
     pub fn empty() -> Self {
         Self {
-            inner: Box::new(RangeInnerNone {}),
+            inner: Box::new(EmptyRangeIterator),
         }
     }
 
-    pub fn for_iter(iter: Iter<'a, P, V>, end: Bound<K>) -> Self {
+    pub fn for_iter(iter: Iter<'a, P, V>, end_bound: Bound<K>) -> Self {
         Self {
-            inner: Box::new(RangeInner::new(iter, end)),
+            inner: Box::new(RangeIterator::new(iter, end_bound)),
         }
     }
 }

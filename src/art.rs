@@ -713,11 +713,10 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         let snapshot = Snapshot {
             id: snapshot_id,
             ts: root.ts() + 1,
-            root: root.clone(),
-            readers: HashMap::new(),
-            max_reader_id: 0,
+            root: RwLock::new(root.clone()),
+            readers: RwLock::new(HashMap::new()),
+            max_active_readers: AtomicU64::new(0),
             closed: false,
-            mutex: RwLock::new(()),
         };
 
         Ok(snapshot)
@@ -784,11 +783,11 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
 #[cfg(test)]
 mod tests {
     use super::Tree;
+    use crate::ArrayPrefix;
     use crate::{ArrayKey, VectorKey};
-    use crate::{ArrayPrefix, Prefix};
 
     use rand::{thread_rng, Rng};
-    use std::collections::{btree_map, BTreeMap};
+    use std::collections::BTreeMap;
     use std::fs::File;
     use std::io::{self, BufRead, BufReader};
 
@@ -835,7 +834,7 @@ mod tests {
             Ok(words) => {
                 for word in words {
                     let key = VectorKey::from_str(&word);
-                    assert_eq!(tree.remove(&key), true);
+                    assert!(tree.remove(&key));
                 }
             }
             Err(err) => {
@@ -854,10 +853,10 @@ mod tests {
         tree.insert(&VectorKey::from_str("aal"), 1, 0);
         tree.insert(&VectorKey::from_str("aalii"), 1, 0);
 
-        assert_eq!(tree.remove(&VectorKey::from_str("a")), true);
-        assert_eq!(tree.remove(&VectorKey::from_str("aa")), true);
-        assert_eq!(tree.remove(&VectorKey::from_str("aal")), true);
-        assert_eq!(tree.remove(&VectorKey::from_str("aalii")), true);
+        assert!(tree.remove(&VectorKey::from_str("a")));
+        assert!(tree.remove(&VectorKey::from_str("aa")));
+        assert!(tree.remove(&VectorKey::from_str("aal")));
+        assert!(tree.remove(&VectorKey::from_str("aalii")));
 
         tree.insert(&VectorKey::from_str("abc"), 2, 0);
         tree.insert(&VectorKey::from_str("abcd"), 1, 0);
@@ -865,11 +864,11 @@ mod tests {
         tree.insert(&VectorKey::from_str("xyz"), 4, 0);
         tree.insert(&VectorKey::from_str("axyz"), 6, 0);
 
-        assert_eq!(tree.remove(&VectorKey::from_str("abc")), true);
-        assert_eq!(tree.remove(&VectorKey::from_str("abcde")), true);
-        assert_eq!(tree.remove(&VectorKey::from_str("abcd")), true);
-        assert_eq!(tree.remove(&VectorKey::from_str("xyz")), true);
-        assert_eq!(tree.remove(&VectorKey::from_str("axyz")), true);
+        assert!(tree.remove(&VectorKey::from_str("abc")));
+        assert!(tree.remove(&VectorKey::from_str("abcde")));
+        assert!(tree.remove(&VectorKey::from_str("abcd")));
+        assert!(tree.remove(&VectorKey::from_str("xyz")));
+        assert!(tree.remove(&VectorKey::from_str("axyz")));
     }
 
     #[test]
@@ -919,7 +918,7 @@ mod tests {
         let key = &VectorKey::from_str("test");
         tree.insert(key, 1, 0);
 
-        assert_eq!(tree.remove(key), true);
+        assert!(tree.remove(key));
         assert!(tree.get(key).is_none());
     }
 
@@ -934,7 +933,7 @@ mod tests {
         tree.insert(key1, 1, 0);
         tree.insert(key2, 1, 0);
 
-        assert_eq!(tree.remove(key1), true);
+        assert!(tree.remove(key1));
         assert!(tree.root.is_some());
         let root = tree.root.unwrap();
         assert_eq!(root.node_type_name(), "Node4");
@@ -972,9 +971,8 @@ mod tests {
             tree.insert(key, 1, 0);
         }
 
-        assert_eq!(
-            tree.remove(&VectorKey::from_slice(&1u32.to_be_bytes())),
-            true
+        assert!(
+            tree.remove(&VectorKey::from_slice(&1u32.to_be_bytes()))
         );
 
         assert!(tree.root.is_some());
@@ -1017,9 +1015,8 @@ mod tests {
             tree.insert(key, 1, 0);
         }
 
-        assert_eq!(
-            tree.remove(&VectorKey::from_slice(&2u32.to_be_bytes())),
-            true
+        assert!(
+            tree.remove(&VectorKey::from_slice(&2u32.to_be_bytes()))
         );
 
         assert!(tree.root.is_some());
@@ -1077,9 +1074,8 @@ mod tests {
             tree.insert(key, 1, 0);
         }
 
-        assert_eq!(
-            tree.remove(&VectorKey::from_slice(&2u32.to_be_bytes())),
-            true
+        assert!(
+            tree.remove(&VectorKey::from_slice(&2u32.to_be_bytes()))
         );
 
         assert!(tree.root.is_some());
@@ -1294,7 +1290,7 @@ mod tests {
         let mut expected = 0u16;
 
         let tree_iter = tree.iter();
-        for (tree_entry) in tree_iter {
+        for tree_entry in tree_iter {
             let k = from_be_bytes_key(&tree_entry.0);
             assert_eq!(expected as u64, k);
             expected = expected.wrapping_add(1);
@@ -1315,7 +1311,7 @@ mod tests {
         let mut expected = 0u8;
 
         let tree_iter = tree.iter();
-        for (tree_entry) in tree_iter {
+        for tree_entry in tree_iter {
             let k = from_be_bytes_key(&tree_entry.0);
             assert_eq!(expected as u64, k);
             expected = expected.wrapping_add(1);
@@ -1332,13 +1328,13 @@ mod tests {
         let mut keys_inserted = BTreeMap::new();
         for i in 0..count {
             let _value = i;
-            let rnd_val = rng.gen_range(0..count);
-            let rnd_key: ArrayKey<16> = rnd_val.into();
-            if tree.get(&rnd_key).is_none() && tree.insert(&rnd_key, rnd_val, 0).unwrap().is_none()
+            let random_val = rng.gen_range(0..count);
+            let random_key: ArrayKey<16> = random_val.into();
+            if tree.get(&random_key).is_none() && tree.insert(&random_key, random_val, 0).unwrap().is_none()
             {
-                let result = tree.get(&rnd_key);
+                let result = tree.get(&random_key);
                 assert!(result.is_some());
-                keys_inserted.insert(rnd_val, rnd_val);
+                keys_inserted.insert(random_val, random_val);
             }
         }
 

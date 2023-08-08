@@ -1,16 +1,11 @@
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 use crate::art::{Node, Tree, TrieError};
+use crate::iter::IterationPointer;
 use crate::node::Timestamp;
 use crate::{Key, PrefixTrait};
-
-/// Represents a Reader trait, which provides read access to data.
-pub trait Reader {
-    fn read(&self) -> Option<Vec<u8>>;
-    fn close(&mut self);
-}
 
 /// Represents a pointer to a specific snapshot within the Trie structure.
 pub struct SnapshotPointer<'a, P: PrefixTrait, V: Clone> {
@@ -89,11 +84,10 @@ impl<'a, P: PrefixTrait, V: Clone> SnapshotPointer<'a, P, V> {
 pub struct Snapshot<P: PrefixTrait, V: Clone> {
     pub(crate) id: u64,
     pub(crate) ts: u64,
-    pub(crate) root: Arc<Node<P, V>>,
-    pub(crate) readers: HashMap<u32, Box<dyn Reader>>,
-    pub(crate) max_reader_id: u32,
+    pub(crate) root: RwLock<Arc<Node<P, V>>>,
+    pub(crate) readers: RwLock<HashMap<u64, ()>>,
+    pub(crate) max_active_readers: AtomicU64,
     pub(crate) closed: bool,
-    pub(crate) mutex: RwLock<()>,
 }
 
 impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
@@ -102,21 +96,35 @@ impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
         Snapshot {
             id: snapshot_id,
             ts: root.ts() + 1,
-            root,
-            readers: HashMap::new(),
-            max_reader_id: 0,
+            root: RwLock::new(root),
+            readers: RwLock::new(HashMap::new()),
+            max_active_readers: AtomicU64::new(0),
             closed: false,
-            mutex: RwLock::new(()),
         }
+    }
+
+    pub fn new_reader(&self) -> Result<IterationPointer<P, V>, TrieError> {
+        let reader_id = self.max_active_readers.fetch_add(1, Ordering::SeqCst);
+        let mut readers = self.readers.write().map_err(|_| TrieError::MutexError)?;
+        readers.insert(reader_id, ());
+        let root = self.root.read().unwrap();
+        Ok(IterationPointer::new(self, root.clone(), reader_id))
+    }
+
+    pub fn close_reader(&self, reader_id: u64) -> Result<(), TrieError> {
+        let mut readers = self.readers.write().map_err(|_| TrieError::MutexError)?;
+        readers.remove(&reader_id);
+        self.max_active_readers.fetch_sub(1, Ordering::SeqCst);
+        Ok(())
     }
 
     /// Inserts a key-value pair into the snapshot.
     pub fn insert<K: Key>(&mut self, key: &K, value: V) -> Result<(), TrieError> {
         // Acquire a lock on the snapshot mutex to ensure exclusive access to the snapshot
-        let _guard = self.mutex.write().map_err(|_| TrieError::MutexError)?;
+        let mut root = self.root.write().map_err(|_| TrieError::MutexError)?;
 
         // Insert the key-value pair into the root node using a recursive function
-        let (new_node, _) = match Node::insert_recurse(&self.root, key, value, self.ts, 0) {
+        let (new_node, _) = match Node::insert_recurse(&root, key, value, self.ts, 0) {
             Ok((new_node, old_node)) => (new_node, old_node),
             Err(err) => {
                 return Err(err);
@@ -124,7 +132,7 @@ impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
         };
 
         // Update the root node with the new node after insertion
-        self.root = new_node;
+        *root = new_node;
 
         Ok(())
     }
@@ -132,10 +140,10 @@ impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
     /// Retrieves the value and timestamp associated with the given key from the snapshot.
     pub fn get<K: Key>(&self, key: &K) -> Option<(V, u64)> {
         // Acquire a read lock on the snapshot mutex to ensure shared access to the snapshot
-        let _guard = self.mutex.read().unwrap();
+        let root = self.root.read().unwrap();
 
         // Use a recursive function to get the value and timestamp from the root node
-        let (_, value, ts) = Node::get_recurse(self.root.as_ref(), key)?;
+        let (_, value, ts) = Node::get_recurse(root.as_ref(), key)?;
 
         // Return the value and timestamp wrapped in an Option
         Some((value.clone(), *ts))
@@ -144,22 +152,19 @@ impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
     /// Returns the timestamp of the snapshot.
     pub fn ts(&self) -> u64 {
         // Acquire a read lock on the snapshot mutex to ensure shared access to the snapshot
-        let _guard = self.mutex.read().unwrap();
-        self.root.ts()
+        let root = self.root.read().unwrap();
+        root.ts()
     }
 
     /// Closes the snapshot, preventing further modifications, and releases associated resources.
     pub fn close(&mut self) -> Result<(), TrieError> {
-        // Acquire a write lock on the snapshot mutex to ensure exclusive access to the snapshot
-        let _guard = self.mutex.write().map_err(|_| TrieError::MutexError)?;
-
         // Check if the snapshot is already closed
         if self.closed {
             return Err(TrieError::SnapshotAlreadyClosed);
         }
 
         // Check if there are any active readers for the snapshot
-        if !self.readers.is_empty() {
+        if self.max_active_readers.load(Ordering::SeqCst) > 0 {
             return Err(TrieError::SnapshotReadersNotClosed);
         }
 
@@ -172,6 +177,8 @@ impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::Ordering;
+
     use super::Tree;
     use crate::ArrayPrefix;
     use crate::VectorKey;
@@ -267,5 +274,29 @@ mod tests {
         }
 
         assert_eq!(tree.snapshot_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_snapshot_readers() {
+        let mut tree: Tree<ArrayPrefix<32>, i32> = Tree::<ArrayPrefix<32>, i32>::new();
+        assert!(tree.insert(&VectorKey::from_str("key_1"), 1, 0).is_ok());
+        assert!(tree.insert(&VectorKey::from_str("key_2"), 1, 0).is_ok());
+        assert!(tree.insert(&VectorKey::from_str("key_3"), 1, 0).is_ok());
+
+        let mut snap1 = tree.create_snapshot().unwrap();
+        assert!(snap1.insert(&VectorKey::from_str("key_4"), 1).is_ok());
+
+        let snapshots = tree.snapshots.read().unwrap();
+        let snap1 = snapshots.get(&snap1.id).unwrap();
+
+        let mut len = 0;
+        let mut reader = snap1.new_reader().unwrap();
+        for _ in reader.iter() {
+            len += 1;
+        }
+        assert_eq!(len, 4);
+        assert!(reader.close().is_ok());
+
+        assert_eq!(snap1.max_active_readers.load(Ordering::SeqCst), 0);
     }
 }

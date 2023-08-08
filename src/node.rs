@@ -649,15 +649,15 @@ mod tests {
         let mut v: VecArray<i32, 10> = VecArray::new();
         v.push(5);
         v.clear();
-        assert_eq!(v.is_empty(), true);
+        assert!(v.is_empty());
     }
 
     #[test]
     fn is_empty() {
         let mut v: VecArray<i32, 10> = VecArray::new();
-        assert_eq!(v.is_empty(), true);
+        assert!(v.is_empty());
         v.push(5);
-        assert_eq!(v.is_empty(), false);
+        assert!(!v.is_empty());
     }
 
     #[test]
@@ -758,7 +758,7 @@ mod tests {
             assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i.into()));
         }
 
-        let mut node = FlatNode::<ArrayPrefix<8>, usize, 4>::new(dummy_prefix.clone());
+        let mut node = FlatNode::<ArrayPrefix<8>, usize, 4>::new(dummy_prefix);
         node = node.add_child(1, 1);
         node = node.add_child(2, 2);
         node = node.add_child(3, 3);
@@ -804,7 +804,7 @@ mod tests {
         // resize from 48 to 16
         let mut node = Node48::<ArrayPrefix<8>, u8>::new(dummy_prefix.clone());
         for i in 0..18 {
-            node = node.add_child(i as u8, i);
+            node = node.add_child(i, i);
         }
         assert_eq!(node.num_children, 18);
         node = node.delete_child(0);
@@ -814,30 +814,30 @@ mod tests {
         let resized = node.shrink::<16>();
         assert_eq!(resized.num_children, 16);
         for i in 2..18 {
-            assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i.into()));
+            assert!(matches!(resized.find_child(i), Some(v) if *v == i.into()));
         }
 
         // resize from 48 to 4
         let mut node = Node48::<ArrayPrefix<8>, u8>::new(dummy_prefix.clone());
         for i in 0..4 {
-            node = node.add_child(i as u8, i);
+            node = node.add_child(i, i);
         }
         let resized = node.shrink::<4>();
         assert_eq!(resized.num_children, 4);
         for i in 0..4 {
-            assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i.into()));
+            assert!(matches!(resized.find_child(i), Some(v) if *v == i.into()));
         }
 
         // resize from 48 to 256
-        let mut node = Node48::<ArrayPrefix<8>, u8>::new(dummy_prefix.clone());
+        let mut node = Node48::<ArrayPrefix<8>, u8>::new(dummy_prefix);
         for i in 0..48 {
-            node = node.add_child(i as u8, i);
+            node = node.add_child(i, i);
         }
 
         let resized = node.grow();
         assert_eq!(resized.num_children, 48);
         for i in 0..48 {
-            assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i.into()));
+            assert!(matches!(resized.find_child(i), Some(v) if *v == i.into()));
         }
     }
 
@@ -859,7 +859,7 @@ mod tests {
         }
 
         // resize from 256 to 48
-        let mut node = Node256::new(dummy_prefix.clone());
+        let mut node = Node256::new(dummy_prefix);
         for i in 0..48 {
             node = node.add_child(i, i);
         }
@@ -867,7 +867,7 @@ mod tests {
         let resized = node.shrink();
         assert_eq!(resized.num_children, 48);
         for i in 0..48 {
-            assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i.into()));
+            assert!(matches!(resized.find_child(i), Some(v) if *v == i.into()));
         }
     }
 
@@ -915,7 +915,7 @@ mod tests {
         assert_eq!(parent.ts(), 10);
 
         // Update a child's timestamp to be the largest (20), parent's timestamp should update to 20
-        let mut child6 = FlatNode::<ArrayPrefix<8>, usize, WIDTH>::new(dummy_prefix.clone());
+        let mut child6 = FlatNode::<ArrayPrefix<8>, usize, WIDTH>::new(dummy_prefix);
         child6.ts = 20;
         parent.children[2] = Some(Arc::new(child6));
         parent.update_ts();
@@ -930,7 +930,7 @@ mod tests {
         let child = FlatNode::<ArrayPrefix<8>, usize, WIDTH>::new(dummy_prefix.clone());
         let mut parent: FlatNode<ArrayPrefix<8>, FlatNode<ArrayPrefix<8>, usize, 1>, 1> =
             FlatNode {
-                prefix: dummy_prefix.clone(),
+                prefix: dummy_prefix,
                 ts: 6,
                 keys: [0; WIDTH],
                 children: vec![Some(Arc::new(child))],
@@ -962,7 +962,7 @@ mod tests {
 
         let mut parent: Node48<ArrayPrefix<8>, FlatNode<ArrayPrefix<8>, usize, WIDTH>> =
             Node48::<ArrayPrefix<8>, FlatNode<ArrayPrefix<8>, usize, WIDTH>>::new(
-                dummy_prefix.clone(),
+                dummy_prefix,
             );
 
         // Add children to parent
@@ -991,7 +991,7 @@ mod tests {
 
         let mut parent: Node256<ArrayPrefix<8>, FlatNode<ArrayPrefix<8>, usize, WIDTH>> =
             Node256::<ArrayPrefix<8>, FlatNode<ArrayPrefix<8>, usize, WIDTH>>::new(
-                dummy_prefix.clone(),
+                dummy_prefix,
             );
 
         // Add children to parent
@@ -1026,7 +1026,7 @@ mod tests {
         leaf4.ts = 7;
 
         let mut parent = FlatNode {
-            prefix: dummy_prefix.clone(),
+            prefix: dummy_prefix,
             ts: 0,
             keys: [0; WIDTH],
             children: vec![
