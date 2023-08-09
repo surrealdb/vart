@@ -1,7 +1,8 @@
+//! This module defines the SnapshotPointer and Snapshot structs for managing snapshots within a Trie structure.
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
-
 use crate::art::{Node, Tree, TrieError};
 use crate::iter::IterationPointer;
 use crate::node::Timestamp;
@@ -15,7 +16,7 @@ pub struct SnapshotPointer<'a, P: PrefixTrait, V: Clone> {
 
 impl<'a, P: PrefixTrait, V: Clone> SnapshotPointer<'a, P, V> {
     /// Creates a new SnapshotPointer instance pointing to a specific snapshot in the Tree.
-    pub fn new(tree: &'a Tree<P, V>, snapshot_id: u64) -> SnapshotPointer<'a, P, V> {
+    pub fn new(tree: &'a Tree<P, V>, snapshot_id: u64) -> Self {
         SnapshotPointer {
             id: snapshot_id,
             tree,
@@ -24,75 +25,70 @@ impl<'a, P: PrefixTrait, V: Clone> SnapshotPointer<'a, P, V> {
 
     /// Returns the timestamp of the snapshot referred to by this SnapshotPointer.
     pub fn ts(&self) -> Result<u64, TrieError> {
-        // Acquire a lock on the snapshot vector to access the desired snapshot
-        let snapshots = self
-            .tree
-            .snapshots
+        self.tree.snapshots
             .read()
-            .map_err(|_| TrieError::SnapshotMutexError)?;
-
-        // Try to get the snapshot at the specified id, returning `SnapshotNotFound` if not found
-        let snapshot = snapshots.get(&self.id).ok_or(TrieError::SnapshotNotFound)?;
-
-        // Return the timestamp of the snapshot
-        Ok(snapshot.ts())
+            .map_err(|_| TrieError::SnapshotMutexError)
+            .and_then(|snapshots| {
+                snapshots.get(&self.id)
+                    .ok_or(TrieError::SnapshotNotFound)
+                    .map(|snapshot| snapshot.ts())
+            })
     }
 
     /// Inserts a key-value pair into the snapshot referred to by this SnapshotPointer.
     pub fn insert<K: Key>(&mut self, key: &K, value: V) -> Result<(), TrieError> {
-        // Acquire a lock on the snapshot vector to access the desired snapshot
-        let mut snapshots = self
-            .tree
-            .snapshots
+        self.tree.snapshots
             .write()
-            .map_err(|_| TrieError::SnapshotMutexError)?;
-
-        // Try to get the mutable reference to the snapshot, returning `SnapshotNotFound` if not found
-        let snapshot = snapshots
-            .get_mut(&self.id)
-            .ok_or(TrieError::SnapshotNotFound)?;
-
-        // Insert the key-value pair into the snapshot
-        snapshot.insert(key, value)?;
-
-        Ok(())
+            .map_err(|_| TrieError::SnapshotMutexError)
+            .and_then(|mut snapshots| {
+                snapshots.get_mut(&self.id)
+                    .ok_or(TrieError::SnapshotNotFound)
+                    .and_then(|snapshot| snapshot.insert(key, value))
+            })
     }
 
+    /// Retrieves the value associated with the given key from the snapshot referred to by this SnapshotPointer.
     pub fn get<K: Key>(&self, key: &K, ts: u64) -> Result<Option<(V, u64)>, TrieError> {
-        // Acquire a lock on the snapshot vector to access the desired snapshot
-        let snapshots = self
-            .tree
-            .snapshots
+        self.tree.snapshots
             .read()
-            .map_err(|_| TrieError::SnapshotMutexError)?;
-
-        // Try to get the snapshot at the specified id, returning `SnapshotNotFound` if not found
-        let snapshot = snapshots.get(&self.id).ok_or(TrieError::SnapshotNotFound)?;
-
-        Ok(snapshot.get(key, ts))
+            .map_err(|_| TrieError::SnapshotMutexError)
+            .and_then(|snapshots| {
+                snapshots.get(&self.id)
+                    .ok_or(TrieError::SnapshotNotFound)
+                    .map(|snapshot| snapshot.get(key, ts))
+            })
     }
 
     /// Closes the snapshot referred to by this SnapshotPointer, releasing resources associated with it.
     pub fn close(&mut self) -> Result<(), TrieError> {
-        // Call the close method of the Tree with the id of the snapshot to close it
-        self.tree.close(self.id)?;
-        Ok(())
+        self.tree.close(self.id)
     }
 }
 
 /// Represents a snapshot of the data within the Trie.
 pub struct Snapshot<P: PrefixTrait, V: Clone> {
-    pub(crate) id: u64,
-    pub(crate) ts: u64,
-    pub(crate) root: RwLock<Arc<Node<P, V>>>,
-    pub(crate) readers: RwLock<HashMap<u64, ()>>,
-    pub(crate) max_active_readers: AtomicU64,
-    pub(crate) closed: bool,
+    id: u64,
+    ts: u64,
+    root: RwLock<Arc<Node<P, V>>>,
+    readers: RwLock<HashMap<u64, ()>>,
+    max_active_readers: AtomicU64,
+    closed: bool,
 }
 
 impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
+    pub(crate) fn new(id: u64, root: Arc<Node<P, V>>, ts: u64) -> Self {
+        Snapshot {
+            id,
+            ts: ts,
+            root: RwLock::new(root),
+            readers: RwLock::new(HashMap::new()),
+            max_active_readers: AtomicU64::new(0),
+            closed: false,
+        }
+    }
+
     /// Creates a new Snapshot instance with the provided snapshot_id and root node.
-    pub fn new_snapshot(snapshot_id: u64, root: Arc<Node<P, V>>) -> Snapshot<P, V> {
+    pub fn new_snapshot(snapshot_id: u64, root: Arc<Node<P, V>>) -> Self {
         Snapshot {
             id: snapshot_id,
             ts: root.ts() + 1,
@@ -103,6 +99,11 @@ impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
         }
     }
 
+    /// Creates a new reader for the snapshot, allowing for concurrent read access.
+    ///
+    /// # Returns
+    ///
+    /// A new IterationPointer instance that can be used for reading the snapshot.
     pub fn new_reader(&self) -> Result<IterationPointer<P, V>, TrieError> {
         let reader_id = self.max_active_readers.fetch_add(1, Ordering::SeqCst);
         let mut readers = self.readers.write().map_err(|_| TrieError::MutexError)?;
@@ -111,6 +112,7 @@ impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
         Ok(IterationPointer::new(self, root.clone(), reader_id))
     }
 
+    /// Closes the reader with the given reader_id.
     pub fn close_reader(&self, reader_id: u64) -> Result<(), TrieError> {
         let mut readers = self.readers.write().map_err(|_| TrieError::MutexError)?;
         readers.remove(&reader_id);
@@ -120,57 +122,34 @@ impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
 
     /// Inserts a key-value pair into the snapshot.
     pub fn insert<K: Key>(&mut self, key: &K, value: V) -> Result<(), TrieError> {
-        // Acquire a lock on the snapshot mutex to ensure exclusive access to the snapshot
         let mut root = self.root.write().map_err(|_| TrieError::MutexError)?;
-
-        // Insert the key-value pair into the root node using a recursive function
-        let (new_node, _) = match Node::insert_recurse(&root, key, value, self.ts, 0) {
-            Ok((new_node, old_node)) => (new_node, old_node),
-            Err(err) => {
-                return Err(err);
-            }
-        };
-
-        // Update the root node with the new node after insertion
+        let (new_node, _) = Node::insert_recurse(&root, key, value, self.ts, 0)?;
         *root = new_node;
-
         Ok(())
     }
 
     /// Retrieves the value and timestamp associated with the given key from the snapshot.
     pub fn get<K: Key>(&self, key: &K, ts: u64) -> Option<(V, u64)> {
-        // Acquire a read lock on the snapshot mutex to ensure shared access to the snapshot
         let root = self.root.read().unwrap();
-
-        // Use a recursive function to get the value and timestamp from the root node
-        let (_, value, ts) = Node::get_recurse(root.as_ref(), key, ts)?;
-
-        // Return the value and timestamp wrapped in an Option
-        Some((value, ts))
+        Node::get_recurse(root.as_ref(), key, ts).map(|(_, value, ts)| (value, ts))
     }
 
     /// Returns the timestamp of the snapshot.
     pub fn ts(&self) -> u64 {
-        // Acquire a read lock on the snapshot mutex to ensure shared access to the snapshot
-        let root = self.root.read().unwrap();
-        root.ts()
+        self.root.read().unwrap().ts()
     }
 
     /// Closes the snapshot, preventing further modifications, and releases associated resources.
     pub fn close(&mut self) -> Result<(), TrieError> {
-        // Check if the snapshot is already closed
         if self.closed {
             return Err(TrieError::SnapshotAlreadyClosed);
         }
 
-        // Check if there are any active readers for the snapshot
         if self.max_active_readers.load(Ordering::SeqCst) > 0 {
             return Err(TrieError::SnapshotReadersNotClosed);
         }
 
-        // Mark the snapshot as closed
         self.closed = true;
-
         Ok(())
     }
 }

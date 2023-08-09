@@ -2,9 +2,20 @@ use std::collections::{Bound, VecDeque};
 use std::sync::Arc;
 
 use crate::art::{Node, NodeType, TrieError};
-use crate::node::LeafValue;
 use crate::snapshot::Snapshot;
-use crate::{Key, PrefixTrait};
+use crate::{Key, Prefix, PrefixTrait};
+
+pub struct Leaf<'a, K: Prefix + Clone, V: Clone> {
+    pub(crate) key: &'a K,
+    pub(crate) value: &'a V,
+    pub(crate) ts: &'a u64,
+}
+
+impl<'a, K: Prefix + Clone, V: Clone> Leaf<'a, K, V> {
+    pub fn new(key: &'a K, value: &'a V, ts: &'a u64) -> Self {
+        Self { key, value, ts }
+    }
+}
 
 // TODO: need to add more tests for snapshot readers
 pub struct IterationPointer<'a, P: PrefixTrait, V: Clone> {
@@ -87,7 +98,7 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
 
 struct IterState<'a, P: PrefixTrait + 'a, V: Clone> {
     node_iter: Vec<NodeIter<'a, P, V>>,
-    leafs: VecDeque<&'a Arc<LeafValue<P, V>>>,
+    leafs: VecDeque<Leaf<'a, P, V>>,
 }
 
 impl<'a, P: PrefixTrait + 'a, V: Clone> IterState<'a, P, V> {
@@ -121,7 +132,8 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
                             };
 
                             for v in twig.iter() {
-                                self.leafs.push_back(v);
+                                let new_leaf = Leaf::new(&twig.key, &v.value, &v.ts);
+                                self.leafs.push_back(new_leaf);
                             }
                             break 'outer;
                         } else {
@@ -135,7 +147,7 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
 
         self.leafs
             .pop_front()
-            .map(|leaf| (leaf.key.as_byte_slice().to_vec(), &leaf.value, &leaf.ts))
+            .map(|leaf| (leaf.key.as_byte_slice().to_vec(), leaf.value, leaf.ts))
     }
 }
 

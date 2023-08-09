@@ -37,6 +37,7 @@ pub enum TrieError {
     IllegalArguments,
     NotFound,
     MutexError,
+    KeyNotFound,
     SnapshotNotFound,
     SnapshotMutexError,
     SnapshotAlreadyClosed,
@@ -53,6 +54,7 @@ impl fmt::Display for TrieError {
             TrieError::IllegalArguments => write!(f, "Illegal arguments"),
             TrieError::NotFound => write!(f, "Not found"),
             TrieError::MutexError => write!(f, "Failed to lock mutex"),
+            TrieError::KeyNotFound => write!(f, "Key not found"),
             TrieError::SnapshotNotFound => write!(f, "Snapshot not found"),
             TrieError::SnapshotMutexError => write!(f, "Failed to lock snapshot mutex"),
             TrieError::SnapshotAlreadyClosed => write!(f, "Snapshot already closed"),
@@ -95,10 +97,10 @@ pub(crate) enum NodeType<P: Prefix + Clone, V: Clone> {
 
 // Adaptive radix trie
 pub struct Tree<P: PrefixTrait, V: Clone> {
-    root: Option<Arc<Node<P, V>>>, // Root node of the tree
+    pub(crate) root: Option<Arc<Node<P, V>>>, // Root node of the tree
     pub(crate) snapshots: RwLock<HashMap<u64, Snapshot<P, V>>>, // TODO: use a RWLock instead, and use a hashmap
-    max_snapshot_id: AtomicU64,
-    max_active_snapshots: u64,
+    pub(crate) max_snapshot_id: AtomicU64,
+    pub(crate) max_active_snapshots: u64,
 }
 
 impl<P: PrefixTrait + Clone, V: Clone> NodeType<P, V> {
@@ -124,8 +126,8 @@ impl<P: PrefixTrait, V: Clone> Default for Tree<P, V> {
 impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     #[inline]
     pub(crate) fn new_twig(prefix: P, key: P, value: V, ts: u64) -> Node<P, V> {
-        let mut twig = TwigNode::new(prefix);
-        twig.insert_mut(&key, value, ts);
+        let mut twig = TwigNode::new(prefix, key);
+        twig.insert_mut(value, ts);
         Self {
             node_type: NodeType::Twig(twig),
         }
@@ -368,15 +370,15 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
 
     // TODO: fix having separate key and prefix traits to avoid copying
     #[inline]
-    pub fn get_value_by_ts(&self, key: P, ts: u64) -> Option<(P, V, u64)> {
+    pub fn get_value_by_ts(&self, ts: u64) -> Option<(P, V, u64)> {
         let NodeType::Twig(twig) = &self.node_type else {
             return None;
         };
-        let Some(val) = twig.get_leaf_by_ts(&key, ts) else{
+        let Some(val) = twig.get_leaf_by_ts(ts) else{
             return None;
         };
         // TODO: should return copy of value or reference?
-        Some((val.key.clone(), val.value.clone(), val.ts))
+        Some((twig.key.clone(), val.value.clone(), val.ts))
     }
 
     pub fn node_type_name(&self) -> String {
@@ -414,19 +416,8 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
 
         if let NodeType::Twig(ref twig) = &cur_node.node_type {
             if is_prefix_match && cur_node_prefix.length() == key_prefix.len() {
-                // TODO: need to insert new value to the twig
-                let pkey: P = key.as_slice().into();
-                let old_val = twig.get_leaf_by_ts(&pkey, commit_ts).unwrap();
-                let new_twig = twig.insert(&pkey, value, commit_ts);
-                // return Ok((
-                //     Arc::new(Node::new_twig(
-                //         key.as_slice().into(),
-                //         key.as_slice().into(),
-                //         value,
-                //         commit_ts,
-                //     )),
-                //     Some(twig.value.clone()),
-                // ));
+                let old_val = twig.get_leaf_by_ts(commit_ts).unwrap();
+                let new_twig = twig.insert(value, commit_ts);
                 return Ok((
                     Arc::new(Node {
                         node_type: NodeType::Twig(new_twig),
@@ -525,7 +516,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             }
 
             if prefix.length() == key_prefix.len() {
-                let Some(val) = cur_node.get_value_by_ts(key.as_slice().into(), ts) else {
+                let Some(val) = cur_node.get_value_by_ts(ts) else {
                     return None;
                 };
                 return Some((val.0, val.1, val.2));
@@ -660,10 +651,7 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         Ok(SnapshotPointer::new(self, new_snapshot_id))
     }
 
-    pub(crate) fn get_snapshot(
-        &self,
-        snapshot_id: u64,
-    ) -> Result<SnapshotPointer<P, V>, TrieError> {
+    pub(crate) fn get_snapshot(&self,snapshot_id: u64) -> Result<SnapshotPointer<P, V>, TrieError> {
         let snapshots = self
             .snapshots
             .read()
@@ -683,15 +671,7 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         }
 
         let root = self.root.as_ref().unwrap();
-
-        let snapshot = Snapshot {
-            id: snapshot_id,
-            ts: root.ts() + 1,
-            root: RwLock::new(root.clone()),
-            readers: RwLock::new(HashMap::new()),
-            max_active_readers: AtomicU64::new(0),
-            closed: false,
-        };
+        let snapshot = Snapshot::new(snapshot_id, root.clone(), root.ts()+1);
 
         Ok(snapshot)
     }
@@ -1326,12 +1306,24 @@ mod tests {
     #[test]
     fn test_same_key_with_versions() {
         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
-        let key = VectorKey::from_str("abc");
-        tree.insert(&key, 1, 0);
-        tree.insert(&key, 2, 0);
-        let (_, val, _ts) = tree.get(&key, 1).unwrap();
+        let key1 = VectorKey::from_str("abc");
+        let key2 = VectorKey::from_str("efg");
+        tree.insert(&key1, 1, 0);
+        tree.insert(&key1, 2, 10);
+        tree.insert(&key2, 3, 11);
+        let (_, val, _ts) = tree.get(&key1, 1).unwrap();
         assert_eq!(val, 1);
-        let (_, val, _ts) = tree.get(&key, 2).unwrap();
+        let (_, val, _ts) = tree.get(&key1, 10).unwrap();
         assert_eq!(val, 2);
+        let (_, val, _ts) = tree.get(&key2, 11).unwrap();
+        assert_eq!(val, 3);
+
+        let mut len = 0;
+        let tree_iter = tree.iter();
+        for _ in tree_iter {
+            len += 1;
+        }
+
+        assert_eq!(len, 3);
     }
 }
