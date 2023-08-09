@@ -6,7 +6,6 @@ use std::fmt;
 use std::ops::RangeBounds;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::RwLock;
 
 use crate::iter::{Iter, Range};
 use crate::node::{FlatNode, Node256, Node48, NodeTrait, Timestamp, TwigNode};
@@ -36,10 +35,8 @@ const DEFAULT_MAX_ACTIVE_SNAPSHOTS: u64 = 100;
 pub enum TrieError {
     IllegalArguments,
     NotFound,
-    MutexError,
     KeyNotFound,
     SnapshotNotFound,
-    SnapshotMutexError,
     SnapshotAlreadyClosed,
     SnapshotReadersNotClosed,
     Other(String),
@@ -53,10 +50,8 @@ impl fmt::Display for TrieError {
         match *self {
             TrieError::IllegalArguments => write!(f, "Illegal arguments"),
             TrieError::NotFound => write!(f, "Not found"),
-            TrieError::MutexError => write!(f, "Failed to lock mutex"),
             TrieError::KeyNotFound => write!(f, "Key not found"),
             TrieError::SnapshotNotFound => write!(f, "Snapshot not found"),
-            TrieError::SnapshotMutexError => write!(f, "Failed to lock snapshot mutex"),
             TrieError::SnapshotAlreadyClosed => write!(f, "Snapshot already closed"),
             TrieError::SnapshotReadersNotClosed => {
                 write!(f, "Readers in the snapshot are not closed")
@@ -98,7 +93,7 @@ pub(crate) enum NodeType<P: Prefix + Clone, V: Clone> {
 // Adaptive radix trie
 pub struct Tree<P: PrefixTrait, V: Clone> {
     pub(crate) root: Option<Arc<Node<P, V>>>, // Root node of the tree
-    pub(crate) snapshots: RwLock<HashMap<u64, Snapshot<P, V>>>, // TODO: use a RWLock instead, and use a hashmap
+    pub(crate) snapshots: HashMap<u64, Snapshot<P, V>>,
     pub(crate) max_snapshot_id: AtomicU64,
     pub(crate) max_active_snapshots: u64,
 }
@@ -493,11 +488,6 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             if removed {
                 let new_node = cur_node.delete_child(k);
                 return (Some(Arc::new(new_node)), true);
-
-                // if let Some(new_child_node) = new_child {
-                //     let new_node = cur_node.clone().delete_child(k, new_child_node);
-                //     return (Some(Arc::new(new_node)), true);
-                // }
             }
         }
 
@@ -545,7 +535,7 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         Tree {
             root: None,
             max_snapshot_id: AtomicU64::new(0),
-            snapshots: RwLock::new(HashMap::new()),
+            snapshots: HashMap::new(),
             max_active_snapshots: DEFAULT_MAX_ACTIVE_SNAPSHOTS,
         }
     }
@@ -575,7 +565,6 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
                 if ts == 0 {
                     commit_ts = curr_ts + 1;
                 } else if curr_ts >= ts {
-                    // TODO: check if this should be > because this means insertions with the ts equal to the root's ts will fail
                     return Err(TrieError::Other(
                         "given timestamp is older than root's current timestamp".to_string(),
                     ));
@@ -629,7 +618,7 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         }
     }
 
-    pub fn create_snapshot(&self) -> Result<SnapshotPointer<P, V>, TrieError> {
+    pub fn create_snapshot(&mut self) -> Result<SnapshotPointer<P, V>, TrieError> {
         let max_snapshot_id = self.max_snapshot_id.load(Ordering::SeqCst);
 
         if max_snapshot_id >= self.max_active_snapshots {
@@ -638,26 +627,20 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
             ));
         }
 
-        let mut snapshots = self
-            .snapshots
-            .write()
-            .map_err(|_| TrieError::SnapshotMutexError)?;
-
         // Increment the count atomically
         let new_snapshot_id = self.max_snapshot_id.fetch_add(1, Ordering::SeqCst);
         let new_snapshot = self.new_snapshot(new_snapshot_id)?;
-        snapshots.insert(new_snapshot_id, new_snapshot);
+        self.snapshots.insert(new_snapshot_id, new_snapshot);
 
         Ok(SnapshotPointer::new(self, new_snapshot_id))
     }
 
-    pub(crate) fn get_snapshot(&self,snapshot_id: u64) -> Result<SnapshotPointer<P, V>, TrieError> {
-        let snapshots = self
+    pub(crate) fn get_snapshot(
+        &mut self,
+        snapshot_id: u64,
+    ) -> Result<SnapshotPointer<P, V>, TrieError> {
+        let _snapshot = self
             .snapshots
-            .read()
-            .map_err(|_| TrieError::SnapshotMutexError)?;
-
-        let _snapshot = snapshots
             .get(&snapshot_id)
             .ok_or(TrieError::SnapshotNotFound)?;
         Ok(SnapshotPointer::new(self, snapshot_id))
@@ -671,27 +654,24 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         }
 
         let root = self.root.as_ref().unwrap();
-        let snapshot = Snapshot::new(snapshot_id, root.clone(), root.ts()+1);
+        let snapshot = Snapshot::new(snapshot_id, root.clone(), root.ts() + 1);
 
         Ok(snapshot)
     }
 
-    pub(crate) fn close(&self, snapshot_id: u64) -> Result<(), TrieError> {
-        let mut snapshots = self
+    pub(crate) fn close(&mut self, snapshot_id: u64) -> Result<(), TrieError> {
+        let snapshot = self
             .snapshots
-            .write()
-            .map_err(|_| TrieError::SnapshotMutexError)?;
-        snapshots.remove(&snapshot_id);
+            .get_mut(&snapshot_id)
+            .ok_or(TrieError::SnapshotNotFound)?;
+        snapshot.close()?;
+        self.snapshots.remove(&snapshot_id);
         Ok(())
     }
 
     // Method to get the count of snapshots
     pub fn snapshot_count(&self) -> Result<usize, TrieError> {
-        let snapshots = self
-            .snapshots
-            .read()
-            .map_err(|_| TrieError::SnapshotMutexError)?;
-        Ok(snapshots.len())
+        Ok(self.snapshots.len())
     }
 
     pub fn iter(&self) -> Iter<P, V> {
@@ -727,6 +707,10 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         }
 
         Range::empty()
+    }
+
+    pub fn get_snap(&mut self, id: u64) -> Option<&mut Snapshot<P, V>> {
+        self.snapshots.get_mut(&id)
     }
 }
 

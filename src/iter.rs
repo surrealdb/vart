@@ -19,14 +19,14 @@ impl<'a, K: Prefix + Clone, V: Clone> Leaf<'a, K, V> {
 
 // TODO: need to add more tests for snapshot readers
 pub struct IterationPointer<'a, P: PrefixTrait, V: Clone> {
-    id: u64,
+    pub(crate) id: u64,
     root: Arc<Node<P, V>>,
-    snap: &'a Snapshot<P, V>,
+    snap: &'a mut Snapshot<P, V>,
 }
 
 impl<'a, P: PrefixTrait, V: Clone> IterationPointer<'a, P, V> {
     pub fn new(
-        snap: &'a Snapshot<P, V>,
+        snap: &'a mut Snapshot<P, V>,
         root: Arc<Node<P, V>>,
         id: u64,
     ) -> IterationPointer<'a, P, V> {

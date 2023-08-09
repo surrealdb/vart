@@ -1,5 +1,5 @@
 // #[allow(warnings)]
-mod art;
+pub mod art;
 pub mod iter;
 pub mod node;
 pub mod snapshot;
@@ -38,6 +38,7 @@ pub trait Key: Clone {
         self.prefix_after(0)
     }
 }
+
 pub trait PrefixTrait: Prefix + Clone + PartialEq + Debug + for<'a> From<&'a [u8]> {}
 impl<T: Prefix + Clone + PartialEq + Debug + for<'a> From<&'a [u8]>> PrefixTrait for T {}
 
@@ -240,6 +241,26 @@ impl<const N: usize> ArrayKey<N> {
             len: data.len(),
         }
     }
+
+    pub fn from_str(s: &str) -> Self {
+        assert!(s.len() < N, "data length is greater than array length");
+        let mut arr = [0; N];
+        arr[..s.len()].copy_from_slice(s.as_bytes());
+        Self {
+            data: arr,
+            len: s.len() + 1,
+        }
+    }
+
+    pub fn from_string(s: &String) -> Self {
+        assert!(s.len() < N, "data length is greater than array length");
+        let mut arr = [0; N];
+        arr[..s.len()].copy_from_slice(s.as_bytes());
+        Self {
+            data: arr,
+            len: s.len() + 1,
+        }
+    }
 }
 
 impl<const N: usize> From<u8> for ArrayKey<N> {
@@ -257,6 +278,23 @@ impl<const N: usize> From<u16> for ArrayKey<N> {
 impl<const N: usize> From<u64> for ArrayKey<N> {
     fn from(data: u64) -> Self {
         Self::from_slice(data.to_be_bytes().as_ref())
+    }
+}
+
+impl<const N: usize> From<&str> for ArrayKey<N> {
+    fn from(data: &str) -> Self {
+        Self::from_str(data)
+    }
+}
+
+impl<const N: usize> From<String> for ArrayKey<N> {
+    fn from(data: String) -> Self {
+        Self::from_string(&data)
+    }
+}
+impl<const N: usize> From<&String> for ArrayKey<N> {
+    fn from(data: &String) -> Self {
+        Self::from_string(data)
     }
 }
 
