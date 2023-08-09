@@ -1,8 +1,8 @@
 use std::collections::{Bound, VecDeque};
 use std::sync::Arc;
 
-use crate::art::{Node, TrieError, NodeType};
-use crate::node::{LeafValue};
+use crate::art::{Node, NodeType, TrieError};
+use crate::node::LeafValue;
 use crate::snapshot::Snapshot;
 use crate::{Key, PrefixTrait};
 
@@ -47,7 +47,6 @@ impl<'a, P: PrefixTrait, V: Clone> NodeIter<'a, P, V> {
         }
     }
 }
-
 
 impl<'a, P: PrefixTrait, V: Clone> Iterator for NodeIter<'a, P, V> {
     type Item = (u8, &'a Arc<Node<P, V>>);
@@ -96,7 +95,10 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> IterState<'a, P, V> {
         let mut node_iter = Vec::new();
         node_iter.push(NodeIter::new(node.iter()));
 
-        Self { node_iter, leafs: VecDeque::new() }
+        Self {
+            node_iter,
+            leafs: VecDeque::new(),
+        }
     }
 }
 
@@ -112,48 +114,28 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
                         self.node_iter.pop().unwrap();
                         break;
                     }
-                    Some(other) =>{
+                    Some(other) => {
                         if other.1.is_twig() {
                             let NodeType::Twig(twig) = &other.1.node_type else {
                                 panic!("should not happen");
                             };
-                                        
+
                             for v in twig.iter() {
                                 self.leafs.push_back(v);
                             }
                             break 'outer;
                         } else {
-                                self.node_iter.push(NodeIter::new(other.1.iter()));
-                                break;
+                            self.node_iter.push(NodeIter::new(other.1.iter()));
+                            break;
                         }
                     }
                 }
             }
         }
 
-
-        self.leafs.pop_front().map(|leaf| (leaf.key.as_byte_slice().to_vec(), &leaf.value, &leaf.ts))
-
-
-        // loop {
-        //     let Some(last_iter) = self.node_iter.last_mut() else {
-        //         return None;
-        //     };
-
-        //     let Some((_, node)) = last_iter.next() else{
-        //         self.node_iter.pop();
-        //         continue;
-
-        //     };
-
-        //     if node.is_twig() {
-        //         if let Some(v) = node.get_value() {
-        //             return Some((v.0.as_byte_slice().to_vec(), v.1, v.2));
-        //         }
-        //     } else {
-        //         self.node_iter.push(NodeIter::new(node.iter()));
-        //     }
-        // }
+        self.leafs
+            .pop_front()
+            .map(|leaf| (leaf.key.as_byte_slice().to_vec(), &leaf.value, &leaf.ts))
     }
 }
 
@@ -178,7 +160,9 @@ pub struct Range<'a, K: Key + 'a, P: PrefixTrait, V: Clone> {
     inner: Box<dyn RangeIteratorTrait<'a, K, P, V> + 'a>,
 }
 
-impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeIteratorTrait<'a, K, P, V> for EmptyRangeIterator {
+impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeIteratorTrait<'a, K, P, V>
+    for EmptyRangeIterator
+{
     fn next(&mut self) -> RangeResult<'a, V> {
         RangeResult::Yield(None)
     }
@@ -194,7 +178,9 @@ impl<'a, K: Key, P: PrefixTrait, V: Clone> RangeIterator<'a, K, P, V> {
     }
 }
 
-impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeIteratorTrait<'a, K, P, V> for RangeIterator<'a, K, P, V> {
+impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeIteratorTrait<'a, K, P, V>
+    for RangeIterator<'a, K, P, V>
+{
     fn next(&mut self) -> RangeResult<'a, V> {
         let next_item = self.iter.next();
         match next_item {
@@ -202,7 +188,9 @@ impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeIteratorTrait<'a, K, P, V> 
                 let next_key_slice = key.as_slice();
                 match &self.end_bound {
                     Bound::Included(k) if next_key_slice == k.as_slice() => RangeResult::Continue,
-                    Bound::Excluded(k) if next_key_slice == k.as_slice() => RangeResult::Yield(None),
+                    Bound::Excluded(k) if next_key_slice == k.as_slice() => {
+                        RangeResult::Yield(None)
+                    }
                     Bound::Unbounded => RangeResult::Yield(Some((key, value, ts))),
                     _ => RangeResult::Yield(Some((key, value, ts))),
                 }

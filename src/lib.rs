@@ -4,8 +4,8 @@ pub mod iter;
 pub mod node;
 pub mod snapshot;
 
-use std::fmt::Debug;
 use std::cmp::{Ord, Ordering, PartialOrd};
+use std::fmt::Debug;
 
 // "Partial" in the Adaptive Radix Tree paper refers to "partial keys", a technique employed
 // for prefix compression in this data structure. Instead of storing entire keys in the nodes,

@@ -58,7 +58,7 @@ impl<'a, P: PrefixTrait, V: Clone> SnapshotPointer<'a, P, V> {
         Ok(())
     }
 
-    pub fn get<K: Key>(&self, key: &K) -> Result<Option<(V, u64)>, TrieError> {
+    pub fn get<K: Key>(&self, key: &K, ts: u64) -> Result<Option<(V, u64)>, TrieError> {
         // Acquire a lock on the snapshot vector to access the desired snapshot
         let snapshots = self
             .tree
@@ -69,7 +69,7 @@ impl<'a, P: PrefixTrait, V: Clone> SnapshotPointer<'a, P, V> {
         // Try to get the snapshot at the specified id, returning `SnapshotNotFound` if not found
         let snapshot = snapshots.get(&self.id).ok_or(TrieError::SnapshotNotFound)?;
 
-        Ok(snapshot.get(key))
+        Ok(snapshot.get(key, ts))
     }
 
     /// Closes the snapshot referred to by this SnapshotPointer, releasing resources associated with it.
@@ -138,12 +138,12 @@ impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
     }
 
     /// Retrieves the value and timestamp associated with the given key from the snapshot.
-    pub fn get<K: Key>(&self, key: &K) -> Option<(V, u64)> {
+    pub fn get<K: Key>(&self, key: &K, ts: u64) -> Option<(V, u64)> {
         // Acquire a read lock on the snapshot mutex to ensure shared access to the snapshot
         let root = self.root.read().unwrap();
 
         // Use a recursive function to get the value and timestamp from the root node
-        let (_, value, ts) = Node::get_recurse(root.as_ref(), key)?;
+        let (_, value, ts) = Node::get_recurse(root.as_ref(), key, ts)?;
 
         // Return the value and timestamp wrapped in an Option
         Some((value, ts))
@@ -213,11 +213,17 @@ mod tests {
             assert_eq!(snap2.id, 1);
 
             assert_eq!(
-                snap1.get(&VectorKey::from_str("key_1")).unwrap().unwrap(),
+                snap1
+                    .get(&VectorKey::from_str("key_1"), tree.ts())
+                    .unwrap()
+                    .unwrap(),
                 (1, 1)
             );
             assert_eq!(
-                snap2.get(&VectorKey::from_str("key_1")).unwrap().unwrap(),
+                snap2
+                    .get(&VectorKey::from_str("key_1"), tree.ts())
+                    .unwrap()
+                    .unwrap(),
                 (1, 1)
             );
         }
@@ -232,10 +238,14 @@ mod tests {
 
             {
                 let snap1 = snapshots.get(snap1_id).unwrap();
-                assert!(snap1.get(&VectorKey::from_str("key_2")).is_none());
+                assert!(snap1
+                    .get(&VectorKey::from_str("key_2"), snap1.ts())
+                    .is_none());
 
                 let snap2 = snapshots.get(snap2_id).unwrap();
-                assert!(snap2.get(&VectorKey::from_str("key_2")).is_none());
+                assert!(snap2
+                    .get(&VectorKey::from_str("key_2"), snap2.ts())
+                    .is_none());
             }
 
             // keys inserted after snapshot creation should be visible to the snapshot that inserted them
@@ -243,14 +253,18 @@ mod tests {
                 let snap1 = snapshots.get_mut(snap1_id).unwrap();
                 assert!(snap1.insert(&VectorKey::from_str("key_3_snap1"), 2).is_ok());
                 assert_eq!(
-                    snap1.get(&VectorKey::from_str("key_3_snap1")).unwrap(),
+                    snap1
+                        .get(&VectorKey::from_str("key_3_snap1"), snap1.ts())
+                        .unwrap(),
                     (2, 2)
                 );
 
                 let snap2 = snapshots.get_mut(snap2_id).unwrap();
                 assert!(snap2.insert(&VectorKey::from_str("key_3_snap2"), 3).is_ok());
                 assert_eq!(
-                    snap2.get(&VectorKey::from_str("key_3_snap2")).unwrap(),
+                    snap2
+                        .get(&VectorKey::from_str("key_3_snap2"), snap2.ts())
+                        .unwrap(),
                     (3, 2)
                 );
             }
@@ -258,10 +272,14 @@ mod tests {
             // keys inserted after snapshot creation should not be visible to other snapshots
             {
                 let snap1 = snapshots.get(snap1_id).unwrap();
-                assert!(snap1.get(&VectorKey::from_str("key_3_snap2")).is_none());
+                assert!(snap1
+                    .get(&VectorKey::from_str("key_3_snap2"), snap1.ts())
+                    .is_none());
 
                 let snap2 = snapshots.get(snap2_id).unwrap();
-                assert!(snap2.get(&VectorKey::from_str("key_3_snap1")).is_none());
+                assert!(snap2
+                    .get(&VectorKey::from_str("key_3_snap1"), snap2.ts())
+                    .is_none());
             }
         }
 
