@@ -21,19 +21,31 @@ pub trait Timestamp {
 }
 
 #[derive(Clone)]
-pub struct LeafNode<K: Prefix + Clone, V: Clone> {
-    pub prefix: K,
-    pub key: K,
-    pub value: V,
-    pub ts: u64, // Timestamp for the leaf node
+pub struct TwigNode<K: Prefix + Clone, V: Clone> {
+    pub(crate) prefix: K,
+    pub(crate) key: K,
+    pub(crate) values: Vec<Arc<LeafValue<V>>>,
+    pub(crate) ts: u64, // Timestamp for the twig node
 }
 
-impl<K: Prefix + Clone, V: Clone> LeafNode<K, V> {
-    pub fn new(prefix: K, key: K, value: V) -> Self {
-        Self {
+#[derive(Clone)]
+pub struct LeafValue<V: Clone> {
+    pub(crate) value: V,
+    pub(crate) ts: u64,
+}
+
+impl<V: Clone> LeafValue<V> {
+    pub fn new(value: V, ts: u64) -> Self {
+        LeafValue { value, ts }
+    }
+}
+
+impl<K: Prefix + Clone, V: Clone> TwigNode<K, V> {
+    pub fn new(prefix: K, key: K) -> Self {
+        TwigNode {
             prefix,
             key,
-            value,
+            values: Vec::new(),
             ts: 0,
         }
     }
@@ -42,13 +54,93 @@ impl<K: Prefix + Clone, V: Clone> LeafNode<K, V> {
         Self {
             prefix: self.prefix.clone(),
             key: self.key.clone(),
-            value: self.value.clone(),
+            values: self.values.clone(),
             ts: self.ts,
         }
     }
+
+    pub fn ts(&self) -> u64 {
+        self.values
+            .iter()
+            .map(|value| value.ts)
+            .max()
+            .unwrap_or(self.ts)
+    }
+
+    // TODO: write tests for this func
+    pub fn insert(&self, value: V, ts: u64) -> TwigNode<K, V> {
+        let mut new_values = self.values.clone();
+
+        let new_leaf_value = LeafValue::new(value, ts);
+
+        // Insert new LeafValue in sorted order
+        let insertion_index = match new_values.binary_search_by(|v| v.ts.cmp(&new_leaf_value.ts)) {
+            Ok(index) => index,
+            Err(index) => index,
+        };
+        new_values.insert(insertion_index, Arc::new(new_leaf_value));
+
+        let new_ts = new_values
+            .iter()
+            .map(|value| value.ts)
+            .max()
+            .unwrap_or(self.ts);
+
+        TwigNode {
+            prefix: self.prefix.clone(),
+            key: self.key.clone(),
+            values: new_values,
+            ts: new_ts,
+        }
+    }
+
+    // TODO: write tests for this func
+    pub fn insert_mut(&mut self, value: V, ts: u64) {
+        let new_leaf_value = LeafValue::new(value, ts);
+
+        // Insert new LeafValue in sorted order
+        let insertion_index = match self
+            .values
+            .binary_search_by(|v| v.ts.cmp(&new_leaf_value.ts))
+        {
+            Ok(index) => index,
+            Err(index) => index,
+        };
+        self.values
+            .insert(insertion_index, Arc::new(new_leaf_value));
+
+        self.ts = self.ts(); // Update LeafNode's timestamp
+    }
+
+    // TODO: write tests for this func
+    pub fn get_latest_leaf(&self) -> Option<Arc<LeafValue<V>>> {
+        self.values.iter().max_by_key(|value| value.ts).cloned()
+    }
+
+    // TODO: write tests for this func
+    pub fn get_latest_value(&self) -> Option<V> {
+        self.values
+            .iter()
+            .max_by_key(|value| value.ts)
+            .map(|value| value.value.clone())
+    }
+
+    // TODO: write tests for this func
+    pub fn get_leaf_by_ts(&self, timestamp: u64) -> Option<Arc<LeafValue<V>>> {
+        self.values
+            .iter()
+            .filter(|value| value.ts <= timestamp)
+            .max_by_key(|value| value.ts)
+            .cloned()
+    }
+
+    // TODO: write tests for this func
+    pub fn iter(&self) -> impl Iterator<Item = &Arc<LeafValue<V>>> {
+        self.values.iter()
+    }
 }
 
-impl<K: Prefix + Clone, V: Clone> Timestamp for LeafNode<K, V> {
+impl<K: Prefix + Clone, V: Clone> Timestamp for TwigNode<K, V> {
     fn ts(&self) -> u64 {
         self.ts
     }
@@ -72,8 +164,8 @@ impl<K: Prefix + Clone, V: Clone> Timestamp for LeafNode<K, V> {
 // storing Node4 and Node16 since they have identical layouts.
 
 pub struct FlatNode<P: Prefix + Clone, N: Timestamp, const WIDTH: usize> {
-    pub prefix: P,
-    pub ts: u64,
+    pub(crate) prefix: P,
+    pub(crate) ts: u64,
     keys: [u8; WIDTH],
     children: Vec<Option<Arc<N>>>,
     num_children: u8,
@@ -274,8 +366,8 @@ impl<P: Prefix + Clone, N: Timestamp, const WIDTH: usize> Timestamp for FlatNode
 // a Vector Array, which is a Vector of length WIDTH (48) that stores the pointers.
 
 pub struct Node48<P: Prefix + Clone, N: Timestamp> {
-    pub prefix: P,
-    pub ts: u64,
+    pub(crate) prefix: P,
+    pub(crate) ts: u64,
     child_ptr_indexes: Box<VecArray<u8, 256>>,
     children: Box<VecArray<Arc<N>, 48>>,
     num_children: u8,
@@ -431,8 +523,8 @@ impl<P: Prefix + Clone, N: Timestamp> Timestamp for Node48<P, N> {
 // A Node256 is a 256-entry array of pointers to children. The pointers are stored in
 // a Vector Array, which is a Vector of length WIDTH (256) that stores the pointers.
 pub struct Node256<P: Prefix + Clone, N: Timestamp> {
-    pub prefix: P, // Prefix associated with the node
-    pub ts: u64,   // Timestamp for node256
+    pub(crate) prefix: P, // Prefix associated with the node
+    pub(crate) ts: u64,   // Timestamp for node256
 
     children: Box<VecArray<Arc<N>, 256>>,
     num_children: usize,
@@ -564,7 +656,7 @@ impl<P: Prefix + Clone, N: Timestamp> Timestamp for Node256<P, N> {
 
 #[cfg(test)]
 mod tests {
-    use super::{FlatNode, LeafNode, Node256, Node48, NodeTrait, Timestamp, VecArray};
+    use super::{FlatNode, Node256, Node48, NodeTrait, Timestamp, TwigNode, VecArray};
     use crate::ArrayPrefix;
     use std::sync::Arc;
 
@@ -961,9 +1053,7 @@ mod tests {
             .collect();
 
         let mut parent: Node48<ArrayPrefix<8>, FlatNode<ArrayPrefix<8>, usize, WIDTH>> =
-            Node48::<ArrayPrefix<8>, FlatNode<ArrayPrefix<8>, usize, WIDTH>>::new(
-                dummy_prefix,
-            );
+            Node48::<ArrayPrefix<8>, FlatNode<ArrayPrefix<8>, usize, WIDTH>>::new(dummy_prefix);
 
         // Add children to parent
         for (i, child) in children.iter().enumerate() {
@@ -990,9 +1080,7 @@ mod tests {
             .collect();
 
         let mut parent: Node256<ArrayPrefix<8>, FlatNode<ArrayPrefix<8>, usize, WIDTH>> =
-            Node256::<ArrayPrefix<8>, FlatNode<ArrayPrefix<8>, usize, WIDTH>>::new(
-                dummy_prefix,
-            );
+            Node256::<ArrayPrefix<8>, FlatNode<ArrayPrefix<8>, usize, WIDTH>>::new(dummy_prefix);
 
         // Add children to parent
         for (i, child) in children.iter().enumerate() {
@@ -1005,35 +1093,35 @@ mod tests {
         assert_eq!(parent.ts(), (WIDTH - 1) as u64);
     }
 
-    // TODO: add more scenarios to this as leaf nodes have the actual data with timestamps
+    // TODO: add more scenarios to this as twig nodes have the actual data with timestamps
     #[test]
-    fn test_leaf_nodes() {
+    fn test_twig_nodes() {
         const WIDTH: usize = 4;
         let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
 
         // Prepare some child nodes
-        let mut leaf1 =
-            LeafNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone(), 1);
-        leaf1.ts = 5;
-        let mut leaf2 =
-            LeafNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone(), 1);
-        leaf2.ts = 10;
-        let mut leaf3 =
-            LeafNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone(), 1);
-        leaf3.ts = 3;
-        let mut leaf4 =
-            LeafNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone(), 1);
-        leaf4.ts = 7;
+        let mut twig1 =
+            TwigNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        twig1.ts = 5;
+        let mut twig2 =
+            TwigNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        twig2.ts = 10;
+        let mut twig3 =
+            TwigNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        twig3.ts = 3;
+        let mut twig4 =
+            TwigNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        twig4.ts = 7;
 
         let mut parent = FlatNode {
             prefix: dummy_prefix,
             ts: 0,
             keys: [0; WIDTH],
             children: vec![
-                Some(Arc::new(leaf1)),
-                Some(Arc::new(leaf2)),
-                Some(Arc::new(leaf3)),
-                Some(Arc::new(leaf4)),
+                Some(Arc::new(twig1)),
+                Some(Arc::new(twig2)),
+                Some(Arc::new(twig3)),
+                Some(Arc::new(twig4)),
             ],
             num_children: 3,
         };

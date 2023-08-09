@@ -1,21 +1,22 @@
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+//! This module defines the SnapshotPointer and Snapshot structs for managing snapshots within a Trie structure.
 
 use crate::art::{Node, Tree, TrieError};
 use crate::iter::IterationPointer;
 use crate::node::Timestamp;
 use crate::{Key, PrefixTrait};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 /// Represents a pointer to a specific snapshot within the Trie structure.
 pub struct SnapshotPointer<'a, P: PrefixTrait, V: Clone> {
     id: u64,
-    tree: &'a Tree<P, V>,
+    tree: &'a mut Tree<P, V>,
 }
 
 impl<'a, P: PrefixTrait, V: Clone> SnapshotPointer<'a, P, V> {
     /// Creates a new SnapshotPointer instance pointing to a specific snapshot in the Tree.
-    pub fn new(tree: &'a Tree<P, V>, snapshot_id: u64) -> SnapshotPointer<'a, P, V> {
+    pub fn new(tree: &'a mut Tree<P, V>, snapshot_id: u64) -> Self {
         SnapshotPointer {
             id: snapshot_id,
             tree,
@@ -24,161 +25,135 @@ impl<'a, P: PrefixTrait, V: Clone> SnapshotPointer<'a, P, V> {
 
     /// Returns the timestamp of the snapshot referred to by this SnapshotPointer.
     pub fn ts(&self) -> Result<u64, TrieError> {
-        // Acquire a lock on the snapshot vector to access the desired snapshot
-        let snapshots = self
-            .tree
+        self.tree
             .snapshots
-            .read()
-            .map_err(|_| TrieError::SnapshotMutexError)?;
-
-        // Try to get the snapshot at the specified id, returning `SnapshotNotFound` if not found
-        let snapshot = snapshots.get(&self.id).ok_or(TrieError::SnapshotNotFound)?;
-
-        // Return the timestamp of the snapshot
-        Ok(snapshot.ts())
+            .get(&self.id)
+            .ok_or(TrieError::SnapshotNotFound)
+            .map(|snapshot| snapshot.ts())
     }
 
     /// Inserts a key-value pair into the snapshot referred to by this SnapshotPointer.
     pub fn insert<K: Key>(&mut self, key: &K, value: V) -> Result<(), TrieError> {
-        // Acquire a lock on the snapshot vector to access the desired snapshot
-        let mut snapshots = self
-            .tree
+        self.tree
             .snapshots
-            .write()
-            .map_err(|_| TrieError::SnapshotMutexError)?;
-
-        // Try to get the mutable reference to the snapshot, returning `SnapshotNotFound` if not found
-        let snapshot = snapshots
             .get_mut(&self.id)
-            .ok_or(TrieError::SnapshotNotFound)?;
-
-        // Insert the key-value pair into the snapshot
-        snapshot.insert(key, value)?;
-
-        Ok(())
+            .ok_or(TrieError::SnapshotNotFound)
+            .and_then(|snapshot| snapshot.insert(key, value))
     }
 
-    pub fn get<K: Key>(&self, key: &K) -> Result<Option<(V, u64)>, TrieError> {
-        // Acquire a lock on the snapshot vector to access the desired snapshot
-        let snapshots = self
-            .tree
+    /// Retrieves the value associated with the given key from the snapshot referred to by this SnapshotPointer.
+    pub fn get<K: Key>(&self, key: &K, ts: u64) -> Result<Option<(V, u64)>, TrieError> {
+        self.tree
             .snapshots
-            .read()
-            .map_err(|_| TrieError::SnapshotMutexError)?;
+            .get(&self.id)
+            .ok_or(TrieError::SnapshotNotFound)
+            .map(|snapshot| snapshot.get(key, ts))
+    }
 
-        // Try to get the snapshot at the specified id, returning `SnapshotNotFound` if not found
-        let snapshot = snapshots.get(&self.id).ok_or(TrieError::SnapshotNotFound)?;
+    pub fn new_reader(&mut self) -> Result<IterationPointer<P, V>, TrieError> {
+        self.tree
+            .snapshots
+            .get_mut(&self.id)
+            .ok_or(TrieError::SnapshotNotFound)
+            .and_then(|snapshot| snapshot.new_reader())
+    }
 
-        Ok(snapshot.get(key))
+    pub fn close_reader(&mut self, reader_id: u64) -> Result<(), TrieError> {
+        self.tree
+            .snapshots
+            .get_mut(&self.id)
+            .ok_or(TrieError::SnapshotNotFound)
+            .and_then(|snapshot| snapshot.close_reader(reader_id))
+    }
+
+    pub fn active_readers(&self) -> Result<u64, TrieError> {
+        self.tree
+            .snapshots
+            .get(&self.id)
+            .ok_or(TrieError::SnapshotNotFound)
+            .map(|snapshot| snapshot.max_active_readers.load(Ordering::SeqCst))
     }
 
     /// Closes the snapshot referred to by this SnapshotPointer, releasing resources associated with it.
     pub fn close(&mut self) -> Result<(), TrieError> {
-        // Call the close method of the Tree with the id of the snapshot to close it
-        self.tree.close(self.id)?;
-        Ok(())
+        self.tree.close(self.id)
     }
 }
 
 /// Represents a snapshot of the data within the Trie.
 pub struct Snapshot<P: PrefixTrait, V: Clone> {
-    pub(crate) id: u64,
-    pub(crate) ts: u64,
-    pub(crate) root: RwLock<Arc<Node<P, V>>>,
-    pub(crate) readers: RwLock<HashMap<u64, ()>>,
-    pub(crate) max_active_readers: AtomicU64,
-    pub(crate) closed: bool,
+    id: u64,
+    ts: u64,
+    root: Arc<Node<P, V>>,
+    readers: HashMap<u64, ()>,
+    max_active_readers: AtomicU64,
+    closed: bool,
 }
 
 impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
-    /// Creates a new Snapshot instance with the provided snapshot_id and root node.
-    pub fn new_snapshot(snapshot_id: u64, root: Arc<Node<P, V>>) -> Snapshot<P, V> {
+    pub(crate) fn new(id: u64, root: Arc<Node<P, V>>, ts: u64) -> Self {
         Snapshot {
-            id: snapshot_id,
-            ts: root.ts() + 1,
-            root: RwLock::new(root),
-            readers: RwLock::new(HashMap::new()),
+            id,
+            ts: ts,
+            root: root,
+            readers: HashMap::new(),
             max_active_readers: AtomicU64::new(0),
             closed: false,
         }
     }
 
-    pub fn new_reader(&self) -> Result<IterationPointer<P, V>, TrieError> {
+    /// Creates a new reader for the snapshot, allowing for concurrent read access.
+    ///
+    /// # Returns
+    ///
+    /// A new IterationPointer instance that can be used for reading the snapshot.
+    pub fn new_reader(&mut self) -> Result<IterationPointer<P, V>, TrieError> {
         let reader_id = self.max_active_readers.fetch_add(1, Ordering::SeqCst);
-        let mut readers = self.readers.write().map_err(|_| TrieError::MutexError)?;
-        readers.insert(reader_id, ());
-        let root = self.root.read().unwrap();
-        Ok(IterationPointer::new(self, root.clone(), reader_id))
+        self.readers.insert(reader_id, ());
+        Ok(IterationPointer::new(self, self.root.clone(), reader_id))
     }
 
-    pub fn close_reader(&self, reader_id: u64) -> Result<(), TrieError> {
-        let mut readers = self.readers.write().map_err(|_| TrieError::MutexError)?;
-        readers.remove(&reader_id);
+    /// Closes the reader with the given reader_id.
+    pub fn close_reader(&mut self, reader_id: u64) -> Result<(), TrieError> {
+        self.readers.remove(&reader_id);
         self.max_active_readers.fetch_sub(1, Ordering::SeqCst);
         Ok(())
     }
 
     /// Inserts a key-value pair into the snapshot.
     pub fn insert<K: Key>(&mut self, key: &K, value: V) -> Result<(), TrieError> {
-        // Acquire a lock on the snapshot mutex to ensure exclusive access to the snapshot
-        let mut root = self.root.write().map_err(|_| TrieError::MutexError)?;
-
-        // Insert the key-value pair into the root node using a recursive function
-        let (new_node, _) = match Node::insert_recurse(&root, key, value, self.ts, 0) {
-            Ok((new_node, old_node)) => (new_node, old_node),
-            Err(err) => {
-                return Err(err);
-            }
-        };
-
-        // Update the root node with the new node after insertion
-        *root = new_node;
-
+        let (new_node, _) = Node::insert_recurse(&self.root, key, value, self.ts, 0)?;
+        self.root = new_node;
         Ok(())
     }
 
     /// Retrieves the value and timestamp associated with the given key from the snapshot.
-    pub fn get<K: Key>(&self, key: &K) -> Option<(V, u64)> {
-        // Acquire a read lock on the snapshot mutex to ensure shared access to the snapshot
-        let root = self.root.read().unwrap();
-
-        // Use a recursive function to get the value and timestamp from the root node
-        let (_, value, ts) = Node::get_recurse(root.as_ref(), key)?;
-
-        // Return the value and timestamp wrapped in an Option
-        Some((value.clone(), *ts))
+    pub fn get<K: Key>(&self, key: &K, ts: u64) -> Option<(V, u64)> {
+        Node::get_recurse(self.root.as_ref(), key, ts).map(|(_, value, ts)| (value, ts))
     }
 
     /// Returns the timestamp of the snapshot.
     pub fn ts(&self) -> u64 {
-        // Acquire a read lock on the snapshot mutex to ensure shared access to the snapshot
-        let root = self.root.read().unwrap();
-        root.ts()
+        self.root.ts()
     }
 
     /// Closes the snapshot, preventing further modifications, and releases associated resources.
     pub fn close(&mut self) -> Result<(), TrieError> {
-        // Check if the snapshot is already closed
         if self.closed {
             return Err(TrieError::SnapshotAlreadyClosed);
         }
 
-        // Check if there are any active readers for the snapshot
         if self.max_active_readers.load(Ordering::SeqCst) > 0 {
             return Err(TrieError::SnapshotReadersNotClosed);
         }
 
-        // Mark the snapshot as closed
         self.closed = true;
-
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::Ordering;
-
     use super::Tree;
     use crate::ArrayPrefix;
     use crate::VectorKey;
@@ -192,86 +167,93 @@ mod tests {
 
         let mut snap1 = tree.create_snapshot().unwrap();
         assert!(snap1.insert(&VectorKey::from_str("key_1"), 1).is_ok());
-
+        assert_eq!(snap1.ts().unwrap(), 4);
         assert_eq!(tree.snapshot_count().unwrap(), 1);
         assert_eq!(tree.ts(), 3);
-        assert_eq!(snap1.ts().unwrap(), 4);
     }
 
     #[test]
     fn test_snapshot_isolation() {
         let mut tree: Tree<ArrayPrefix<32>, i32> = Tree::<ArrayPrefix<32>, i32>::new();
         assert!(tree.insert(&VectorKey::from_str("key_1"), 1, 0).is_ok());
+        let initial_ts = tree.ts();
 
         // keys inserted before snapshot creation should be visible
-        {
-            let snap1 = tree.create_snapshot().unwrap();
-            let snap2 = tree.create_snapshot().unwrap();
+        let snap1 = tree.create_snapshot().unwrap();
+        let snap1_id = snap1.id;
+        assert_eq!(snap1.id, 0);
+        assert_eq!(
+            snap1
+                .get(&VectorKey::from_str("key_1"), initial_ts)
+                .unwrap()
+                .unwrap(),
+            (1, 1)
+        );
 
-            assert_eq!(tree.snapshot_count().unwrap(), 2);
-            assert_eq!(snap1.id, 0);
-            assert_eq!(snap2.id, 1);
+        let snap2 = tree.create_snapshot().unwrap();
+        let snap2_id = snap2.id;
+        assert_eq!(snap2.id, 1);
+        assert_eq!(
+            snap2
+                .get(&VectorKey::from_str("key_1"), initial_ts)
+                .unwrap()
+                .unwrap(),
+            (1, 1)
+        );
 
-            assert_eq!(
-                snap1.get(&VectorKey::from_str("key_1")).unwrap().unwrap(),
-                (1, 1)
-            );
-            assert_eq!(
-                snap2.get(&VectorKey::from_str("key_1")).unwrap().unwrap(),
-                (1, 1)
-            );
-        }
-
-        let snap1_id = &0u64;
-        let snap2_id = &1u64;
+        assert_eq!(tree.snapshot_count().unwrap(), 2);
 
         // keys inserted after snapshot creation should not be visible to other snapshots
         assert!(tree.insert(&VectorKey::from_str("key_2"), 1, 0).is_ok());
-        {
-            let mut snapshots = tree.snapshots.write().unwrap();
+        let snap1 = tree.get_snapshot(snap1_id).unwrap();
+        assert!(snap1
+            .get(&VectorKey::from_str("key_2"), snap1.ts().unwrap())
+            .unwrap()
+            .is_none());
 
-            {
-                let snap1 = snapshots.get(snap1_id).unwrap();
-                assert!(snap1.get(&VectorKey::from_str("key_2")).is_none());
+        let snap2 = tree.get_snapshot(snap2_id).unwrap();
+        assert!(snap2
+            .get(&VectorKey::from_str("key_2"), snap2.ts().unwrap())
+            .unwrap()
+            .is_none());
 
-                let snap2 = snapshots.get(snap2_id).unwrap();
-                assert!(snap2.get(&VectorKey::from_str("key_2")).is_none());
-            }
+        // keys inserted after snapshot creation should be visible to the snapshot that inserted them
+        let mut snap1 = tree.get_snapshot(snap1_id).unwrap();
+        assert!(snap1.insert(&VectorKey::from_str("key_3_snap1"), 2).is_ok());
+        assert_eq!(
+            snap1
+                .get(&VectorKey::from_str("key_3_snap1"), snap1.ts().unwrap())
+                .unwrap()
+                .unwrap(),
+            (2, 2)
+        );
 
-            // keys inserted after snapshot creation should be visible to the snapshot that inserted them
-            {
-                let snap1 = snapshots.get_mut(snap1_id).unwrap();
-                assert!(snap1.insert(&VectorKey::from_str("key_3_snap1"), 2).is_ok());
-                assert_eq!(
-                    snap1.get(&VectorKey::from_str("key_3_snap1")).unwrap(),
-                    (2, 2)
-                );
+        let mut snap2 = tree.get_snapshot(snap2_id).unwrap();
+        assert!(snap2.insert(&VectorKey::from_str("key_3_snap2"), 3).is_ok());
+        assert_eq!(
+            snap2
+                .get(&VectorKey::from_str("key_3_snap2"), snap2.ts().unwrap())
+                .unwrap()
+                .unwrap(),
+            (3, 2)
+        );
 
-                let snap2 = snapshots.get_mut(snap2_id).unwrap();
-                assert!(snap2.insert(&VectorKey::from_str("key_3_snap2"), 3).is_ok());
-                assert_eq!(
-                    snap2.get(&VectorKey::from_str("key_3_snap2")).unwrap(),
-                    (3, 2)
-                );
-            }
+        // keys inserted after snapshot creation should not be visible to other snapshots
+        let snap1 = tree.get_snap(snap1_id).unwrap();
+        assert!(snap1
+            .get(&VectorKey::from_str("key_3_snap2"), snap1.ts())
+            .is_none());
 
-            // keys inserted after snapshot creation should not be visible to other snapshots
-            {
-                let snap1 = snapshots.get(snap1_id).unwrap();
-                assert!(snap1.get(&VectorKey::from_str("key_3_snap2")).is_none());
+        let snap2 = tree.get_snap(snap2_id).unwrap();
+        assert!(snap2
+            .get(&VectorKey::from_str("key_3_snap1"), snap2.ts())
+            .is_none());
 
-                let snap2 = snapshots.get(snap2_id).unwrap();
-                assert!(snap2.get(&VectorKey::from_str("key_3_snap1")).is_none());
-            }
-        }
+        let mut snap1 = tree.get_snapshot(snap1_id).unwrap();
+        assert!(snap1.close().is_ok());
 
-        {
-            let mut snap1 = tree.get_snapshot(*snap1_id).unwrap();
-            assert!(snap1.close().is_ok());
-
-            let mut snap2 = tree.get_snapshot(*snap2_id).unwrap();
-            assert!(snap2.close().is_ok());
-        }
+        let mut snap2 = tree.get_snapshot(snap2_id).unwrap();
+        assert!(snap2.close().is_ok());
 
         assert_eq!(tree.snapshot_count().unwrap(), 0);
     }
@@ -283,20 +265,31 @@ mod tests {
         assert!(tree.insert(&VectorKey::from_str("key_2"), 1, 0).is_ok());
         assert!(tree.insert(&VectorKey::from_str("key_3"), 1, 0).is_ok());
 
-        let mut snap1 = tree.create_snapshot().unwrap();
-        assert!(snap1.insert(&VectorKey::from_str("key_4"), 1).is_ok());
-
-        let snapshots = tree.snapshots.read().unwrap();
-        let snap1 = snapshots.get(&snap1.id).unwrap();
+        let mut snap = tree.create_snapshot().unwrap();
+        assert!(snap.insert(&VectorKey::from_str("key_4"), 1).is_ok());
 
         let mut len = 0;
-        let mut reader = snap1.new_reader().unwrap();
-        for _ in reader.iter() {
+        let reader1 = snap.new_reader().unwrap();
+        let reader1_id = reader1.id;
+        for _ in reader1.iter() {
             len += 1;
         }
         assert_eq!(len, 4);
-        assert!(reader.close().is_ok());
 
-        assert_eq!(snap1.max_active_readers.load(Ordering::SeqCst), 0);
+        let mut len = 0;
+        let reader2 = snap.new_reader().unwrap();
+        let reader2_id = reader2.id;
+        for _ in reader2.iter() {
+            len += 1;
+        }
+        assert_eq!(len, 4);
+
+        assert_eq!(snap.active_readers().unwrap(), 2);
+        assert!(snap.close().is_err());
+
+        // close readers
+        assert!(snap.close_reader(reader1_id).is_ok());
+        assert!(snap.close_reader(reader2_id).is_ok());
+        assert!(snap.close().is_ok());
     }
 }

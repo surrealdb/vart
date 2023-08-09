@@ -6,10 +6,9 @@ use std::fmt;
 use std::ops::RangeBounds;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::RwLock;
 
 use crate::iter::{Iter, Range};
-use crate::node::{FlatNode, LeafNode, Node256, Node48, NodeTrait, Timestamp};
+use crate::node::{FlatNode, Node256, Node48, NodeTrait, Timestamp, TwigNode};
 use crate::snapshot::{Snapshot, SnapshotPointer};
 use crate::{Key, Prefix, PrefixTrait};
 
@@ -36,9 +35,8 @@ const DEFAULT_MAX_ACTIVE_SNAPSHOTS: u64 = 100;
 pub enum TrieError {
     IllegalArguments,
     NotFound,
-    MutexError,
+    KeyNotFound,
     SnapshotNotFound,
-    SnapshotMutexError,
     SnapshotAlreadyClosed,
     SnapshotReadersNotClosed,
     Other(String),
@@ -52,9 +50,8 @@ impl fmt::Display for TrieError {
         match *self {
             TrieError::IllegalArguments => write!(f, "Illegal arguments"),
             TrieError::NotFound => write!(f, "Not found"),
-            TrieError::MutexError => write!(f, "Failed to lock mutex"),
+            TrieError::KeyNotFound => write!(f, "Key not found"),
             TrieError::SnapshotNotFound => write!(f, "Snapshot not found"),
-            TrieError::SnapshotMutexError => write!(f, "Failed to lock snapshot mutex"),
             TrieError::SnapshotAlreadyClosed => write!(f, "Snapshot already closed"),
             TrieError::SnapshotReadersNotClosed => {
                 write!(f, "Readers in the snapshot are not closed")
@@ -66,15 +63,15 @@ impl fmt::Display for TrieError {
 
 // From the specification: Adaptive Radix tries consist of two types of nodes:
 // Inner nodes, which map prefix(prefix) keys to other nodes,
-// and leaf nodes, which store the values corresponding to the key.
+// and twig nodes, which store the values corresponding to the key.
 pub struct Node<P: Prefix + Clone, V: Clone> {
-    node_type: NodeType<P, V>, // Type of the node
+    pub(crate) node_type: NodeType<P, V>, // Type of the node
 }
 
 impl<P: Prefix + Clone, V: Clone> Timestamp for Node<P, V> {
     fn ts(&self) -> u64 {
         match &self.node_type {
-            NodeType::Leaf(leaf) => leaf.ts(),
+            NodeType::Twig(twig) => twig.ts(),
             NodeType::Node4(n) => n.ts(),
             NodeType::Node16(n) => n.ts(),
             NodeType::Node48(n) => n.ts(),
@@ -84,8 +81,8 @@ impl<P: Prefix + Clone, V: Clone> Timestamp for Node<P, V> {
 }
 
 pub(crate) enum NodeType<P: Prefix + Clone, V: Clone> {
-    // Leaf node of the adaptive radix trie
-    Leaf(LeafNode<P, V>),
+    // Twig node of the adaptive radix trie
+    Twig(TwigNode<P, V>),
     // Inner node of the adaptive radix trie
     Node4(FlatNode<P, Node<P, V>, 4>), // Node with 4 keys and 4 children
     Node16(FlatNode<P, Node<P, V>, 16>), // Node with 16 keys and 16 children
@@ -95,17 +92,17 @@ pub(crate) enum NodeType<P: Prefix + Clone, V: Clone> {
 
 // Adaptive radix trie
 pub struct Tree<P: PrefixTrait, V: Clone> {
-    root: Option<Arc<Node<P, V>>>, // Root node of the tree
-    pub(crate) snapshots: RwLock<HashMap<u64, Snapshot<P, V>>>, // TODO: use a RWLock instead, and use a hashmap
-    max_snapshot_id: AtomicU64,
-    max_active_snapshots: u64,
+    pub(crate) root: Option<Arc<Node<P, V>>>, // Root node of the tree
+    pub(crate) snapshots: HashMap<u64, Snapshot<P, V>>,
+    pub(crate) max_snapshot_id: AtomicU64,
+    pub(crate) max_active_snapshots: u64,
 }
 
 impl<P: PrefixTrait + Clone, V: Clone> NodeType<P, V> {
     fn clone(&self) -> Self {
         match self {
-            // leaf value not actually cloned
-            NodeType::Leaf(leaf) => NodeType::Leaf(leaf.clone()),
+            // twig value not actually cloned
+            NodeType::Twig(twig) => NodeType::Twig(twig.clone()),
             NodeType::Node4(n) => NodeType::Node4(n.clone()),
             NodeType::Node16(n) => NodeType::Node16(n.clone()),
             NodeType::Node48(n) => NodeType::Node48(n.clone()),
@@ -123,14 +120,11 @@ impl<P: PrefixTrait, V: Clone> Default for Tree<P, V> {
 
 impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     #[inline]
-    pub(crate) fn new_leaf(prefix: P, key: P, value: V, ts: u64) -> Node<P, V> {
+    pub(crate) fn new_twig(prefix: P, key: P, value: V, ts: u64) -> Node<P, V> {
+        let mut twig = TwigNode::new(prefix, key);
+        twig.insert_mut(value, ts);
         Self {
-            node_type: NodeType::Leaf(LeafNode {
-                prefix,
-                key,
-                value,
-                ts,
-            }),
+            node_type: NodeType::Twig(twig),
         }
     }
 
@@ -145,47 +139,6 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
         Self { node_type: nt }
     }
 
-    // From the specification: This node type is used for storing between 5 and
-    // 16 child pointers. Like the Node4, the keys and pointers
-    // are stored in separate arrays at corresponding positions, but
-    // both arrays have space for 16 entries. A key can be found
-    // efﬁciently with binary search or, on modern hardware, with
-    // parallel comparisons using SIMD instructions.
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn new_node16(prefix: P) -> Self {
-        let nt = NodeType::Node16(FlatNode::new(prefix));
-        Self { node_type: nt }
-    }
-
-    // From the specification: As the number of entries in a node increases,
-    // searching the key array becomes expensive. Therefore, nodes
-    // with more than 16 pointers do not store the keys explicitly.
-    // Instead, a 256-element array is used, which can be indexed
-    // with key bytes directly. If a node has between 17 and 48 child
-    // pointers, this array stores indexes into a second array which
-    // contains up to 48 pointers.
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn new_node48(prefix: P) -> Self {
-        let nt = NodeType::Node48(Node48::new(prefix));
-        Self { node_type: nt }
-    }
-
-    // From the specification: The largest node type is simply an array of 256
-    // pointers and is used for storing between 49 and 256 entries.
-    // With this representation, the next node can be found very
-    // efﬁciently using a single lookup of the key byte in that array.
-    // No additional indirection is necessary. If most entries are not
-    // null, this representation is also very space efﬁcient because
-    // only pointers need to be stored.
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn new_node256(prefix: P) -> Self {
-        let nt = NodeType::Node256(Node256::new(prefix));
-        Self { node_type: nt }
-    }
-
     #[inline]
     fn is_full(&self) -> bool {
         match &self.node_type {
@@ -193,7 +146,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node16(km) => self.num_children() >= km.size(),
             NodeType::Node48(im) => self.num_children() >= im.size(),
             NodeType::Node256(_) => self.num_children() > 256,
-            NodeType::Leaf(_) => panic!("should not be reached"),
+            NodeType::Twig(_) => panic!("should not be reached"),
         }
     }
 
@@ -232,7 +185,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
                 }
                 new_node
             }
-            NodeType::Leaf(_) => panic!("should not be reached"),
+            NodeType::Twig(_) => panic!("should not be reached"),
         }
     }
 
@@ -259,7 +212,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node256 { .. } => {
                 panic!("should not grow a node 256")
             }
-            NodeType::Leaf(_) => panic!("should not be reached"),
+            NodeType::Twig(_) => panic!("should not be reached"),
         }
     }
 
@@ -274,7 +227,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node16(n) => n.find_child(key),
             NodeType::Node48(n) => n.find_child(key),
             NodeType::Node256(n) => n.find_child(key),
-            NodeType::Leaf(_) => None,
+            NodeType::Twig(_) => None,
         }
     }
 
@@ -296,7 +249,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
                 let node = NodeType::Node256(n.replace_child(key, node));
                 Self { node_type: node }
             }
-            NodeType::Leaf(_) => panic!("should not be reached"),
+            NodeType::Twig(_) => panic!("should not be reached"),
         }
     }
 
@@ -334,18 +287,18 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
                 }
                 new_node
             }
-            NodeType::Leaf(_) => panic!("should not be reached"),
+            NodeType::Twig(_) => panic!("should not be reached"),
         }
     }
 
     #[inline]
-    pub(crate) fn is_leaf(&self) -> bool {
-        matches!(&self.node_type, NodeType::Leaf(_))
+    pub(crate) fn is_twig(&self) -> bool {
+        matches!(&self.node_type, NodeType::Twig(_))
     }
 
     #[inline]
     pub(crate) fn is_inner(&self) -> bool {
-        !self.is_leaf()
+        !self.is_twig()
     }
 
     #[inline]
@@ -355,7 +308,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node16(n) => &n.prefix,
             NodeType::Node48(n) => &n.prefix,
             NodeType::Node256(n) => &n.prefix,
-            NodeType::Leaf(n) => &n.prefix,
+            NodeType::Twig(n) => &n.prefix,
         }
     }
 
@@ -366,7 +319,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node16(n) => n.prefix = prefix,
             NodeType::Node48(n) => n.prefix = prefix,
             NodeType::Node256(n) => n.prefix = prefix,
-            NodeType::Leaf(n) => n.prefix = prefix,
+            NodeType::Twig(n) => n.prefix = prefix,
         }
     }
 
@@ -375,7 +328,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     // ArtNodes of type NODE48 will shrink to NODE16.
     // ArtNodes of type NODE16 will shrink to NODE4.
     // ArtNodes of type NODE4 will collapse into its first child.
-    // If that child is not a leaf, it will concatenate its current prefix with that of its childs
+    // If that child is not a twig, it will concatenate its current prefix with that of its childs
     // before replacing itself.
     fn shrink(&mut self) {
         match &mut self.node_type {
@@ -395,7 +348,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
                 let n48 = n.shrink();
                 self.node_type = NodeType::Node48(n48);
             }
-            NodeType::Leaf(_) => panic!("should not be reached"),
+            NodeType::Twig(_) => panic!("should not be reached"),
         }
     }
 
@@ -406,17 +359,21 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node16(n) => n.num_children(),
             NodeType::Node48(n) => n.num_children(),
             NodeType::Node256(n) => n.num_children(),
-            NodeType::Leaf(_) => 0,
+            NodeType::Twig(_) => 0,
         }
     }
 
+    // TODO: fix having separate key and prefix traits to avoid copying
     #[inline]
-    pub fn get_value(&self) -> Option<(&P, &V, &u64)> {
-        let NodeType::Leaf(leaf) = &self.node_type else {
+    pub fn get_value_by_ts(&self, ts: u64) -> Option<(P, V, u64)> {
+        let NodeType::Twig(twig) = &self.node_type else {
+            return None;
+        };
+        let Some(val) = twig.get_leaf_by_ts(ts) else{
             return None;
         };
         // TODO: should return copy of value or reference?
-        Some((&leaf.key, &leaf.value, &leaf.ts))
+        Some((twig.key.clone(), val.value.clone(), val.ts))
     }
 
     pub fn node_type_name(&self) -> String {
@@ -425,7 +382,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node16(_) => "Node16".to_string(),
             NodeType::Node48(_) => "Node48".to_string(),
             NodeType::Node256(_) => "Node256".to_string(),
-            NodeType::Leaf(_) => "Leaf".to_string(),
+            NodeType::Twig(_) => "twig".to_string(),
         }
     }
 
@@ -452,16 +409,15 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
         let prefix = cur_node_prefix.prefix_before(longest_common_prefix);
         let is_prefix_match = min(cur_node_prefix_len, key_prefix.len()) == longest_common_prefix;
 
-        if let NodeType::Leaf(ref leaf) = &cur_node.node_type {
+        if let NodeType::Twig(ref twig) = &cur_node.node_type {
             if is_prefix_match && cur_node_prefix.length() == key_prefix.len() {
+                let old_val = twig.get_leaf_by_ts(commit_ts).unwrap();
+                let new_twig = twig.insert(value, commit_ts);
                 return Ok((
-                    Arc::new(Node::new_leaf(
-                        key.as_slice().into(),
-                        key.as_slice().into(),
-                        value,
-                        commit_ts,
-                    )),
-                    Some(leaf.value.clone()),
+                    Arc::new(Node {
+                        node_type: NodeType::Twig(new_twig),
+                    }),
+                    Some(old_val.value.clone()),
                 ));
             }
         }
@@ -473,13 +429,13 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
 
             let k1 = cur_node_prefix.at(longest_common_prefix);
             let k2 = key_prefix[longest_common_prefix];
-            let new_leaf = Node::new_leaf(
+            let new_twig = Node::new_twig(
                 key_prefix[longest_common_prefix..].into(),
                 key.as_slice().into(),
                 value,
                 commit_ts,
             );
-            n4 = n4.add_child(k1, old_node).add_child(k2, new_leaf);
+            n4 = n4.add_child(k1, old_node).add_child(k2, new_twig);
             return Ok((Arc::new(n4), None));
         }
 
@@ -498,13 +454,13 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             }
         };
 
-        let new_leaf = Node::new_leaf(
+        let new_twig = Node::new_twig(
             key_prefix[longest_common_prefix..].into(),
             key.as_slice().into(),
             value,
             commit_ts,
         );
-        let new_node = cur_node.add_child(k, new_leaf);
+        let new_node = cur_node.add_child(k, new_twig);
         Ok((Arc::new(new_node), None))
     }
 
@@ -532,21 +488,13 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             if removed {
                 let new_node = cur_node.delete_child(k);
                 return (Some(Arc::new(new_node)), true);
-
-                // if let Some(new_child_node) = new_child {
-                //     let new_node = cur_node.clone().delete_child(k, new_child_node);
-                //     return (Some(Arc::new(new_node)), true);
-                // }
             }
         }
 
         (Some(cur_node.clone()), false)
     }
 
-    pub fn get_recurse<'a, K: Key>(
-        cur_node: &'a Node<P, V>,
-        key: &K,
-    ) -> Option<(&'a P, &'a V, &'a u64)> {
+    pub fn get_recurse<K: Key>(cur_node: &Node<P, V>, key: &K, ts: u64) -> Option<(P, V, u64)> {
         let mut cur_node = cur_node;
         let mut depth = 0;
         loop {
@@ -558,7 +506,10 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             }
 
             if prefix.length() == key_prefix.len() {
-                return cur_node.get_value();
+                let Some(val) = cur_node.get_value_by_ts(ts) else {
+                    return None;
+                };
+                return Some((val.0, val.1, val.2));
             }
 
             let k = key.at(depth + prefix.length());
@@ -574,7 +525,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node16(n) => Box::new(n.iter()),
             NodeType::Node48(n) => Box::new(n.iter()),
             NodeType::Node256(n) => Box::new(n.iter()),
-            NodeType::Leaf(_) => Box::new(std::iter::empty()),
+            NodeType::Twig(_n) => Box::new(std::iter::empty()),
         };
     }
 }
@@ -584,7 +535,7 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         Tree {
             root: None,
             max_snapshot_id: AtomicU64::new(0),
-            snapshots: RwLock::new(HashMap::new()),
+            snapshots: HashMap::new(),
             max_active_snapshots: DEFAULT_MAX_ACTIVE_SNAPSHOTS,
         }
     }
@@ -597,7 +548,7 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
                     commit_ts += 1;
                 }
                 (
-                    Arc::new(Node::new_leaf(
+                    Arc::new(Node::new_twig(
                         key.as_slice().into(),
                         key.as_slice().into(),
                         value,
@@ -614,7 +565,6 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
                 if ts == 0 {
                     commit_ts = curr_ts + 1;
                 } else if curr_ts >= ts {
-                    // TODO: check if this should be > because this means insertions with the ts equal to the root's ts will fail
                     return Err(TrieError::Other(
                         "given timestamp is older than root's current timestamp".to_string(),
                     ));
@@ -636,7 +586,7 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         let (new_root, is_deleted) = match &self.root {
             None => (None, false),
             Some(root) => {
-                if root.is_leaf() {
+                if root.is_twig() {
                     (None, true)
                 } else {
                     let (new_root, removed) = Node::remove_recurse(root, key, 0);
@@ -653,8 +603,12 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         is_deleted
     }
 
-    pub fn get<K: Key>(&self, key: &K) -> Option<(&P, &V, &u64)> {
-        Node::get_recurse(self.root.as_ref()?, key)
+    pub fn get<K: Key>(&self, key: &K, ts: u64) -> Option<(P, V, u64)> {
+        let mut commit_ts = ts;
+        if commit_ts == 0 {
+            commit_ts = self.root.as_ref()?.ts();
+        }
+        Node::get_recurse(self.root.as_ref()?, key, commit_ts)
     }
 
     pub fn ts(&self) -> u64 {
@@ -664,7 +618,7 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         }
     }
 
-    pub fn create_snapshot(&self) -> Result<SnapshotPointer<P, V>, TrieError> {
+    pub fn create_snapshot(&mut self) -> Result<SnapshotPointer<P, V>, TrieError> {
         let max_snapshot_id = self.max_snapshot_id.load(Ordering::SeqCst);
 
         if max_snapshot_id >= self.max_active_snapshots {
@@ -673,29 +627,20 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
             ));
         }
 
-        let mut snapshots = self
-            .snapshots
-            .write()
-            .map_err(|_| TrieError::SnapshotMutexError)?;
-
         // Increment the count atomically
         let new_snapshot_id = self.max_snapshot_id.fetch_add(1, Ordering::SeqCst);
         let new_snapshot = self.new_snapshot(new_snapshot_id)?;
-        snapshots.insert(new_snapshot_id, new_snapshot);
+        self.snapshots.insert(new_snapshot_id, new_snapshot);
 
         Ok(SnapshotPointer::new(self, new_snapshot_id))
     }
 
     pub(crate) fn get_snapshot(
-        &self,
+        &mut self,
         snapshot_id: u64,
     ) -> Result<SnapshotPointer<P, V>, TrieError> {
-        let snapshots = self
+        let _snapshot = self
             .snapshots
-            .read()
-            .map_err(|_| TrieError::SnapshotMutexError)?;
-
-        let _snapshot = snapshots
             .get(&snapshot_id)
             .ok_or(TrieError::SnapshotNotFound)?;
         Ok(SnapshotPointer::new(self, snapshot_id))
@@ -709,35 +654,24 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         }
 
         let root = self.root.as_ref().unwrap();
-
-        let snapshot = Snapshot {
-            id: snapshot_id,
-            ts: root.ts() + 1,
-            root: RwLock::new(root.clone()),
-            readers: RwLock::new(HashMap::new()),
-            max_active_readers: AtomicU64::new(0),
-            closed: false,
-        };
+        let snapshot = Snapshot::new(snapshot_id, root.clone(), root.ts() + 1);
 
         Ok(snapshot)
     }
 
-    pub(crate) fn close(&self, snapshot_id: u64) -> Result<(), TrieError> {
-        let mut snapshots = self
+    pub(crate) fn close(&mut self, snapshot_id: u64) -> Result<(), TrieError> {
+        let snapshot = self
             .snapshots
-            .write()
-            .map_err(|_| TrieError::SnapshotMutexError)?;
-        snapshots.remove(&snapshot_id);
+            .get_mut(&snapshot_id)
+            .ok_or(TrieError::SnapshotNotFound)?;
+        snapshot.close()?;
+        self.snapshots.remove(&snapshot_id);
         Ok(())
     }
 
     // Method to get the count of snapshots
     pub fn snapshot_count(&self) -> Result<usize, TrieError> {
-        let snapshots = self
-            .snapshots
-            .read()
-            .map_err(|_| TrieError::SnapshotMutexError)?;
-        Ok(snapshots.len())
+        Ok(self.snapshots.len())
     }
 
     pub fn iter(&self) -> Iter<P, V> {
@@ -773,6 +707,10 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         }
 
         Range::empty()
+    }
+
+    pub fn get_snap(&mut self, id: u64) -> Option<&mut Snapshot<P, V>> {
+        self.snapshots.get_mut(&id)
     }
 }
 
@@ -821,8 +759,8 @@ mod tests {
             Ok(words) => {
                 for word in words {
                     let key = VectorKey::from_str(&word);
-                    let (_, val, _ts) = tree.get(&key).unwrap();
-                    assert_eq!(*val, 1);
+                    let (_, val, _ts) = tree.get(&key, 0).unwrap();
+                    assert_eq!(val, 1);
                 }
             }
             Err(err) => {
@@ -873,19 +811,25 @@ mod tests {
 
     #[test]
     fn test_string_long() {
-        let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
+        let mut tree = Tree::<ArrayPrefix<20>, i32>::new();
         tree.insert(&VectorKey::from_str("amyelencephalia"), 1, 0);
         tree.insert(&VectorKey::from_str("amyelencephalic"), 2, 0);
         tree.insert(&VectorKey::from_str("amyelencephalous"), 3, 0);
 
-        let (_, val, _ts) = tree.get(&VectorKey::from_str("amyelencephalia")).unwrap();
-        assert_eq!(*val, 1);
+        let (_, val, _ts) = tree
+            .get(&VectorKey::from_str("amyelencephalia"), 0)
+            .unwrap();
+        assert_eq!(val, 1);
 
-        let (_, val, _ts) = tree.get(&VectorKey::from_str("amyelencephalic")).unwrap();
-        assert_eq!(*val, 2);
+        let (_, val, _ts) = tree
+            .get(&VectorKey::from_str("amyelencephalic"), 0)
+            .unwrap();
+        assert_eq!(val, 2);
 
-        let (_, val, _ts) = tree.get(&VectorKey::from_str("amyelencephalous")).unwrap();
-        assert_eq!(*val, 3);
+        let (_, val, _ts) = tree
+            .get(&VectorKey::from_str("amyelencephalous"), 0)
+            .unwrap();
+        assert_eq!(val, 3);
     }
 
     #[test]
@@ -893,8 +837,8 @@ mod tests {
         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
         let key = VectorKey::from_str("abc");
         tree.insert(&key, 1, 0);
-        let (_, val, _ts) = tree.get(&key).unwrap();
-        assert_eq!(*val, 1);
+        let (_, val, _ts) = tree.get(&key, 0).unwrap();
+        assert_eq!(val, 1);
     }
 
     #[test]
@@ -919,11 +863,11 @@ mod tests {
         tree.insert(key, 1, 0);
 
         assert!(tree.remove(key));
-        assert!(tree.get(key).is_none());
+        assert!(tree.get(key, 0).is_none());
     }
 
     // Inserting Two values into the tree and removing one of them
-    // should result in a tree root of type LEAF
+    // should result in a tree root of type twig
     #[test]
     fn test_insert2_and_remove1_and_root_should_be_node4() {
         let key1 = &VectorKey::from_str("test1");
@@ -942,7 +886,7 @@ mod tests {
     // // Inserting Two values into a tree and deleting them both
     // // should result in a nil tree root
     // // This tests the expansion of the root into a NODE4 and
-    // // successfully collapsing into a LEAF and then nil upon successive removals
+    // // successfully collapsing into a twig and then nil upon successive removals
     // #[test]
     // fn test_insert2_and_remove2_and_root_should_be_nil() {
     //     let key1 = &VectorKey::from_str("test1");
@@ -971,9 +915,7 @@ mod tests {
             tree.insert(key, 1, 0);
         }
 
-        assert!(
-            tree.remove(&VectorKey::from_slice(&1u32.to_be_bytes()))
-        );
+        assert!(tree.remove(&VectorKey::from_slice(&1u32.to_be_bytes())));
 
         assert!(tree.root.is_some());
         let root = tree.root.unwrap();
@@ -984,7 +926,7 @@ mod tests {
     //     // Inserting Five values into a tree and deleting all of them
     //     // should result in a tree root of type nil
     //     // This tests the expansion of the root into a NODE16 and
-    //     // successfully collapsing into a NODE4, Leaf, then nil
+    //     // successfully collapsing into a NODE4, twig, then nil
     //     #[test]
     //     fn test_insert5_and_remove5_and_root_should_be_nil() {
     //         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
@@ -1015,9 +957,7 @@ mod tests {
             tree.insert(key, 1, 0);
         }
 
-        assert!(
-            tree.remove(&VectorKey::from_slice(&2u32.to_be_bytes()))
-        );
+        assert!(tree.remove(&VectorKey::from_slice(&2u32.to_be_bytes())));
 
         assert!(tree.root.is_some());
         let root = tree.root.unwrap();
@@ -1043,7 +983,7 @@ mod tests {
     // // Inserting 17 values into a tree and removing them all should
     // // result in a tree of root type nil
     // // This tests the expansion of the root into a NODE48, and
-    // // successfully collapsing into a NODE16, NODE4, Leaf, and then nil
+    // // successfully collapsing into a NODE16, NODE4, twig, and then nil
     // #[test]
     // fn test_insert17_and_remove17_and_root_should_be_nil() {
     //     let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
@@ -1074,9 +1014,7 @@ mod tests {
             tree.insert(key, 1, 0);
         }
 
-        assert!(
-            tree.remove(&VectorKey::from_slice(&2u32.to_be_bytes()))
-        );
+        assert!(tree.remove(&VectorKey::from_slice(&2u32.to_be_bytes())));
 
         assert!(tree.root.is_some());
         let root = tree.root.unwrap();
@@ -1102,7 +1040,7 @@ mod tests {
     //     // // Inserting 49 values into a tree and removing all of them should
     //     // // result in a nil tree root
     //     // // This tests the expansion of the root into a NODE256, and
-    //     // // successfully collapsing into a Node48, Node16, Node4, Leaf, and finally nil
+    //     // // successfully collapsing into a Node48, Node16, Node4, twig, and finally nil
     //     // #[test]
     //     // fn test_insert49_and_remove49_and_root_should_be_nil() {
     //     //     let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
@@ -1165,14 +1103,14 @@ mod tests {
 
         let mut curr_ts = 1;
         for kvt in &kvts {
-            let (_, val, ts) = tree.get(&VectorKey::from(kvt.k.to_vec())).unwrap();
-            assert_eq!(*val, 1);
+            let (_, val, ts) = tree.get(&VectorKey::from(kvt.k.to_vec()), 0).unwrap();
+            assert_eq!(val, 1);
 
             if kvt.ts == 0 {
                 // zero-valued timestamps should be associated with current time plus one
-                assert_eq!(curr_ts, *ts);
+                assert_eq!(curr_ts, ts);
             } else {
-                assert_eq!(kvt.ts, *ts);
+                assert_eq!(kvt.ts, ts);
             }
 
             curr_ts += 1;
@@ -1194,9 +1132,9 @@ mod tests {
         assert!(tree.insert(key1, 1, 0).is_ok());
 
         // get key1 should return ts 2 as the same key was inserted and updated
-        let (_, val, ts) = tree.get(key1).unwrap();
-        assert_eq!(*val, 1);
-        assert_eq!(*ts, 2);
+        let (_, val, ts) = tree.get(key1, 0).unwrap();
+        assert_eq!(val, 1);
+        assert_eq!(ts, 2);
 
         // update key1 with older timestamp should fail
         assert!(tree.insert(key1, 1, 1).is_err());
@@ -1204,9 +1142,9 @@ mod tests {
 
         // update key1 with newer timestamp should pass
         assert!(tree.insert(key1, 1, 8).is_ok());
-        let (_, val, ts) = tree.get(key1).unwrap();
-        assert_eq!(*val, 1);
-        assert_eq!(*ts, 8);
+        let (_, val, ts) = tree.get(key1, 0).unwrap();
+        assert_eq!(val, 1);
+        assert_eq!(ts, 8);
 
         assert_eq!(tree.ts(), 8);
     }
@@ -1223,18 +1161,18 @@ mod tests {
 
         assert!(tree.insert(key1, 1, 2).is_err());
         assert_eq!(initial_ts, tree.ts());
-        let (_, val, ts) = tree.get(key1).unwrap();
-        assert_eq!(*val, 1);
-        assert_eq!(*ts, 10);
+        let (_, val, ts) = tree.get(key1, 0).unwrap();
+        assert_eq!(val, 1);
+        assert_eq!(ts, 10);
 
         assert!(tree.insert(key2, 1, 15).is_ok());
         let initial_ts = tree.ts();
 
         assert!(tree.insert(key2, 1, 11).is_err());
         assert_eq!(initial_ts, tree.ts());
-        let (_, val, ts) = tree.get(key2).unwrap();
-        assert_eq!(*val, 1);
-        assert_eq!(*ts, 15);
+        let (_, val, ts) = tree.get(key2, 0).unwrap();
+        assert_eq!(val, 1);
+        assert_eq!(ts, 15);
 
         // check if the max timestamp of the tree is the max of the two inserted timestamps
         assert_eq!(tree.ts(), 15);
@@ -1330,9 +1268,10 @@ mod tests {
             let _value = i;
             let random_val = rng.gen_range(0..count);
             let random_key: ArrayKey<16> = random_val.into();
-            if tree.get(&random_key).is_none() && tree.insert(&random_key, random_val, 0).unwrap().is_none()
+            if tree.get(&random_key, 0).is_none()
+                && tree.insert(&random_key, random_val, 0).unwrap().is_none()
             {
-                let result = tree.get(&random_key);
+                let result = tree.get(&random_key, 0);
                 assert!(result.is_some());
                 keys_inserted.insert(random_val, random_val);
             }
@@ -1346,5 +1285,29 @@ mod tests {
             assert_eq!(art_key, *btree_entry.0);
             assert_eq!(art_entry.1, btree_entry.1);
         }
+    }
+
+    #[test]
+    fn test_same_key_with_versions() {
+        let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
+        let key1 = VectorKey::from_str("abc");
+        let key2 = VectorKey::from_str("efg");
+        tree.insert(&key1, 1, 0);
+        tree.insert(&key1, 2, 10);
+        tree.insert(&key2, 3, 11);
+        let (_, val, _ts) = tree.get(&key1, 1).unwrap();
+        assert_eq!(val, 1);
+        let (_, val, _ts) = tree.get(&key1, 10).unwrap();
+        assert_eq!(val, 2);
+        let (_, val, _ts) = tree.get(&key2, 11).unwrap();
+        assert_eq!(val, 3);
+
+        let mut len = 0;
+        let tree_iter = tree.iter();
+        for _ in tree_iter {
+            len += 1;
+        }
+
+        assert_eq!(len, 3);
     }
 }

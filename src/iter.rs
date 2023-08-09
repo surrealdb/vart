@@ -1,20 +1,32 @@
-use std::collections::Bound;
+use std::collections::{Bound, VecDeque};
 use std::sync::Arc;
 
-use crate::art::{Node, TrieError};
+use crate::art::{Node, NodeType, TrieError};
 use crate::snapshot::Snapshot;
-use crate::{Key, PrefixTrait};
+use crate::{Key, Prefix, PrefixTrait};
+
+pub struct Leaf<'a, K: Prefix + Clone, V: Clone> {
+    pub(crate) key: &'a K,
+    pub(crate) value: &'a V,
+    pub(crate) ts: &'a u64,
+}
+
+impl<'a, K: Prefix + Clone, V: Clone> Leaf<'a, K, V> {
+    pub fn new(key: &'a K, value: &'a V, ts: &'a u64) -> Self {
+        Self { key, value, ts }
+    }
+}
 
 // TODO: need to add more tests for snapshot readers
 pub struct IterationPointer<'a, P: PrefixTrait, V: Clone> {
-    id: u64,
+    pub(crate) id: u64,
     root: Arc<Node<P, V>>,
-    snap: &'a Snapshot<P, V>,
+    snap: &'a mut Snapshot<P, V>,
 }
 
 impl<'a, P: PrefixTrait, V: Clone> IterationPointer<'a, P, V> {
     pub fn new(
-        snap: &'a Snapshot<P, V>,
+        snap: &'a mut Snapshot<P, V>,
         root: Arc<Node<P, V>>,
         id: u64,
     ) -> IterationPointer<'a, P, V> {
@@ -46,12 +58,6 @@ impl<'a, P: PrefixTrait, V: Clone> NodeIter<'a, P, V> {
         }
     }
 }
-
-// impl<'a, P: PrefixTrait, V: Clone> Iterator for NodeIter<'a, P, V> {
-//     fn next_back(&mut self) -> Option<Self::Item> {
-//         self.node.next_back()
-//     }
-// }
 
 impl<'a, P: PrefixTrait, V: Clone> Iterator for NodeIter<'a, P, V> {
     type Item = (u8, &'a Arc<Node<P, V>>);
@@ -91,15 +97,19 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
 }
 
 struct IterState<'a, P: PrefixTrait + 'a, V: Clone> {
-    inner_node_iter: Vec<NodeIter<'a, P, V>>,
+    node_iter: Vec<NodeIter<'a, P, V>>,
+    leafs: VecDeque<Leaf<'a, P, V>>,
 }
 
 impl<'a, P: PrefixTrait + 'a, V: Clone> IterState<'a, P, V> {
     pub fn new(node: &'a Node<P, V>) -> Self {
-        let mut inner_node_iter = Vec::new();
-        inner_node_iter.push(NodeIter::new(node.iter()));
+        let mut node_iter = Vec::new();
+        node_iter.push(NodeIter::new(node.iter()));
 
-        Self { inner_node_iter }
+        Self {
+            node_iter,
+            leafs: VecDeque::new(),
+        }
     }
 }
 
@@ -107,25 +117,37 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
     type Item = (Vec<u8>, &'a V, &'a u64);
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let Some(last_iter) = self.inner_node_iter.last_mut() else {
-                return None;
-            };
+        'outer: while let Some(node) = self.node_iter.last_mut() {
+            let e = node.next();
+            loop {
+                match e {
+                    None => {
+                        self.node_iter.pop().unwrap();
+                        break;
+                    }
+                    Some(other) => {
+                        if other.1.is_twig() {
+                            let NodeType::Twig(twig) = &other.1.node_type else {
+                                panic!("should not happen");
+                            };
 
-            let Some((_, node)) = last_iter.next() else{
-                self.inner_node_iter.pop();
-                continue;
-
-            };
-
-            if node.is_leaf() {
-                if let Some(v) = node.get_value() {
-                    return Some((v.0.as_byte_slice().to_vec(), v.1, v.2));
+                            for v in twig.iter() {
+                                let new_leaf = Leaf::new(&twig.key, &v.value, &v.ts);
+                                self.leafs.push_back(new_leaf);
+                            }
+                            break 'outer;
+                        } else {
+                            self.node_iter.push(NodeIter::new(other.1.iter()));
+                            break;
+                        }
+                    }
                 }
-            } else {
-                self.inner_node_iter.push(NodeIter::new(node.iter()));
             }
         }
+
+        self.leafs
+            .pop_front()
+            .map(|leaf| (leaf.key.as_byte_slice().to_vec(), leaf.value, leaf.ts))
     }
 }
 
@@ -150,7 +172,9 @@ pub struct Range<'a, K: Key + 'a, P: PrefixTrait, V: Clone> {
     inner: Box<dyn RangeIteratorTrait<'a, K, P, V> + 'a>,
 }
 
-impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeIteratorTrait<'a, K, P, V> for EmptyRangeIterator {
+impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeIteratorTrait<'a, K, P, V>
+    for EmptyRangeIterator
+{
     fn next(&mut self) -> RangeResult<'a, V> {
         RangeResult::Yield(None)
     }
@@ -166,7 +190,9 @@ impl<'a, K: Key, P: PrefixTrait, V: Clone> RangeIterator<'a, K, P, V> {
     }
 }
 
-impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeIteratorTrait<'a, K, P, V> for RangeIterator<'a, K, P, V> {
+impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeIteratorTrait<'a, K, P, V>
+    for RangeIterator<'a, K, P, V>
+{
     fn next(&mut self) -> RangeResult<'a, V> {
         let next_item = self.iter.next();
         match next_item {
@@ -174,7 +200,9 @@ impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeIteratorTrait<'a, K, P, V> 
                 let next_key_slice = key.as_slice();
                 match &self.end_bound {
                     Bound::Included(k) if next_key_slice == k.as_slice() => RangeResult::Continue,
-                    Bound::Excluded(k) if next_key_slice == k.as_slice() => RangeResult::Yield(None),
+                    Bound::Excluded(k) if next_key_slice == k.as_slice() => {
+                        RangeResult::Yield(None)
+                    }
                     Bound::Unbounded => RangeResult::Yield(Some((key, value, ts))),
                     _ => RangeResult::Yield(Some((key, value, ts))),
                 }

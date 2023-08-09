@@ -1,9 +1,10 @@
 // #[allow(warnings)]
-mod art;
+pub mod art;
 pub mod iter;
 pub mod node;
 pub mod snapshot;
 
+use std::cmp::{Ord, Ordering, PartialOrd};
 use std::fmt::Debug;
 
 // "Partial" in the Adaptive Radix Tree paper refers to "partial keys", a technique employed
@@ -18,6 +19,7 @@ pub trait Prefix {
     fn prefix_after(&self, start: usize) -> Self;
     fn longest_common_prefix(&self, slice: &[u8]) -> usize;
     fn as_byte_slice(&self) -> &[u8];
+    fn cmp(&self, other: &Self) -> Ordering;
 }
 
 /// The `Key` trait provides a specific abstraction for keys, which are sequences of bytes.
@@ -36,6 +38,7 @@ pub trait Key: Clone {
         self.prefix_after(0)
     }
 }
+
 pub trait PrefixTrait: Prefix + Clone + PartialEq + Debug + for<'a> From<&'a [u8]> {}
 impl<T: Prefix + Clone + PartialEq + Debug + for<'a> From<&'a [u8]>> PrefixTrait for T {}
 
@@ -52,6 +55,12 @@ pub struct ArrayPrefix<const SIZE: usize> {
 impl<const SIZE: usize> PartialEq for ArrayPrefix<SIZE> {
     fn eq(&self, other: &Self) -> bool {
         self.content[..self.len] == other.content[..other.len]
+    }
+}
+
+impl<const SIZE: usize> PartialOrd for ArrayPrefix<SIZE> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -84,6 +93,10 @@ impl<const SIZE: usize> Prefix for ArrayPrefix<SIZE> {
     // Returns slice of the internal data up to the actual length
     fn as_byte_slice(&self) -> &[u8] {
         &self.content[..self.len]
+    }
+
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.content[..self.len].cmp(&other.content[..other.len])
     }
 
     // Creates a new instance of ArrayPrefix consisting only of the initial part of the content
@@ -228,6 +241,26 @@ impl<const N: usize> ArrayKey<N> {
             len: data.len(),
         }
     }
+
+    pub fn from_str(s: &str) -> Self {
+        assert!(s.len() < N, "data length is greater than array length");
+        let mut arr = [0; N];
+        arr[..s.len()].copy_from_slice(s.as_bytes());
+        Self {
+            data: arr,
+            len: s.len() + 1,
+        }
+    }
+
+    pub fn from_string(s: &String) -> Self {
+        assert!(s.len() < N, "data length is greater than array length");
+        let mut arr = [0; N];
+        arr[..s.len()].copy_from_slice(s.as_bytes());
+        Self {
+            data: arr,
+            len: s.len() + 1,
+        }
+    }
 }
 
 impl<const N: usize> From<u8> for ArrayKey<N> {
@@ -245,6 +278,23 @@ impl<const N: usize> From<u16> for ArrayKey<N> {
 impl<const N: usize> From<u64> for ArrayKey<N> {
     fn from(data: u64) -> Self {
         Self::from_slice(data.to_be_bytes().as_ref())
+    }
+}
+
+impl<const N: usize> From<&str> for ArrayKey<N> {
+    fn from(data: &str) -> Self {
+        Self::from_str(data)
+    }
+}
+
+impl<const N: usize> From<String> for ArrayKey<N> {
+    fn from(data: String) -> Self {
+        Self::from_string(&data)
+    }
+}
+impl<const N: usize> From<&String> for ArrayKey<N> {
+    fn from(data: &String) -> Self {
+        Self::from_string(data)
     }
 }
 
