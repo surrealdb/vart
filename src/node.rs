@@ -67,7 +67,6 @@ impl<K: Prefix + Clone, V: Clone> TwigNode<K, V> {
             .unwrap_or(self.ts)
     }
 
-    // TODO: write tests for this func
     pub fn insert(&self, value: V, ts: u64) -> TwigNode<K, V> {
         let mut new_values = self.values.clone();
 
@@ -94,7 +93,6 @@ impl<K: Prefix + Clone, V: Clone> TwigNode<K, V> {
         }
     }
 
-    // TODO: write tests for this func
     pub fn insert_mut(&mut self, value: V, ts: u64) {
         let new_leaf_value = LeafValue::new(value, ts);
 
@@ -112,12 +110,10 @@ impl<K: Prefix + Clone, V: Clone> TwigNode<K, V> {
         self.ts = self.ts(); // Update LeafNode's timestamp
     }
 
-    // TODO: write tests for this func
     pub fn get_latest_leaf(&self) -> Option<Arc<LeafValue<V>>> {
         self.values.iter().max_by_key(|value| value.ts).cloned()
     }
 
-    // TODO: write tests for this func
     pub fn get_latest_value(&self) -> Option<V> {
         self.values
             .iter()
@@ -125,7 +121,6 @@ impl<K: Prefix + Clone, V: Clone> TwigNode<K, V> {
             .map(|value| value.value.clone())
     }
 
-    // TODO: write tests for this func
     pub fn get_leaf_by_ts(&self, timestamp: u64) -> Option<Arc<LeafValue<V>>> {
         self.values
             .iter()
@@ -134,7 +129,6 @@ impl<K: Prefix + Clone, V: Clone> TwigNode<K, V> {
             .cloned()
     }
 
-    // TODO: write tests for this func
     pub fn iter(&self) -> impl Iterator<Item = &Arc<LeafValue<V>>> {
         self.values.iter()
     }
@@ -1130,5 +1124,80 @@ mod tests {
         // the parent's timestamp should be updated to 10.
         parent.update_ts();
         assert_eq!(parent.ts(), 10);
+    }
+
+    #[test]
+    fn test_twig_insert() {
+        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
+
+        let node =
+            TwigNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+
+        let new_node = node.insert(42, 123);
+        assert_eq!(node.values.len(), 0);
+        assert_eq!(new_node.values.len(), 1);
+        assert_eq!(new_node.values[0].value, 42);
+        assert_eq!(new_node.values[0].ts, 123);
+    }
+
+    #[test]
+    fn test_twig_insert_mut() {
+        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
+
+        let mut node =
+            TwigNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+
+        node.insert_mut(42, 123);
+        assert_eq!(node.values.len(), 1);
+        assert_eq!(node.values[0].value, 42);
+        assert_eq!(node.values[0].ts, 123);
+    }
+
+    #[test]
+    fn test_twig_get_latest_leaf() {
+        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
+        let mut node =
+            TwigNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        node.insert_mut(42, 123);
+        node.insert_mut(43, 124);
+        let latest_leaf = node.get_latest_leaf();
+        assert_eq!(latest_leaf.unwrap().value, 43);
+    }
+
+    #[test]
+    fn test_twig_get_latest_value() {
+        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
+        let mut node =
+            TwigNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        node.insert_mut(42, 123);
+        node.insert_mut(43, 124);
+        let latest_value = node.get_latest_value();
+        assert_eq!(latest_value.unwrap(), 43);
+    }
+
+    #[test]
+    fn test_twig_get_leaf_by_ts() {
+        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
+        let mut node =
+            TwigNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        node.insert_mut(42, 123);
+        node.insert_mut(43, 124);
+        let leaf_by_ts = node.get_leaf_by_ts(123);
+        assert_eq!(leaf_by_ts.unwrap().value, 42);
+        let leaf_by_ts = node.get_leaf_by_ts(124);
+        assert_eq!(leaf_by_ts.unwrap().value, 43);
+    }
+
+    #[test]
+    fn test_twig_iter() {
+        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
+        let mut node =
+            TwigNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        node.insert_mut(42, 123);
+        node.insert_mut(43, 124);
+        let mut iter = node.iter();
+        assert_eq!(iter.next().unwrap().value, 42);
+        assert_eq!(iter.next().unwrap().value, 43);
+        assert!(iter.next().is_none());
     }
 }
