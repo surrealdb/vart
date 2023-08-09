@@ -3,19 +3,7 @@ use std::sync::Arc;
 
 use crate::art::{Node, NodeType, TrieError};
 use crate::snapshot::Snapshot;
-use crate::{Key, Prefix, PrefixTrait};
-
-pub struct Leaf<'a, K: Prefix + Clone, V: Clone> {
-    pub(crate) key: &'a K,
-    pub(crate) value: &'a V,
-    pub(crate) ts: &'a u64,
-}
-
-impl<'a, K: Prefix + Clone, V: Clone> Leaf<'a, K, V> {
-    pub fn new(key: &'a K, value: &'a V, ts: &'a u64) -> Self {
-        Self { key, value, ts }
-    }
-}
+use crate::{Key, PrefixTrait};
 
 // TODO: need to add more tests for snapshot readers
 pub struct IterationPointer<'a, P: PrefixTrait, V: Clone> {
@@ -98,7 +86,7 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
 
 struct IterState<'a, P: PrefixTrait + 'a, V: Clone> {
     node_iter: Vec<NodeIter<'a, P, V>>,
-    leafs: VecDeque<Leaf<'a, P, V>>,
+    leafs: VecDeque<(&'a P, &'a V, &'a u64)>,
 }
 
 impl<'a, P: PrefixTrait + 'a, V: Clone> IterState<'a, P, V> {
@@ -132,8 +120,7 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
                             };
 
                             for v in twig.iter() {
-                                let new_leaf = Leaf::new(&twig.key, &v.value, &v.ts);
-                                self.leafs.push_back(new_leaf);
+                                self.leafs.push_back((&twig.key, &v.value, &v.ts));
                             }
                             break 'outer;
                         } else {
@@ -147,7 +134,7 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
 
         self.leafs
             .pop_front()
-            .map(|leaf| (leaf.key.as_byte_slice().to_vec(), leaf.value, leaf.ts))
+            .map(|leaf| (leaf.0.as_byte_slice().to_vec(), leaf.1, leaf.2))
     }
 }
 
