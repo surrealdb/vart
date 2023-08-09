@@ -43,13 +43,13 @@ impl<K: Prefix + Clone, V: Clone> LeafValue<K, V> {
 
 impl<K: Prefix + Clone, V: Clone> TwigNode<K, V> {
     pub fn new(prefix: K) -> Self {
-        let new_node = TwigNode {
-            prefix: prefix,
+        
+
+        TwigNode {
+            prefix,
             values: Vec::new(),
             ts: 0,
-        };
-
-        new_node
+        }
     }
 
     pub fn clone(&self) -> Self {
@@ -70,7 +70,7 @@ impl<K: Prefix + Clone, V: Clone> TwigNode<K, V> {
         
         let new_leaf_value = LeafValue::new(key.clone(), value, ts);
 
-        if let Ok(existing_index) = new_values.binary_search_by(|v| v.key.cmp(&key)) {
+        if let Ok(existing_index) = new_values.binary_search_by(|v| v.key.cmp(key)) {
             // Update existing key with new value and ts
             new_values[existing_index] = Arc::new(new_leaf_value);
         } else {
@@ -95,7 +95,7 @@ impl<K: Prefix + Clone, V: Clone> TwigNode<K, V> {
     pub fn insert_mut(&mut self, key: &K, value: V, ts: u64) {
         let new_leaf_value = LeafValue::new(key.clone(), value, ts);
 
-        if let Ok(existing_index) = self.values.binary_search_by(|v| v.key.cmp(&key)) {
+        if let Ok(existing_index) = self.values.binary_search_by(|v| v.key.cmp(key)) {
             // Update existing key with new value and ts
             self.values[existing_index] = Arc::new(new_leaf_value);
         } else {
@@ -133,6 +133,11 @@ impl<K: Prefix + Clone, V: Clone> TwigNode<K, V> {
             .iter()
             .filter(|value| value.key.cmp(key) == std::cmp::Ordering::Equal && value.ts <= timestamp)
             .max_by_key(|value| value.ts).cloned()
+    }
+
+    // TODO: write tests for this func
+    pub fn iter(&self) -> impl Iterator<Item = &Arc<LeafValue<K, V>>> {
+        self.values.iter()
     }
 }
 

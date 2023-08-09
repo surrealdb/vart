@@ -1,7 +1,8 @@
-use std::collections::Bound;
+use std::collections::{Bound, VecDeque};
 use std::sync::Arc;
 
-use crate::art::{Node, TrieError};
+use crate::art::{Node, TrieError, NodeType};
+use crate::node::{LeafValue};
 use crate::snapshot::Snapshot;
 use crate::{Key, PrefixTrait};
 
@@ -47,11 +48,6 @@ impl<'a, P: PrefixTrait, V: Clone> NodeIter<'a, P, V> {
     }
 }
 
-// impl<'a, P: PrefixTrait, V: Clone> Iterator for NodeIter<'a, P, V> {
-//     fn next_back(&mut self) -> Option<Self::Item> {
-//         self.node.next_back()
-//     }
-// }
 
 impl<'a, P: PrefixTrait, V: Clone> Iterator for NodeIter<'a, P, V> {
     type Item = (u8, &'a Arc<Node<P, V>>);
@@ -91,15 +87,16 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
 }
 
 struct IterState<'a, P: PrefixTrait + 'a, V: Clone> {
-    inner_node_iter: Vec<NodeIter<'a, P, V>>,
+    node_iter: Vec<NodeIter<'a, P, V>>,
+    leafs: VecDeque<&'a Arc<LeafValue<P, V>>>,
 }
 
 impl<'a, P: PrefixTrait + 'a, V: Clone> IterState<'a, P, V> {
     pub fn new(node: &'a Node<P, V>) -> Self {
-        let mut inner_node_iter = Vec::new();
-        inner_node_iter.push(NodeIter::new(node.iter()));
+        let mut node_iter = Vec::new();
+        node_iter.push(NodeIter::new(node.iter()));
 
-        Self { inner_node_iter }
+        Self { node_iter, leafs: VecDeque::new() }
     }
 }
 
@@ -107,25 +104,56 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
     type Item = (Vec<u8>, &'a V, &'a u64);
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let Some(last_iter) = self.inner_node_iter.last_mut() else {
-                return None;
-            };
-
-            let Some((_, node)) = last_iter.next() else{
-                self.inner_node_iter.pop();
-                continue;
-
-            };
-
-            if node.is_twig() {
-                if let Some(v) = node.get_value() {
-                    return Some((v.0.as_byte_slice().to_vec(), v.1, v.2));
+        'outer: while let Some(node) = self.node_iter.last_mut() {
+            let e = node.next();
+            loop {
+                match e {
+                    None => {
+                        self.node_iter.pop().unwrap();
+                        break;
+                    }
+                    Some(other) =>{
+                        if other.1.is_twig() {
+                            let NodeType::Twig(twig) = &other.1.node_type else {
+                                panic!("should not happen");
+                            };
+                                        
+                            for v in twig.iter() {
+                                self.leafs.push_back(v);
+                            }
+                            break 'outer;
+                        } else {
+                                self.node_iter.push(NodeIter::new(other.1.iter()));
+                                break;
+                        }
+                    }
                 }
-            } else {
-                self.inner_node_iter.push(NodeIter::new(node.iter()));
             }
         }
+
+
+        self.leafs.pop_front().map(|leaf| (leaf.key.as_byte_slice().to_vec(), &leaf.value, &leaf.ts))
+
+
+        // loop {
+        //     let Some(last_iter) = self.node_iter.last_mut() else {
+        //         return None;
+        //     };
+
+        //     let Some((_, node)) = last_iter.next() else{
+        //         self.node_iter.pop();
+        //         continue;
+
+        //     };
+
+        //     if node.is_twig() {
+        //         if let Some(v) = node.get_value() {
+        //             return Some((v.0.as_byte_slice().to_vec(), v.1, v.2));
+        //         }
+        //     } else {
+        //         self.node_iter.push(NodeIter::new(node.iter()));
+        //     }
+        // }
     }
 }
 

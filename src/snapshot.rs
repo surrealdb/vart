@@ -146,7 +146,7 @@ impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
         let (_, value, ts) = Node::get_recurse(root.as_ref(), key)?;
 
         // Return the value and timestamp wrapped in an Option
-        Some((value.clone(), *ts))
+        Some((value, ts))
     }
 
     /// Returns the timestamp of the snapshot.

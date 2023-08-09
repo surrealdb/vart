@@ -68,7 +68,7 @@ impl fmt::Display for TrieError {
 // Inner nodes, which map prefix(prefix) keys to other nodes,
 // and twig nodes, which store the values corresponding to the key.
 pub struct Node<P: Prefix + Clone, V: Clone> {
-    node_type: NodeType<P, V>, // Type of the node
+    pub(crate) node_type: NodeType<P, V>, // Type of the node
 }
 
 impl<P: Prefix + Clone, V: Clone> Timestamp for Node<P, V> {
@@ -368,7 +368,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
 
     // TODO: fix having separate key and prefix traits to avoid copying
     #[inline]
-    pub fn get_value(&self, key: P) -> Option<(&P, &V, &u64)> {
+    pub fn get_value(&self, key: P) -> Option<(P, V, u64)> {
         let NodeType::Twig(twig) = &self.node_type else {
             return None;
         };
@@ -376,7 +376,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             return None;
         };
         // TODO: should return copy of value or reference?
-        Some((&val.key, &val.value, &val.ts))
+        Some((val.key.clone(), val.value.clone(), val.ts))
     }
 
     pub fn node_type_name(&self) -> String {
@@ -511,10 +511,10 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
         (Some(cur_node.clone()), false)
     }
 
-    pub fn get_recurse<'a, K: Key>(
-        cur_node: &'a Node<P, V>,
+    pub fn get_recurse<K: Key>(
+        cur_node: &Node<P, V>,
         key: &K,
-    ) -> Option<(&'a P, &'a V, &'a u64)> {
+    ) -> Option<(P, V, u64)> {
         let mut cur_node = cur_node;
         let mut depth = 0;
         loop {
@@ -546,7 +546,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node16(n) => Box::new(n.iter()),
             NodeType::Node48(n) => Box::new(n.iter()),
             NodeType::Node256(n) => Box::new(n.iter()),
-            NodeType::Twig(_) => Box::new(std::iter::empty()),
+            NodeType::Twig(_n) => Box::new(std::iter::empty()),
         };
     }
 }
@@ -625,7 +625,7 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         is_deleted
     }
 
-    pub fn get<K: Key>(&self, key: &K) -> Option<(&P, &V, &u64)> {
+    pub fn get<K: Key>(&self, key: &K) -> Option<(P, V, u64)> {
         Node::get_recurse(self.root.as_ref()?, key)
     }
 
@@ -794,7 +794,7 @@ mod tests {
                 for word in words {
                     let key = VectorKey::from_str(&word);
                     let (_, val, _ts) = tree.get(&key).unwrap();
-                    assert_eq!(*val, 1);
+                    assert_eq!(val, 1);
                 }
             }
             Err(err) => {
@@ -851,13 +851,13 @@ mod tests {
         tree.insert(&VectorKey::from_str("amyelencephalous"), 3, 0);
 
         let (_, val, _ts) = tree.get(&VectorKey::from_str("amyelencephalia")).unwrap();
-        assert_eq!(*val, 1);
+        assert_eq!(val, 1);
 
         let (_, val, _ts) = tree.get(&VectorKey::from_str("amyelencephalic")).unwrap();
-        assert_eq!(*val, 2);
+        assert_eq!(val, 2);
 
         let (_, val, _ts) = tree.get(&VectorKey::from_str("amyelencephalous")).unwrap();
-        assert_eq!(*val, 3);
+        assert_eq!(val, 3);
     }
 
     #[test]
@@ -866,7 +866,7 @@ mod tests {
         let key = VectorKey::from_str("abc");
         tree.insert(&key, 1, 0);
         let (_, val, _ts) = tree.get(&key).unwrap();
-        assert_eq!(*val, 1);
+        assert_eq!(val, 1);
     }
 
     #[test]
@@ -1138,13 +1138,13 @@ mod tests {
         let mut curr_ts = 1;
         for kvt in &kvts {
             let (_, val, ts) = tree.get(&VectorKey::from(kvt.k.to_vec())).unwrap();
-            assert_eq!(*val, 1);
+            assert_eq!(val, 1);
 
             if kvt.ts == 0 {
                 // zero-valued timestamps should be associated with current time plus one
-                assert_eq!(curr_ts, *ts);
+                assert_eq!(curr_ts, ts);
             } else {
-                assert_eq!(kvt.ts, *ts);
+                assert_eq!(kvt.ts, ts);
             }
 
             curr_ts += 1;
@@ -1167,8 +1167,8 @@ mod tests {
 
         // get key1 should return ts 2 as the same key was inserted and updated
         let (_, val, ts) = tree.get(key1).unwrap();
-        assert_eq!(*val, 1);
-        assert_eq!(*ts, 2);
+        assert_eq!(val, 1);
+        assert_eq!(ts, 2);
 
         // update key1 with older timestamp should fail
         assert!(tree.insert(key1, 1, 1).is_err());
@@ -1177,8 +1177,8 @@ mod tests {
         // update key1 with newer timestamp should pass
         assert!(tree.insert(key1, 1, 8).is_ok());
         let (_, val, ts) = tree.get(key1).unwrap();
-        assert_eq!(*val, 1);
-        assert_eq!(*ts, 8);
+        assert_eq!(val, 1);
+        assert_eq!(ts, 8);
 
         assert_eq!(tree.ts(), 8);
     }
@@ -1196,8 +1196,8 @@ mod tests {
         assert!(tree.insert(key1, 1, 2).is_err());
         assert_eq!(initial_ts, tree.ts());
         let (_, val, ts) = tree.get(key1).unwrap();
-        assert_eq!(*val, 1);
-        assert_eq!(*ts, 10);
+        assert_eq!(val, 1);
+        assert_eq!(ts, 10);
 
         assert!(tree.insert(key2, 1, 15).is_ok());
         let initial_ts = tree.ts();
@@ -1205,8 +1205,8 @@ mod tests {
         assert!(tree.insert(key2, 1, 11).is_err());
         assert_eq!(initial_ts, tree.ts());
         let (_, val, ts) = tree.get(key2).unwrap();
-        assert_eq!(*val, 1);
-        assert_eq!(*ts, 15);
+        assert_eq!(val, 1);
+        assert_eq!(ts, 15);
 
         // check if the max timestamp of the tree is the max of the two inserted timestamps
         assert_eq!(tree.ts(), 15);
