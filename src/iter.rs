@@ -118,7 +118,7 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
 
             };
 
-            if node.is_leaf() {
+            if node.is_twig() {
                 if let Some(v) = node.get_value() {
                     return Some((v.0.as_byte_slice().to_vec(), v.1, v.2));
                 }

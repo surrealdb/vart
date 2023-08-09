@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use crate::iter::{Iter, Range};
-use crate::node::{FlatNode, LeafNode, Node256, Node48, NodeTrait, Timestamp};
+use crate::node::{FlatNode, TwigNode, Node256, Node48, NodeTrait, Timestamp};
 use crate::snapshot::{Snapshot, SnapshotPointer};
 use crate::{Key, Prefix, PrefixTrait};
 
@@ -66,7 +66,7 @@ impl fmt::Display for TrieError {
 
 // From the specification: Adaptive Radix tries consist of two types of nodes:
 // Inner nodes, which map prefix(prefix) keys to other nodes,
-// and leaf nodes, which store the values corresponding to the key.
+// and twig nodes, which store the values corresponding to the key.
 pub struct Node<P: Prefix + Clone, V: Clone> {
     node_type: NodeType<P, V>, // Type of the node
 }
@@ -74,7 +74,7 @@ pub struct Node<P: Prefix + Clone, V: Clone> {
 impl<P: Prefix + Clone, V: Clone> Timestamp for Node<P, V> {
     fn ts(&self) -> u64 {
         match &self.node_type {
-            NodeType::Leaf(leaf) => leaf.ts(),
+            NodeType::Twig(twig) => twig.ts(),
             NodeType::Node4(n) => n.ts(),
             NodeType::Node16(n) => n.ts(),
             NodeType::Node48(n) => n.ts(),
@@ -84,8 +84,8 @@ impl<P: Prefix + Clone, V: Clone> Timestamp for Node<P, V> {
 }
 
 pub(crate) enum NodeType<P: Prefix + Clone, V: Clone> {
-    // Leaf node of the adaptive radix trie
-    Leaf(LeafNode<P, V>),
+    // Twig node of the adaptive radix trie
+    Twig(TwigNode<P, V>),
     // Inner node of the adaptive radix trie
     Node4(FlatNode<P, Node<P, V>, 4>), // Node with 4 keys and 4 children
     Node16(FlatNode<P, Node<P, V>, 16>), // Node with 16 keys and 16 children
@@ -104,8 +104,8 @@ pub struct Tree<P: PrefixTrait, V: Clone> {
 impl<P: PrefixTrait + Clone, V: Clone> NodeType<P, V> {
     fn clone(&self) -> Self {
         match self {
-            // leaf value not actually cloned
-            NodeType::Leaf(leaf) => NodeType::Leaf(leaf.clone()),
+            // twig value not actually cloned
+            NodeType::Twig(twig) => NodeType::Twig(twig.clone()),
             NodeType::Node4(n) => NodeType::Node4(n.clone()),
             NodeType::Node16(n) => NodeType::Node16(n.clone()),
             NodeType::Node48(n) => NodeType::Node48(n.clone()),
@@ -123,14 +123,11 @@ impl<P: PrefixTrait, V: Clone> Default for Tree<P, V> {
 
 impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     #[inline]
-    pub(crate) fn new_leaf(prefix: P, key: P, value: V, ts: u64) -> Node<P, V> {
+    pub(crate) fn new_twig(prefix: P, key: P, value: V, ts: u64) -> Node<P, V> {
+        let mut twig = TwigNode::new(prefix);
+        twig.insert_mut(&key, value, ts);
         Self {
-            node_type: NodeType::Leaf(LeafNode {
-                prefix,
-                key,
-                value,
-                ts,
-            }),
+            node_type: NodeType::Twig(twig),
         }
     }
 
@@ -145,47 +142,6 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
         Self { node_type: nt }
     }
 
-    // From the specification: This node type is used for storing between 5 and
-    // 16 child pointers. Like the Node4, the keys and pointers
-    // are stored in separate arrays at corresponding positions, but
-    // both arrays have space for 16 entries. A key can be found
-    // efﬁciently with binary search or, on modern hardware, with
-    // parallel comparisons using SIMD instructions.
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn new_node16(prefix: P) -> Self {
-        let nt = NodeType::Node16(FlatNode::new(prefix));
-        Self { node_type: nt }
-    }
-
-    // From the specification: As the number of entries in a node increases,
-    // searching the key array becomes expensive. Therefore, nodes
-    // with more than 16 pointers do not store the keys explicitly.
-    // Instead, a 256-element array is used, which can be indexed
-    // with key bytes directly. If a node has between 17 and 48 child
-    // pointers, this array stores indexes into a second array which
-    // contains up to 48 pointers.
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn new_node48(prefix: P) -> Self {
-        let nt = NodeType::Node48(Node48::new(prefix));
-        Self { node_type: nt }
-    }
-
-    // From the specification: The largest node type is simply an array of 256
-    // pointers and is used for storing between 49 and 256 entries.
-    // With this representation, the next node can be found very
-    // efﬁciently using a single lookup of the key byte in that array.
-    // No additional indirection is necessary. If most entries are not
-    // null, this representation is also very space efﬁcient because
-    // only pointers need to be stored.
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn new_node256(prefix: P) -> Self {
-        let nt = NodeType::Node256(Node256::new(prefix));
-        Self { node_type: nt }
-    }
-
     #[inline]
     fn is_full(&self) -> bool {
         match &self.node_type {
@@ -193,7 +149,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node16(km) => self.num_children() >= km.size(),
             NodeType::Node48(im) => self.num_children() >= im.size(),
             NodeType::Node256(_) => self.num_children() > 256,
-            NodeType::Leaf(_) => panic!("should not be reached"),
+            NodeType::Twig(_) => panic!("should not be reached"),
         }
     }
 
@@ -232,7 +188,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
                 }
                 new_node
             }
-            NodeType::Leaf(_) => panic!("should not be reached"),
+            NodeType::Twig(_) => panic!("should not be reached"),
         }
     }
 
@@ -259,7 +215,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node256 { .. } => {
                 panic!("should not grow a node 256")
             }
-            NodeType::Leaf(_) => panic!("should not be reached"),
+            NodeType::Twig(_) => panic!("should not be reached"),
         }
     }
 
@@ -274,7 +230,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node16(n) => n.find_child(key),
             NodeType::Node48(n) => n.find_child(key),
             NodeType::Node256(n) => n.find_child(key),
-            NodeType::Leaf(_) => None,
+            NodeType::Twig(_) => None,
         }
     }
 
@@ -296,7 +252,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
                 let node = NodeType::Node256(n.replace_child(key, node));
                 Self { node_type: node }
             }
-            NodeType::Leaf(_) => panic!("should not be reached"),
+            NodeType::Twig(_) => panic!("should not be reached"),
         }
     }
 
@@ -334,18 +290,18 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
                 }
                 new_node
             }
-            NodeType::Leaf(_) => panic!("should not be reached"),
+            NodeType::Twig(_) => panic!("should not be reached"),
         }
     }
 
     #[inline]
-    pub(crate) fn is_leaf(&self) -> bool {
-        matches!(&self.node_type, NodeType::Leaf(_))
+    pub(crate) fn is_twig(&self) -> bool {
+        matches!(&self.node_type, NodeType::Twig(_))
     }
 
     #[inline]
     pub(crate) fn is_inner(&self) -> bool {
-        !self.is_leaf()
+        !self.is_twig()
     }
 
     #[inline]
@@ -355,7 +311,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node16(n) => &n.prefix,
             NodeType::Node48(n) => &n.prefix,
             NodeType::Node256(n) => &n.prefix,
-            NodeType::Leaf(n) => &n.prefix,
+            NodeType::Twig(n) => &n.prefix,
         }
     }
 
@@ -366,7 +322,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node16(n) => n.prefix = prefix,
             NodeType::Node48(n) => n.prefix = prefix,
             NodeType::Node256(n) => n.prefix = prefix,
-            NodeType::Leaf(n) => n.prefix = prefix,
+            NodeType::Twig(n) => n.prefix = prefix,
         }
     }
 
@@ -375,7 +331,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     // ArtNodes of type NODE48 will shrink to NODE16.
     // ArtNodes of type NODE16 will shrink to NODE4.
     // ArtNodes of type NODE4 will collapse into its first child.
-    // If that child is not a leaf, it will concatenate its current prefix with that of its childs
+    // If that child is not a twig, it will concatenate its current prefix with that of its childs
     // before replacing itself.
     fn shrink(&mut self) {
         match &mut self.node_type {
@@ -395,7 +351,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
                 let n48 = n.shrink();
                 self.node_type = NodeType::Node48(n48);
             }
-            NodeType::Leaf(_) => panic!("should not be reached"),
+            NodeType::Twig(_) => panic!("should not be reached"),
         }
     }
 
@@ -406,17 +362,21 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node16(n) => n.num_children(),
             NodeType::Node48(n) => n.num_children(),
             NodeType::Node256(n) => n.num_children(),
-            NodeType::Leaf(_) => 0,
+            NodeType::Twig(_) => 0,
         }
     }
 
+    // TODO: fix having separate key and prefix traits to avoid copying
     #[inline]
-    pub fn get_value(&self) -> Option<(&P, &V, &u64)> {
-        let NodeType::Leaf(leaf) = &self.node_type else {
+    pub fn get_value(&self, key: P) -> Option<(&P, &V, &u64)> {
+        let NodeType::Twig(twig) = &self.node_type else {
+            return None;
+        };
+        let Some(val) = twig.get_latest_leaf(&key) else{
             return None;
         };
         // TODO: should return copy of value or reference?
-        Some((&leaf.key, &leaf.value, &leaf.ts))
+        Some((&val.key, &val.value, &val.ts))
     }
 
     pub fn node_type_name(&self) -> String {
@@ -425,7 +385,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node16(_) => "Node16".to_string(),
             NodeType::Node48(_) => "Node48".to_string(),
             NodeType::Node256(_) => "Node256".to_string(),
-            NodeType::Leaf(_) => "Leaf".to_string(),
+            NodeType::Twig(_) => "twig".to_string(),
         }
     }
 
@@ -452,16 +412,24 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
         let prefix = cur_node_prefix.prefix_before(longest_common_prefix);
         let is_prefix_match = min(cur_node_prefix_len, key_prefix.len()) == longest_common_prefix;
 
-        if let NodeType::Leaf(ref leaf) = &cur_node.node_type {
+        if let NodeType::Twig(ref twig) = &cur_node.node_type {
             if is_prefix_match && cur_node_prefix.length() == key_prefix.len() {
+                // TODO: need to insert new value to the twig
+                let pkey: P = key.as_slice().into();
+                let old_val = twig.get_value_by_ts(&pkey, commit_ts).unwrap();
+                let new_twig = twig.insert(&pkey, value, commit_ts);
+                // return Ok((
+                //     Arc::new(Node::new_twig(
+                //         key.as_slice().into(),
+                //         key.as_slice().into(),
+                //         value,
+                //         commit_ts,
+                //     )),
+                //     Some(twig.value.clone()),
+                // ));
                 return Ok((
-                    Arc::new(Node::new_leaf(
-                        key.as_slice().into(),
-                        key.as_slice().into(),
-                        value,
-                        commit_ts,
-                    )),
-                    Some(leaf.value.clone()),
+                    Arc::new(Node { node_type: NodeType::Twig(new_twig) }),
+                    Some(old_val.value.clone()),
                 ));
             }
         }
@@ -473,13 +441,13 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
 
             let k1 = cur_node_prefix.at(longest_common_prefix);
             let k2 = key_prefix[longest_common_prefix];
-            let new_leaf = Node::new_leaf(
+            let new_twig = Node::new_twig(
                 key_prefix[longest_common_prefix..].into(),
                 key.as_slice().into(),
                 value,
                 commit_ts,
             );
-            n4 = n4.add_child(k1, old_node).add_child(k2, new_leaf);
+            n4 = n4.add_child(k1, old_node).add_child(k2, new_twig);
             return Ok((Arc::new(n4), None));
         }
 
@@ -498,13 +466,13 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             }
         };
 
-        let new_leaf = Node::new_leaf(
+        let new_twig = Node::new_twig(
             key_prefix[longest_common_prefix..].into(),
             key.as_slice().into(),
             value,
             commit_ts,
         );
-        let new_node = cur_node.add_child(k, new_leaf);
+        let new_node = cur_node.add_child(k, new_twig);
         Ok((Arc::new(new_node), None))
     }
 
@@ -558,7 +526,11 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             }
 
             if prefix.length() == key_prefix.len() {
-                return cur_node.get_value();
+                let Some(val) = cur_node.get_value(key.as_slice().into()) else {
+                    return None;
+                };
+                // return cur_node.get_value();
+                return Some((val.0, val.1, val.2));
             }
 
             let k = key.at(depth + prefix.length());
@@ -574,7 +546,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node16(n) => Box::new(n.iter()),
             NodeType::Node48(n) => Box::new(n.iter()),
             NodeType::Node256(n) => Box::new(n.iter()),
-            NodeType::Leaf(_) => Box::new(std::iter::empty()),
+            NodeType::Twig(_) => Box::new(std::iter::empty()),
         };
     }
 }
@@ -597,7 +569,7 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
                     commit_ts += 1;
                 }
                 (
-                    Arc::new(Node::new_leaf(
+                    Arc::new(Node::new_twig(
                         key.as_slice().into(),
                         key.as_slice().into(),
                         value,
@@ -636,7 +608,7 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         let (new_root, is_deleted) = match &self.root {
             None => (None, false),
             Some(root) => {
-                if root.is_leaf() {
+                if root.is_twig() {
                     (None, true)
                 } else {
                     let (new_root, removed) = Node::remove_recurse(root, key, 0);
@@ -923,7 +895,7 @@ mod tests {
     }
 
     // Inserting Two values into the tree and removing one of them
-    // should result in a tree root of type LEAF
+    // should result in a tree root of type twig
     #[test]
     fn test_insert2_and_remove1_and_root_should_be_node4() {
         let key1 = &VectorKey::from_str("test1");
@@ -942,7 +914,7 @@ mod tests {
     // // Inserting Two values into a tree and deleting them both
     // // should result in a nil tree root
     // // This tests the expansion of the root into a NODE4 and
-    // // successfully collapsing into a LEAF and then nil upon successive removals
+    // // successfully collapsing into a twig and then nil upon successive removals
     // #[test]
     // fn test_insert2_and_remove2_and_root_should_be_nil() {
     //     let key1 = &VectorKey::from_str("test1");
@@ -984,7 +956,7 @@ mod tests {
     //     // Inserting Five values into a tree and deleting all of them
     //     // should result in a tree root of type nil
     //     // This tests the expansion of the root into a NODE16 and
-    //     // successfully collapsing into a NODE4, Leaf, then nil
+    //     // successfully collapsing into a NODE4, twig, then nil
     //     #[test]
     //     fn test_insert5_and_remove5_and_root_should_be_nil() {
     //         let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
@@ -1043,7 +1015,7 @@ mod tests {
     // // Inserting 17 values into a tree and removing them all should
     // // result in a tree of root type nil
     // // This tests the expansion of the root into a NODE48, and
-    // // successfully collapsing into a NODE16, NODE4, Leaf, and then nil
+    // // successfully collapsing into a NODE16, NODE4, twig, and then nil
     // #[test]
     // fn test_insert17_and_remove17_and_root_should_be_nil() {
     //     let mut tree = Tree::<ArrayPrefix<16>, i32>::new();
@@ -1102,7 +1074,7 @@ mod tests {
     //     // // Inserting 49 values into a tree and removing all of them should
     //     // // result in a nil tree root
     //     // // This tests the expansion of the root into a NODE256, and
-    //     // // successfully collapsing into a Node48, Node16, Node4, Leaf, and finally nil
+    //     // // successfully collapsing into a Node48, Node16, Node4, twig, and finally nil
     //     // #[test]
     //     // fn test_insert49_and_remove49_and_root_should_be_nil() {
     //     //     let mut tree = Tree::<ArrayPrefix<16>, i32>::new();

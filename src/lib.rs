@@ -5,6 +5,7 @@ pub mod node;
 pub mod snapshot;
 
 use std::fmt::Debug;
+use std::cmp::{Ord, Ordering, PartialOrd};
 
 // "Partial" in the Adaptive Radix Tree paper refers to "partial keys", a technique employed
 // for prefix compression in this data structure. Instead of storing entire keys in the nodes,
@@ -18,6 +19,7 @@ pub trait Prefix {
     fn prefix_after(&self, start: usize) -> Self;
     fn longest_common_prefix(&self, slice: &[u8]) -> usize;
     fn as_byte_slice(&self) -> &[u8];
+    fn cmp(&self, other: &Self) -> Ordering;
 }
 
 /// The `Key` trait provides a specific abstraction for keys, which are sequences of bytes.
@@ -55,6 +57,12 @@ impl<const SIZE: usize> PartialEq for ArrayPrefix<SIZE> {
     }
 }
 
+impl<const SIZE: usize> PartialOrd for ArrayPrefix<SIZE> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl<const SIZE: usize> ArrayPrefix<SIZE> {
     // Create new instance with data ending in zero byte
     pub fn create_key(src: &[u8]) -> Self {
@@ -84,6 +92,10 @@ impl<const SIZE: usize> Prefix for ArrayPrefix<SIZE> {
     // Returns slice of the internal data up to the actual length
     fn as_byte_slice(&self) -> &[u8] {
         &self.content[..self.len]
+    }
+
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.content[..self.len].cmp(&other.content[..other.len])
     }
 
     // Creates a new instance of ArrayPrefix consisting only of the initial part of the content
