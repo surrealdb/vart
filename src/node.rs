@@ -668,7 +668,7 @@ mod tests {
 
     impl_timestamp!(usize, u8, u16, u32, u64);
 
-    fn node_test(mut node: impl NodeTrait<usize>, size: usize) {
+    fn node_test<N: NodeTrait<usize>>(mut node: N, size: usize) {
         for i in 0..size {
             node = node.add_child(i as u8, i);
         }
@@ -681,7 +681,7 @@ mod tests {
             node = node.delete_child(i as u8);
         }
 
-        assert!(matches!(node.num_children(), 0));
+        assert_eq!(node.num_children(), 0);
     }
 
     #[test]
@@ -709,7 +709,7 @@ mod tests {
             64,
         );
 
-        // resize from 16 to 4
+        // Resize from 16 to 4
         let mut node = FlatNode::<ArrayKey<8>, usize, 16>::new(dummy_prefix.clone());
         for i in 0..4 {
             node = node.add_child(i as u8, i);
@@ -721,7 +721,7 @@ mod tests {
             assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i.into()));
         }
 
-        // resize from 4 to 16
+        // Resize from 4 to 16
         let mut node = FlatNode::<ArrayKey<8>, usize, 4>::new(dummy_prefix.clone());
         for i in 0..4 {
             node = node.add_child(i as u8, i);
@@ -736,7 +736,7 @@ mod tests {
             assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i.into()));
         }
 
-        // resize from 16 to 48
+        // Resize from 16 to 48
         let mut node = FlatNode::<ArrayKey<8>, usize, 16>::new(dummy_prefix.clone());
         for i in 0..16 {
             node = node.add_child(i as u8, i);
@@ -748,7 +748,8 @@ mod tests {
             assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i.into()));
         }
 
-        let mut node = FlatNode::<ArrayKey<8>, usize, 4>::new(dummy_prefix);
+        // Additional test for adding and deleting children
+        let mut node = FlatNode::<ArrayKey<8>, usize, 4>::new(dummy_prefix.clone());
         node = node.add_child(1, 1);
         node = node.add_child(2, 2);
         node = node.add_child(3, 3);
@@ -771,7 +772,7 @@ mod tests {
     fn test_node48() {
         let dummy_prefix: ArrayKey<8> = ArrayKey::create_key("foo".as_bytes());
 
-        // node_test(super::Node48::<usize, 48>::new(), 48);
+        // Create and test Node48
         let mut n48 = Node48::<ArrayKey<8>, u8>::new(dummy_prefix.clone());
         for i in 0..48 {
             n48 = n48.add_child(i, i);
@@ -786,7 +787,7 @@ mod tests {
             assert!(n48.find_child(i as u8).is_none());
         }
 
-        // resize from 48 to 16
+        // Resize from 48 to 16
         let mut node = Node48::<ArrayKey<8>, u8>::new(dummy_prefix.clone());
         for i in 0..18 {
             node = node.add_child(i, i);
@@ -802,7 +803,7 @@ mod tests {
             assert!(matches!(resized.find_child(i), Some(v) if *v == i.into()));
         }
 
-        // resize from 48 to 4
+        // Resize from 48 to 4
         let mut node = Node48::<ArrayKey<8>, u8>::new(dummy_prefix.clone());
         for i in 0..4 {
             node = node.add_child(i, i);
@@ -813,7 +814,7 @@ mod tests {
             assert!(matches!(resized.find_child(i), Some(v) if *v == i.into()));
         }
 
-        // resize from 48 to 256
+        // Resize from 48 to 256
         let mut node = Node48::<ArrayKey<8>, u8>::new(dummy_prefix);
         for i in 0..48 {
             node = node.add_child(i, i);
