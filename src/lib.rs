@@ -11,139 +11,19 @@ use std::fmt::Debug;
 // for prefix compression in this data structure. Instead of storing entire keys in the nodes,
 // ART nodes often only store partial keys, which are the differing prefixes of the keys.
 // This approach significantly reduces the memory requirements of the data structure.
-// Prefix is a trait that provides an abstraction for partial keys.
-pub trait Prefix {
+// Key is a trait that provides an abstraction for partial keys.
+pub trait Key {
     fn at(&self, pos: usize) -> u8;
-    fn length(&self) -> usize;
+    fn len(&self) -> usize;
     fn prefix_before(&self, length: usize) -> Self;
     fn prefix_after(&self, start: usize) -> Self;
     fn longest_common_prefix(&self, slice: &[u8]) -> usize;
-    fn as_byte_slice(&self) -> &[u8];
+    fn as_slice(&self) -> &[u8];
     fn cmp(&self, other: &Self) -> Ordering;
 }
 
-/// The `Key` trait provides a specific abstraction for keys, which are sequences of bytes.
-pub trait Key: Clone {
-    /// Returns the byte at the specified position.
-    fn at(&self, pos: usize) -> u8;
-
-    /// Returns the length of the key.
-    fn length(&self) -> usize;
-
-    /// Returns a byte slice that starts from the specified position in the key.
-    fn prefix_after(&self, pos: usize) -> &[u8];
-
-    /// Returns a byte slice that represents the key.
-    fn as_slice(&self) -> &[u8] {
-        self.prefix_after(0)
-    }
-}
-
-pub trait PrefixTrait: Prefix + Clone + PartialEq + Debug + for<'a> From<&'a [u8]> {}
-impl<T: Prefix + Clone + PartialEq + Debug + for<'a> From<&'a [u8]>> PrefixTrait for T {}
-
-/*
-    Prefix trait implementations
-*/
-
-#[derive(Clone, Debug, Eq)]
-pub struct ArrayPrefix<const SIZE: usize> {
-    content: [u8; SIZE],
-    len: usize,
-}
-
-impl<const SIZE: usize> PartialEq for ArrayPrefix<SIZE> {
-    fn eq(&self, other: &Self) -> bool {
-        self.content[..self.len] == other.content[..other.len]
-    }
-}
-
-impl<const SIZE: usize> PartialOrd for ArrayPrefix<SIZE> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<const SIZE: usize> ArrayPrefix<SIZE> {
-    // Create new instance with data ending in zero byte
-    pub fn create_key(src: &[u8]) -> Self {
-        assert!(src.len() < SIZE);
-        let mut content = [0; SIZE];
-        content[..src.len()].copy_from_slice(src);
-        content[src.len()] = 0;
-        Self {
-            content,
-            len: src.len() + 1,
-        }
-    }
-
-    // Create new instance from slice
-    pub fn from_byte_slice(src: &[u8]) -> Self {
-        assert!(src.len() <= SIZE);
-        let mut content = [0; SIZE];
-        content[..src.len()].copy_from_slice(src);
-        Self {
-            content,
-            len: src.len(),
-        }
-    }
-}
-
-impl<const SIZE: usize> Prefix for ArrayPrefix<SIZE> {
-    // Returns slice of the internal data up to the actual length
-    fn as_byte_slice(&self) -> &[u8] {
-        &self.content[..self.len]
-    }
-
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.content[..self.len].cmp(&other.content[..other.len])
-    }
-
-    // Creates a new instance of ArrayPrefix consisting only of the initial part of the content
-    fn prefix_before(&self, length: usize) -> Self {
-        assert!(length <= self.len);
-        Self::from_byte_slice(&self.content[..length])
-    }
-
-    // Creates a new instance of ArrayPrefix excluding the initial part of the content
-    fn prefix_after(&self, start: usize) -> Self {
-        assert!(start <= self.len);
-        Self::from_byte_slice(&self.content[start..self.len])
-    }
-
-    #[inline(always)]
-    fn at(&self, pos: usize) -> u8 {
-        assert!(pos < self.len);
-        self.content[pos]
-    }
-
-    #[inline(always)]
-    fn length(&self) -> usize {
-        self.len
-    }
-
-    // Returns the length of the longest common prefix between this object's content and the given byte slice
-    fn longest_common_prefix(&self, key: &[u8]) -> usize {
-        let len = self.len.min(key.len()).min(SIZE);
-        self.content[..len]
-            .iter()
-            .zip(key)
-            .take_while(|&(a, &b)| *a == b)
-            .count()
-    }
-}
-
-impl<const SIZE: usize> From<&[u8]> for ArrayPrefix<SIZE> {
-    fn from(src: &[u8]) -> Self {
-        Self::from_byte_slice(src)
-    }
-}
-
-impl<const SIZE: usize, K: Key> From<K> for ArrayPrefix<SIZE> {
-    fn from(src: K) -> Self {
-        Self::from_byte_slice(src.as_slice())
-    }
-}
+pub trait KeyTrait: Key + Clone + PartialEq + Debug + for<'a> From<&'a [u8]> {}
+impl<T: Key + Clone + PartialEq + Debug + for<'a> From<&'a [u8]>> KeyTrait for T {}
 
 /*
     Key trait implementations
@@ -162,104 +42,116 @@ impl<const SIZE: usize, K: Key> From<K> for ArrayPrefix<SIZE> {
 // no characters can come after it. Therefore no string with a null-byte can be a prefix of any other,
 // because no string can have any characters after the NULL byte!
 //
-// A VectorKey is a variable-length datatype with NULL byte appended to it.
-#[derive(Clone)]
-pub struct VectorKey {
-    data: Vec<u8>,
-}
-
-impl VectorKey {
-    pub fn from_string(s: &String) -> Self {
-        let mut data = Vec::with_capacity(s.len() + 1);
-        data.extend_from_slice(s.as_bytes());
-        data.push(0);
-        Self { data }
-    }
-
-    pub fn from_str(s: &str) -> Self {
-        let mut data = Vec::with_capacity(s.len() + 1);
-        data.extend_from_slice(s.as_bytes());
-        data.push(0);
-        Self { data }
-    }
-
-    pub fn from_slice(data: &[u8]) -> Self {
-        let data = Vec::from(data);
-        Self { data }
-    }
-
-    pub fn from(data: Vec<u8>) -> Self {
-        Self { data }
-    }
-}
-
-impl Key for VectorKey {
-    fn at(&self, pos: usize) -> u8 {
-        self.data[pos]
-    }
-
-    fn length(&self) -> usize {
-        self.data.len()
-    }
-
-    fn prefix_after(&self, pos: usize) -> &[u8] {
-        &self.data[pos..]
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct ArrayKey<const N: usize> {
-    data: [u8; N],
+#[derive(Clone, Debug, Eq)]
+pub struct ArrayKey<const SIZE: usize> {
+    content: [u8; SIZE],
     len: usize,
 }
 
-impl<const N: usize> Key for ArrayKey<N> {
-    fn at(&self, pos: usize) -> u8 {
-        self.data[pos]
-    }
-
-    fn length(&self) -> usize {
-        self.len
-    }
-
-    fn prefix_after(&self, pos: usize) -> &[u8] {
-        &self.data[pos..self.len]
-    }
-
-    fn as_slice(&self) -> &[u8] {
-        &self.data[..self.len]
+impl<const SIZE: usize> PartialEq for ArrayKey<SIZE> {
+    fn eq(&self, other: &Self) -> bool {
+        self.content[..self.len] == other.content[..other.len]
     }
 }
 
-impl<const N: usize> ArrayKey<N> {
-    pub fn from_slice(data: &[u8]) -> Self {
-        assert!(data.len() <= N, "data length is greater than array length");
-        let mut arr = [0; N];
-        arr[0..data.len()].copy_from_slice(data);
+impl<const SIZE: usize> PartialOrd for ArrayKey<SIZE> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<const SIZE: usize> ArrayKey<SIZE> {
+    // Create new instance with data ending in zero byte
+    pub fn create_key(src: &[u8]) -> Self {
+        assert!(src.len() < SIZE);
+        let mut content = [0; SIZE];
+        content[..src.len()].copy_from_slice(src);
+        content[src.len()] = 0;
         Self {
-            data: arr,
-            len: data.len(),
+            content,
+            len: src.len() + 1,
+        }
+    }
+
+    // Create new instance from slice
+    pub fn from_slice(src: &[u8]) -> Self {
+        assert!(src.len() <= SIZE);
+        let mut content = [0; SIZE];
+        content[..src.len()].copy_from_slice(src);
+        Self {
+            content,
+            len: src.len(),
         }
     }
 
     pub fn from_str(s: &str) -> Self {
-        assert!(s.len() < N, "data length is greater than array length");
-        let mut arr = [0; N];
+        assert!(s.len() < SIZE, "data length is greater than array length");
+        let mut arr = [0; SIZE];
         arr[..s.len()].copy_from_slice(s.as_bytes());
         Self {
-            data: arr,
+            content: arr,
             len: s.len() + 1,
         }
     }
 
     pub fn from_string(s: &String) -> Self {
-        assert!(s.len() < N, "data length is greater than array length");
-        let mut arr = [0; N];
+        assert!(s.len() < SIZE, "data length is greater than array length");
+        let mut arr = [0; SIZE];
         arr[..s.len()].copy_from_slice(s.as_bytes());
         Self {
-            data: arr,
+            content: arr,
             len: s.len() + 1,
         }
+    }
+}
+
+impl<const SIZE: usize> Key for ArrayKey<SIZE> {
+    // Returns slice of the internal data up to the actual length
+    fn as_slice(&self) -> &[u8] {
+        &self.content[..self.len]
+    }
+
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.content[..self.len].cmp(&other.content[..other.len])
+    }
+
+    // Creates a new instance of ArrayKey consisting only of the initial part of the content
+    fn prefix_before(&self, length: usize) -> Self {
+        assert!(length <= self.len);
+        Self::from_slice(&self.content[..length])
+    }
+
+    // Creates a new instance of ArrayKey excluding the initial part of the content
+    fn prefix_after(&self, start: usize) -> Self {
+        assert!(start <= self.len);
+        Self::from_slice(&self.content[start..self.len])
+    }
+
+    #[inline(always)]
+    fn at(&self, pos: usize) -> u8 {
+        assert!(pos < self.len);
+        self.content[pos]
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    // Returns the length of the longest common prefix between this object's content and the given byte slice
+    fn longest_common_prefix(&self, key: &[u8]) -> usize {
+        let len = self.len.min(key.len()).min(SIZE);
+        self.content[..len]
+            .iter()
+            .zip(key)
+            .take_while(|&(a, &b)| *a == b)
+            .count()
+    }
+}
+
+impl<const SIZE: usize> From<&[u8]> for ArrayKey<SIZE> {
+    fn from(src: &[u8]) -> Self {
+        Self::from_slice(src)
     }
 }
 
@@ -295,6 +187,96 @@ impl<const N: usize> From<String> for ArrayKey<N> {
 impl<const N: usize> From<&String> for ArrayKey<N> {
     fn from(data: &String) -> Self {
         Self::from_string(data)
+    }
+}
+
+// A VectorKey is a variable-length datatype with NULL byte appended to it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct VectorKey {
+    data: Vec<u8>,
+}
+
+impl VectorKey {
+    pub fn key(src: &[u8]) -> Self {
+        let mut data = Vec::with_capacity(src.len() + 1);
+        data.extend_from_slice(src);
+        data.push(0);
+        Self { data: data }
+    }
+
+    pub fn from_slice(src: &[u8]) -> Self {
+        Self {
+            data: Vec::from(src),
+        }
+    }
+
+    pub fn to_slice(&self) -> &[u8] {
+        &self.data
+    }
+
+    pub fn from_string(s: &String) -> Self {
+        let mut data = Vec::with_capacity(s.len() + 1);
+        data.extend_from_slice(s.as_bytes());
+        data.push(0);
+        Self { data }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        let mut data = Vec::with_capacity(s.len() + 1);
+        data.extend_from_slice(s.as_bytes());
+        data.push(0);
+        Self { data }
+    }
+
+    pub fn from(data: Vec<u8>) -> Self {
+        Self { data }
+    }
+}
+
+impl From<&[u8]> for VectorKey {
+    fn from(src: &[u8]) -> Self {
+        Self::from_slice(src)
+    }
+}
+
+impl Key for VectorKey {
+    fn prefix_before(&self, length: usize) -> Self {
+        assert!(length <= self.data.len());
+        VectorKey::from_slice(&self.data[..length])
+    }
+
+    fn prefix_after(&self, start: usize) -> Self {
+        assert!(start <= self.data.len());
+        VectorKey::from_slice(&self.data[start..self.data.len()])
+    }
+
+    #[inline(always)]
+    fn at(&self, pos: usize) -> u8 {
+        assert!(pos < self.data.len());
+        self.data[pos]
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    // Returns the length of the longest common prefix between this object's content and the given byte slice
+    fn longest_common_prefix(&self, key: &[u8]) -> usize {
+        let len = self.data.len().min(key.len());
+        self.data[..len]
+            .iter()
+            .zip(key)
+            .take_while(|&(a, &b)| *a == b)
+            .count()
+    }
+
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.data.cmp(&other.data)
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.data[..self.data.len()]
     }
 }
 
@@ -426,5 +408,106 @@ impl<X, const WIDTH: usize> VecArray<X, WIDTH> {
             .iter()
             .enumerate()
             .filter_map(|(i, x)| x.as_ref().map(|v| (i, v)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VecArray;
+
+    #[test]
+    fn new() {
+        let v: VecArray<i32, 10> = VecArray::new();
+        assert_eq!(v.storage.capacity(), 10);
+    }
+
+    #[test]
+    fn push_and_pop() {
+        let mut v: VecArray<i32, 10> = VecArray::new();
+        let index = v.push(5);
+        assert_eq!(v.get(index), Some(&5));
+        assert_eq!(v.pop(), Some(5));
+    }
+
+    #[test]
+    fn last() {
+        let mut v: VecArray<i32, 10> = VecArray::new();
+        v.push(5);
+        v.push(6);
+        assert_eq!(v.last(), Some(&6));
+    }
+
+    #[test]
+    fn last_used_pos() {
+        let mut v: VecArray<i32, 10> = VecArray::new();
+        v.push(5);
+        v.push(6);
+        assert_eq!(v.last_used_pos(), Some(1));
+    }
+
+    #[test]
+    fn first_free_pos() {
+        let mut v: VecArray<i32, 10> = VecArray::new();
+        v.push(5);
+        assert_eq!(v.first_free_pos(), 1);
+    }
+
+    #[test]
+    fn get_and_set() {
+        let mut v: VecArray<i32, 10> = VecArray::new();
+        v.set(5, 6);
+        assert_eq!(v.get(5), Some(&6));
+    }
+
+    #[test]
+    fn get_mut() {
+        let mut v: VecArray<i32, 10> = VecArray::new();
+        v.set(5, 6);
+        if let Some(value) = v.get_mut(5) {
+            *value = 7;
+        }
+        assert_eq!(v.get(5), Some(&7));
+    }
+
+    #[test]
+    fn erase() {
+        let mut v: VecArray<i32, 10> = VecArray::new();
+        v.push(5);
+        assert_eq!(v.erase(0), Some(5));
+        assert_eq!(v.get(0), None);
+    }
+
+    #[test]
+    fn clear() {
+        let mut v: VecArray<i32, 10> = VecArray::new();
+        v.push(5);
+        v.clear();
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn is_empty() {
+        let mut v: VecArray<i32, 10> = VecArray::new();
+        assert!(v.is_empty());
+        v.push(5);
+        assert!(!v.is_empty());
+    }
+
+    #[test]
+    fn iter_keys() {
+        let mut v: VecArray<i32, 10> = VecArray::new();
+        v.push(5);
+        v.push(6);
+        let keys: Vec<usize> = v.iter_keys().collect();
+        assert_eq!(keys, vec![0, 1]);
+    }
+
+    #[test]
+    fn iter() {
+        let mut v: VecArray<i32, 10> = VecArray::new();
+        v.push(5);
+        v.push(6);
+        let values: Vec<(usize, &i32)> = v.iter().collect();
+        assert_eq!(values, vec![(0, &5), (1, &6)]);
     }
 }
