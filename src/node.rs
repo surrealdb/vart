@@ -156,7 +156,6 @@ impl<K: Prefix + Clone, V: Clone> Timestamp for TwigNode<K, V> {
 // keys are stored in a parallel array. The keys are stored in sorted order, so
 // binary search can be used to find a particular key. The FlatNode is used for
 // storing Node4 and Node16 since they have identical layouts.
-
 pub struct FlatNode<P: Prefix + Clone, N: Timestamp, const WIDTH: usize> {
     pub(crate) prefix: P,
     pub(crate) ts: u64,
@@ -860,11 +859,6 @@ mod tests {
         node = node.delete_child(2);
         node = node.delete_child(3);
         node = node.delete_child(4);
-        // // assert_eq!(node.delete_child(1), Some(1));
-        // // assert_eq!(node.delete_child(2), Some(2));
-        // // assert_eq!(node.delete_child(3), Some(3));
-        // // assert_eq!(node.delete_child(4), Some(4));
-        // // assert_eq!(node.delete_child(5), None);
         assert_eq!(node.num_children(), 0);
     }
 

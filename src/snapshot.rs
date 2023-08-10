@@ -239,14 +239,16 @@ mod tests {
         );
 
         // keys inserted after snapshot creation should not be visible to other snapshots
-        let snap1 = tree.get_snap(snap1_id).unwrap();
+        let snap1 = tree.get_snapshot(snap1_id).unwrap();
         assert!(snap1
-            .get(&VectorKey::from_str("key_3_snap2"), snap1.ts())
+            .get(&VectorKey::from_str("key_3_snap2"), snap1.ts().unwrap())
+            .unwrap()
             .is_none());
 
-        let snap2 = tree.get_snap(snap2_id).unwrap();
+        let snap2 = tree.get_snapshot(snap2_id).unwrap();
         assert!(snap2
-            .get(&VectorKey::from_str("key_3_snap1"), snap2.ts())
+            .get(&VectorKey::from_str("key_3_snap1"), snap2.ts().unwrap())
+            .unwrap()
             .is_none());
 
         let mut snap1 = tree.get_snapshot(snap1_id).unwrap();
