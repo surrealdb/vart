@@ -8,7 +8,7 @@ edition = "2021"
 
 [[bench]]
 name = "vec_bench"
-path = "benches/art_compare_bench.rs"
+path = "benches/art_bench.rs"
 harness = false
 
 [dev-dependencies]

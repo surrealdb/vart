@@ -122,7 +122,6 @@ pub(crate) enum NodeType<P: Prefix + Clone, V: Clone> {
     Node256(Node256<P, Node<P, V>>),   // Node with 256 keys and 256 children
 }
 
-
 /// A struct representing an Adaptive Radix Trie.
 ///
 /// The `Tree` struct encompasses the entire adaptive radix trie data structure.
@@ -193,16 +192,15 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     pub(crate) fn new_twig(prefix: P, key: P, value: V, ts: u64) -> Node<P, V> {
         // Create a new TwigNode instance using the provided prefix and key.
         let mut twig = TwigNode::new(prefix, key);
-        
+
         // Insert the provided value into the TwigNode along with the timestamp.
         twig.insert_mut(value, ts);
-        
+
         // Return a new Node instance encapsulating the constructed Twig node.
         Self {
             node_type: NodeType::Twig(twig),
         }
     }
-
 
     /// Creates a new inner Node4 node with the provided prefix.
     ///
@@ -222,7 +220,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     pub(crate) fn new_node4(prefix: P) -> Self {
         // Create a new FlatNode instance using the provided prefix.
         let flat_node = FlatNode::new(prefix);
-        
+
         // Create a new Node4 instance with the constructed FlatNode.
         Self {
             node_type: NodeType::Node4(flat_node),
@@ -249,7 +247,6 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
         }
     }
 
-
     /// Adds a child node with the given key to the current node.
     ///
     /// Inserts a child node with the specified key into the current node.
@@ -270,63 +267,62 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node4(n) => {
                 // Add the child node to the Node4 instance.
                 let node = NodeType::Node4(n.add_child(key, child));
-                
+
                 // Create a new Node instance with the updated NodeType.
                 let mut new_node = Self { node_type: node };
-                
+
                 // Check if the node has become full and needs to be grown.
                 if new_node.is_full() {
                     new_node.grow();
                 }
-                
+
                 new_node
             }
             NodeType::Node16(n) => {
                 // Add the child node to the Node16 instance.
                 let node = NodeType::Node16(n.add_child(key, child));
-                
+
                 // Create a new Node instance with the updated NodeType.
                 let mut new_node = Self { node_type: node };
-                
+
                 // Check if the node has become full and needs to be grown.
                 if new_node.is_full() {
                     new_node.grow();
                 }
-                
+
                 new_node
             }
             NodeType::Node48(n) => {
                 // Add the child node to the Node48 instance.
                 let node = NodeType::Node48(n.add_child(key, child));
-                
+
                 // Create a new Node instance with the updated NodeType.
                 let mut new_node = Self { node_type: node };
-                
+
                 // Check if the node has become full and needs to be grown.
                 if new_node.is_full() {
                     new_node.grow();
                 }
-                
+
                 new_node
             }
             NodeType::Node256(n) => {
                 // Add the child node to the Node256 instance.
                 let node = NodeType::Node256(n.add_child(key, child));
-                
+
                 // Create a new Node instance with the updated NodeType.
                 let mut new_node = Self { node_type: node };
-                
+
                 // Check if the node has become full and needs to be grown.
                 if new_node.is_full() {
                     new_node.grow();
                 }
-                
+
                 new_node
             }
             NodeType::Twig(_) => panic!("Unexpected Twig node encountered in add_child()"),
         }
     }
-
 
     /// Grows the current node to the next bigger size.
     ///
@@ -361,7 +357,6 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Twig(_) => panic!("Unexpected Twig node encountered in grow()"),
         }
     }
-
 
     /// Recursively searches for a child node with the specified key.
     ///
@@ -452,48 +447,48 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
                 // Delete the child node from the Node4 instance and update the NodeType.
                 let node = NodeType::Node4(n.delete_child(key));
                 let mut new_node = Self { node_type: node };
-                
+
                 // Check if the number of remaining children is below the threshold.
                 if new_node.num_children() < NODE4MIN {
                     new_node.shrink();
                 }
-                
+
                 new_node
             }
             NodeType::Node16(n) => {
                 // Delete the child node from the Node16 instance and update the NodeType.
                 let node = NodeType::Node16(n.delete_child(key));
                 let mut new_node = Self { node_type: node };
-                
+
                 // Check if the number of remaining children is below the threshold.
                 if new_node.num_children() < NODE16MIN {
                     new_node.shrink();
                 }
-                
+
                 new_node
             }
             NodeType::Node48(n) => {
                 // Delete the child node from the Node48 instance and update the NodeType.
                 let node = NodeType::Node48(n.delete_child(key));
                 let mut new_node = Self { node_type: node };
-                
+
                 // Check if the number of remaining children is below the threshold.
                 if new_node.num_children() < NODE48MIN {
                     new_node.shrink();
                 }
-                
+
                 new_node
             }
             NodeType::Node256(n) => {
                 // Delete the child node from the Node256 instance and update the NodeType.
                 let node = NodeType::Node256(n.delete_child(key));
                 let mut new_node = Self { node_type: node };
-                
+
                 // Check if the number of remaining children is below the threshold.
                 if new_node.num_children() < NODE256MIN {
                     new_node.shrink();
                 }
-                
+
                 new_node
             }
             NodeType::Twig(_) => panic!("Unexpected Twig node encountered in delete_child()"),
@@ -565,7 +560,6 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
         }
     }
 
-
     /// Shrinks the current node to a smaller size.
     ///
     /// Shrinks the current node to a smaller size based on its type.
@@ -575,7 +569,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     /// ArtNodes of type NODE48 will shrink to NODE16.
     /// ArtNodes of type NODE16 will shrink to NODE4.
     /// ArtNodes of type NODE4 will collapse into its first child.
-    /// 
+    ///
     /// If that child is not a twig, it will concatenate its current prefix with that of its childs
     /// before replacing itself.
     fn shrink(&mut self) {
@@ -591,7 +585,7 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node48(n) => {
                 // Shrink Node48 to Node16 by obtaining the shrunken Node16 instance.
                 let n16 = n.shrink();
-                
+
                 // Update the node type to Node16 after the shrinking operation.
                 let new_node = NodeType::Node16(n16);
                 self.node_type = new_node;
@@ -599,14 +593,13 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node256(n) => {
                 // Shrink Node256 to Node48 by obtaining the shrunken Node48 instance.
                 let n48 = n.shrink();
-                
+
                 // Update the node type to Node48 after the shrinking operation.
                 self.node_type = NodeType::Node48(n48);
             }
             NodeType::Twig(_) => panic!("Twig node encountered in shrink()"),
         }
     }
-
 
     #[inline]
     pub fn num_children(&self) -> usize {
@@ -649,7 +642,6 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
         // TODO: should return copy of value or reference?
         Some((twig.key.clone(), val.value.clone(), val.ts))
     }
-
 
     pub fn node_type_name(&self) -> String {
         match &self.node_type {
@@ -830,7 +822,6 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
         (Some(cur_node.clone()), false)
     }
 
-
     /// Recursively searches for a key in the node and its children.
     ///
     /// Recursively searches for a key in the current node and its child nodes, considering timestamps.
@@ -843,13 +834,17 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
     ///
     /// # Returns
     ///
-    /// Returns an option containing the prefix, value, and timestamp if the key is found, or `None` if not.
+    /// Returns a result containing the prefix, value, and timestamp if the key is found, or Error if not.
     ///
-    pub fn get_recurse<K: Key>(cur_node: &Node<P, V>, key: &K, ts: u64) -> Option<(P, V, u64)> {
+    pub fn get_recurse<K: Key>(
+        cur_node: &Node<P, V>,
+        key: &K,
+        ts: u64,
+    ) -> Result<(P, V, u64), TrieError> {
         // Initialize the traversal variables.
         let mut cur_node = cur_node;
         let mut depth = 0;
-        
+
         // Start a loop to navigate through the tree.
         loop {
             // Determine the prefix of the key after the current depth.
@@ -858,18 +853,18 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             let prefix = cur_node.prefix();
             // Find the longest common prefix between the node's prefix and the key's prefix.
             let lcp = prefix.longest_common_prefix(key_prefix);
-            
+
             // If the longest common prefix does not match the entire node's prefix, the key is not present.
             if lcp != prefix.length() {
-                return None;
+                return Err(TrieError::KeyNotFound);
             }
 
             // If the current node's prefix length matches the key's prefix length, retrieve the value.
             if prefix.length() == key_prefix.len() {
                 let Some(val) = cur_node.get_value_by_ts(ts) else {
-                    return None;
+                    return Err(TrieError::KeyNotFound);
                 };
-                return Some((val.0, val.1, val.2));            
+                return Ok((val.0, val.1, val.2));
             }
 
             // Determine the character at the next position after the prefix in the key.
@@ -877,7 +872,10 @@ impl<P: PrefixTrait + Clone, V: Clone> Node<P, V> {
             // Increment the depth by the prefix length.
             depth += prefix.length();
             // Find the child node corresponding to the character and update the current node for further traversal.
-            cur_node = cur_node.find_child(k)?;
+            match cur_node.find_child(k) {
+                Some(child) => cur_node = child,
+                None => return Err(TrieError::KeyNotFound),
+            }
         }
     }
 
@@ -975,7 +973,6 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         Ok(old_node)
     }
 
-
     pub fn remove<K: Key>(&mut self, key: &K) -> bool {
         let (new_root, is_deleted) = match &self.root {
             None => (None, false),
@@ -997,12 +994,18 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         is_deleted
     }
 
-    pub fn get<K: Key>(&self, key: &K, ts: u64) -> Option<(P, V, u64)> {
+    pub fn get<K: Key>(&self, key: &K, ts: u64) -> Result<(P, V, u64), TrieError> {
+        if self.root.is_none() {
+            return Err(TrieError::Other("cannot read from empty tree".to_string()));
+        }
+
+        let root = self.root.as_ref().unwrap();
         let mut commit_ts = ts;
         if commit_ts == 0 {
-            commit_ts = self.root.as_ref()?.ts();
+            commit_ts = root.ts();
         }
-        Node::get_recurse(self.root.as_ref()?, key, commit_ts)
+
+        Node::get_recurse(root, key, commit_ts)
     }
 
     /// Retrieves the latest timestamp of the Trie.
@@ -1056,7 +1059,6 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         Ok(SnapshotPointer::new(self, new_snapshot_id))
     }
 
-
     pub(crate) fn get_snapshot(
         &mut self,
         snapshot_id: u64,
@@ -1089,11 +1091,11 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
             .get_mut(&snapshot_id)
             .ok_or(TrieError::SnapshotNotFound)?;
 
-            snapshot.close()?;
+        snapshot.close()?;
 
-            self.snapshots.remove(&snapshot_id);
+        self.snapshots.remove(&snapshot_id);
 
-            Ok(())    
+        Ok(())
     }
 
     /// Returns the count of active snapshots.
@@ -1171,8 +1173,6 @@ impl<P: PrefixTrait, V: Clone> Tree<P, V> {
         // If the start key is not found, return an empty Range iterator
         Range::empty()
     }
-
-    
 }
 
 /*
@@ -1324,7 +1324,7 @@ mod tests {
         tree.insert(key, 1, 0);
 
         assert!(tree.remove(key));
-        assert!(tree.get(key, 0).is_none());
+        assert!(tree.get(key, 0).is_err());
     }
 
     // Inserting Two values into the tree and removing one of them
@@ -1729,11 +1729,11 @@ mod tests {
             let _value = i;
             let random_val = rng.gen_range(0..count);
             let random_key: ArrayKey<16> = random_val.into();
-            if tree.get(&random_key, 0).is_none()
+            if tree.get(&random_key, 0).is_err()
                 && tree.insert(&random_key, random_val, 0).unwrap().is_none()
             {
                 let result = tree.get(&random_key, 0);
-                assert!(result.is_some());
+                assert!(result.is_ok());
                 keys_inserted.insert(random_val, random_val);
             }
         }

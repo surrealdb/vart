@@ -42,12 +42,13 @@ impl<'a, P: PrefixTrait, V: Clone> SnapshotPointer<'a, P, V> {
     }
 
     /// Retrieves the value associated with the given key from the snapshot referred to by this SnapshotPointer.
-    pub fn get<K: Key>(&self, key: &K, ts: u64) -> Result<Option<(V, u64)>, TrieError> {
+    pub fn get<K: Key>(&self, key: &K, ts: u64) -> Result<(V, u64), TrieError> {
         self.tree
             .snapshots
             .get(&self.id)
             .ok_or(TrieError::SnapshotNotFound)
-            .map(|snapshot| snapshot.get(key, ts))
+            .and_then(|snapshot| snapshot.get(key, ts))
+            .map_err(|err| err.into()) // Convert the inner TrieError to the outer Result type
     }
 
     pub fn new_reader(&mut self) -> Result<IterationPointer<P, V>, TrieError> {
@@ -128,7 +129,7 @@ impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
     }
 
     /// Retrieves the value and timestamp associated with the given key from the snapshot.
-    pub fn get<K: Key>(&self, key: &K, ts: u64) -> Option<(V, u64)> {
+    pub fn get<K: Key>(&self, key: &K, ts: u64) -> Result<(V, u64), TrieError> {
         Node::get_recurse(self.root.as_ref(), key, ts).map(|(_, value, ts)| (value, ts))
     }
 
@@ -185,7 +186,6 @@ mod tests {
         assert_eq!(
             snap1
                 .get(&VectorKey::from_str("key_1"), initial_ts)
-                .unwrap()
                 .unwrap(),
             (1, 1)
         );
@@ -196,7 +196,6 @@ mod tests {
         assert_eq!(
             snap2
                 .get(&VectorKey::from_str("key_1"), initial_ts)
-                .unwrap()
                 .unwrap(),
             (1, 1)
         );
@@ -208,14 +207,12 @@ mod tests {
         let snap1 = tree.get_snapshot(snap1_id).unwrap();
         assert!(snap1
             .get(&VectorKey::from_str("key_2"), snap1.ts().unwrap())
-            .unwrap()
-            .is_none());
+            .is_err());
 
         let snap2 = tree.get_snapshot(snap2_id).unwrap();
         assert!(snap2
             .get(&VectorKey::from_str("key_2"), snap2.ts().unwrap())
-            .unwrap()
-            .is_none());
+            .is_err());
 
         // keys inserted after snapshot creation should be visible to the snapshot that inserted them
         let mut snap1 = tree.get_snapshot(snap1_id).unwrap();
@@ -223,7 +220,6 @@ mod tests {
         assert_eq!(
             snap1
                 .get(&VectorKey::from_str("key_3_snap1"), snap1.ts().unwrap())
-                .unwrap()
                 .unwrap(),
             (2, 2)
         );
@@ -233,7 +229,6 @@ mod tests {
         assert_eq!(
             snap2
                 .get(&VectorKey::from_str("key_3_snap2"), snap2.ts().unwrap())
-                .unwrap()
                 .unwrap(),
             (3, 2)
         );
@@ -242,14 +237,12 @@ mod tests {
         let snap1 = tree.get_snapshot(snap1_id).unwrap();
         assert!(snap1
             .get(&VectorKey::from_str("key_3_snap2"), snap1.ts().unwrap())
-            .unwrap()
-            .is_none());
+            .is_err());
 
         let snap2 = tree.get_snapshot(snap2_id).unwrap();
         assert!(snap2
             .get(&VectorKey::from_str("key_3_snap1"), snap2.ts().unwrap())
-            .unwrap()
-            .is_none());
+            .is_err());
 
         let mut snap1 = tree.get_snapshot(snap1_id).unwrap();
         assert!(snap1.close().is_ok());
