@@ -651,7 +651,7 @@ impl<P: KeyTrait + Clone, N: Timestamp> Timestamp for Node256<P, N> {
 mod tests {
     use crate::ArrayKey;
 
-    use super::{FlatNode, Node256, Node48, NodeTrait, Timestamp, TwigNode, VecArray};
+    use super::{FlatNode, Node256, Node48, NodeTrait, Timestamp, TwigNode};
     use std::sync::Arc;
 
     macro_rules! impl_timestamp {
@@ -667,102 +667,6 @@ mod tests {
     }
 
     impl_timestamp!(usize, u8, u16, u32, u64);
-
-    #[test]
-    fn new() {
-        let v: VecArray<i32, 10> = VecArray::new();
-        assert_eq!(v.storage.capacity(), 10);
-    }
-
-    #[test]
-    fn push_and_pop() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        let index = v.push(5);
-        assert_eq!(v.get(index), Some(&5));
-        assert_eq!(v.pop(), Some(5));
-    }
-
-    #[test]
-    fn last() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.push(5);
-        v.push(6);
-        assert_eq!(v.last(), Some(&6));
-    }
-
-    #[test]
-    fn last_used_pos() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.push(5);
-        v.push(6);
-        assert_eq!(v.last_used_pos(), Some(1));
-    }
-
-    #[test]
-    fn first_free_pos() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.push(5);
-        assert_eq!(v.first_free_pos(), 1);
-    }
-
-    #[test]
-    fn get_and_set() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.set(5, 6);
-        assert_eq!(v.get(5), Some(&6));
-    }
-
-    #[test]
-    fn get_mut() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.set(5, 6);
-        if let Some(value) = v.get_mut(5) {
-            *value = 7;
-        }
-        assert_eq!(v.get(5), Some(&7));
-    }
-
-    #[test]
-    fn erase() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.push(5);
-        assert_eq!(v.erase(0), Some(5));
-        assert_eq!(v.get(0), None);
-    }
-
-    #[test]
-    fn clear() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.push(5);
-        v.clear();
-        assert!(v.is_empty());
-    }
-
-    #[test]
-    fn is_empty() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        assert!(v.is_empty());
-        v.push(5);
-        assert!(!v.is_empty());
-    }
-
-    #[test]
-    fn iter_keys() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.push(5);
-        v.push(6);
-        let keys: Vec<usize> = v.iter_keys().collect();
-        assert_eq!(keys, vec![0, 1]);
-    }
-
-    #[test]
-    fn iter() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.push(5);
-        v.push(6);
-        let values: Vec<(usize, &i32)> = v.iter().collect();
-        assert_eq!(values, vec![(0, &5), (1, &6)]);
-    }
 
     fn node_test(mut node: impl NodeTrait<usize>, size: usize) {
         for i in 0..size {
