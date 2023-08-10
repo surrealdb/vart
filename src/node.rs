@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{Prefix, VecArray};
+use crate::{KeyTrait, VecArray};
 
 /*
     Immutable nodes
@@ -21,27 +21,120 @@ pub trait Timestamp {
 }
 
 #[derive(Clone)]
-pub struct LeafNode<K: Prefix + Clone, V: Clone> {
-    pub key: K,
-    pub value: V,
-    pub ts: u64, // Timestamp for the leaf node
+pub struct TwigNode<K: KeyTrait + Clone, V: Clone> {
+    pub(crate) prefix: K,
+    pub(crate) key: K,
+    pub(crate) values: Vec<Arc<LeafValue<V>>>,
+    pub(crate) ts: u64, // Timestamp for the twig node
 }
 
-impl<K: Prefix + Clone, V: Clone> LeafNode<K, V> {
-    pub fn new(key: K, value: V) -> Self {
-        Self { key, value, ts: 0 }
+#[derive(Clone)]
+pub struct LeafValue<V: Clone> {
+    pub(crate) value: V,
+    pub(crate) ts: u64,
+}
+
+impl<V: Clone> LeafValue<V> {
+    pub fn new(value: V, ts: u64) -> Self {
+        LeafValue { value, ts }
+    }
+}
+
+impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
+    pub fn new(prefix: K, key: K) -> Self {
+        TwigNode {
+            prefix,
+            key,
+            values: Vec::new(),
+            ts: 0,
+        }
     }
 
     pub fn clone(&self) -> Self {
         Self {
+            prefix: self.prefix.clone(),
             key: self.key.clone(),
-            value: self.value.clone(),
+            values: self.values.clone(),
             ts: self.ts,
         }
     }
+
+    pub fn ts(&self) -> u64 {
+        self.values
+            .iter()
+            .map(|value| value.ts)
+            .max()
+            .unwrap_or(self.ts)
+    }
+
+    pub fn insert(&self, value: V, ts: u64) -> TwigNode<K, V> {
+        let mut new_values = self.values.clone();
+
+        let new_leaf_value = LeafValue::new(value, ts);
+
+        // Insert new LeafValue in sorted order
+        let insertion_index = match new_values.binary_search_by(|v| v.ts.cmp(&new_leaf_value.ts)) {
+            Ok(index) => index,
+            Err(index) => index,
+        };
+        new_values.insert(insertion_index, Arc::new(new_leaf_value));
+
+        let new_ts = new_values
+            .iter()
+            .map(|value| value.ts)
+            .max()
+            .unwrap_or(self.ts);
+
+        TwigNode {
+            prefix: self.prefix.clone(),
+            key: self.key.clone(),
+            values: new_values,
+            ts: new_ts,
+        }
+    }
+
+    pub fn insert_mut(&mut self, value: V, ts: u64) {
+        let new_leaf_value = LeafValue::new(value, ts);
+
+        // Insert new LeafValue in sorted order
+        let insertion_index = match self
+            .values
+            .binary_search_by(|v| v.ts.cmp(&new_leaf_value.ts))
+        {
+            Ok(index) => index,
+            Err(index) => index,
+        };
+        self.values
+            .insert(insertion_index, Arc::new(new_leaf_value));
+
+        self.ts = self.ts(); // Update LeafNode's timestamp
+    }
+
+    pub fn get_latest_leaf(&self) -> Option<Arc<LeafValue<V>>> {
+        self.values.iter().max_by_key(|value| value.ts).cloned()
+    }
+
+    pub fn get_latest_value(&self) -> Option<V> {
+        self.values
+            .iter()
+            .max_by_key(|value| value.ts)
+            .map(|value| value.value.clone())
+    }
+
+    pub fn get_leaf_by_ts(&self, timestamp: u64) -> Option<Arc<LeafValue<V>>> {
+        self.values
+            .iter()
+            .filter(|value| value.ts <= timestamp)
+            .max_by_key(|value| value.ts)
+            .cloned()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Arc<LeafValue<V>>> {
+        self.values.iter()
+    }
 }
 
-impl<K: Prefix + Clone, V: Clone> Timestamp for LeafNode<K, V> {
+impl<K: KeyTrait + Clone, V: Clone> Timestamp for TwigNode<K, V> {
     fn ts(&self) -> u64 {
         self.ts
     }
@@ -63,16 +156,15 @@ impl<K: Prefix + Clone, V: Clone> Timestamp for LeafNode<K, V> {
 // keys are stored in a parallel array. The keys are stored in sorted order, so
 // binary search can be used to find a particular key. The FlatNode is used for
 // storing Node4 and Node16 since they have identical layouts.
-
-pub struct FlatNode<P: Prefix + Clone, N: Timestamp, const WIDTH: usize> {
-    pub prefix: P,
-    pub ts: u64,
+pub struct FlatNode<P: KeyTrait + Clone, N: Timestamp, const WIDTH: usize> {
+    pub(crate) prefix: P,
+    pub(crate) ts: u64,
     keys: [u8; WIDTH],
     children: Vec<Option<Arc<N>>>,
     num_children: u8,
 }
 
-impl<P: Prefix + Clone, N: Timestamp, const WIDTH: usize> FlatNode<P, N, WIDTH> {
+impl<P: KeyTrait + Clone, N: Timestamp, const WIDTH: usize> FlatNode<P, N, WIDTH> {
     pub fn new(prefix: P) -> Self {
         Self {
             prefix,
@@ -175,7 +267,7 @@ impl<P: Prefix + Clone, N: Timestamp, const WIDTH: usize> FlatNode<P, N, WIDTH> 
     }
 }
 
-impl<P: Prefix + Clone, N: Timestamp, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N, WIDTH> {
+impl<P: KeyTrait + Clone, N: Timestamp, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N, WIDTH> {
     fn clone(&self) -> Self {
         let mut new_node = Self::new(self.prefix.clone());
         for i in 0..self.num_children as usize {
@@ -250,7 +342,7 @@ impl<P: Prefix + Clone, N: Timestamp, const WIDTH: usize> NodeTrait<N> for FlatN
     }
 }
 
-impl<P: Prefix + Clone, N: Timestamp, const WIDTH: usize> Timestamp for FlatNode<P, N, WIDTH> {
+impl<P: KeyTrait + Clone, N: Timestamp, const WIDTH: usize> Timestamp for FlatNode<P, N, WIDTH> {
     fn ts(&self) -> u64 {
         self.ts
     }
@@ -266,15 +358,15 @@ impl<P: Prefix + Clone, N: Timestamp, const WIDTH: usize> Timestamp for FlatNode
 // A Node48 is a 256-entry array of pointers to children. The pointers are stored in
 // a Vector Array, which is a Vector of length WIDTH (48) that stores the pointers.
 
-pub struct Node48<P: Prefix + Clone, N: Timestamp> {
-    pub prefix: P,
-    pub ts: u64,
+pub struct Node48<P: KeyTrait + Clone, N: Timestamp> {
+    pub(crate) prefix: P,
+    pub(crate) ts: u64,
     child_ptr_indexes: Box<VecArray<u8, 256>>,
     children: Box<VecArray<Arc<N>, 48>>,
     num_children: u8,
 }
 
-impl<P: Prefix + Clone, N: Timestamp> Node48<P, N> {
+impl<P: KeyTrait + Clone, N: Timestamp> Node48<P, N> {
     pub fn new(prefix: P) -> Self {
         Self {
             prefix,
@@ -298,7 +390,7 @@ impl<P: Prefix + Clone, N: Timestamp> Node48<P, N> {
         for (key, pos) in self.child_ptr_indexes.iter() {
             let child = self.children.get(*pos as usize).unwrap().clone();
             let idx = fnode.find_pos(key as u8).expect("node is full");
-            fnode.insert_child(idx as usize, key as u8, child);
+            fnode.insert_child(idx, key as u8, child);
         }
         fnode.update_ts();
         fnode
@@ -351,7 +443,7 @@ impl<P: Prefix + Clone, N: Timestamp> Node48<P, N> {
     }
 }
 
-impl<P: Prefix + Clone, N: Timestamp> NodeTrait<N> for Node48<P, N> {
+impl<P: KeyTrait + Clone, N: Timestamp> NodeTrait<N> for Node48<P, N> {
     fn clone(&self) -> Self {
         Node48 {
             prefix: self.prefix.clone(),
@@ -408,7 +500,7 @@ impl<P: Prefix + Clone, N: Timestamp> NodeTrait<N> for Node48<P, N> {
     }
 }
 
-impl<P: Prefix + Clone, N: Timestamp> Timestamp for Node48<P, N> {
+impl<P: KeyTrait + Clone, N: Timestamp> Timestamp for Node48<P, N> {
     fn ts(&self) -> u64 {
         self.ts
     }
@@ -423,15 +515,15 @@ impl<P: Prefix + Clone, N: Timestamp> Timestamp for Node48<P, N> {
 //
 // A Node256 is a 256-entry array of pointers to children. The pointers are stored in
 // a Vector Array, which is a Vector of length WIDTH (256) that stores the pointers.
-pub struct Node256<P: Prefix + Clone, N: Timestamp> {
-    pub prefix: P, // Prefix associated with the node
-    pub ts: u64,   // Timestamp for node256
+pub struct Node256<P: KeyTrait + Clone, N: Timestamp> {
+    pub(crate) prefix: P, // Prefix associated with the node
+    pub(crate) ts: u64,   // Timestamp for node256
 
     children: Box<VecArray<Arc<N>, 256>>,
     num_children: usize,
 }
 
-impl<P: Prefix + Clone, N: Timestamp> Node256<P, N> {
+impl<P: KeyTrait + Clone, N: Timestamp> Node256<P, N> {
     pub fn new(prefix: P) -> Self {
         Self {
             prefix,
@@ -493,7 +585,7 @@ impl<P: Prefix + Clone, N: Timestamp> Node256<P, N> {
     }
 }
 
-impl<P: Prefix + Clone, N: Timestamp> NodeTrait<N> for Node256<P, N> {
+impl<P: KeyTrait + Clone, N: Timestamp> NodeTrait<N> for Node256<P, N> {
     fn clone(&self) -> Self {
         Self {
             prefix: self.prefix.clone(),
@@ -549,7 +641,7 @@ impl<P: Prefix + Clone, N: Timestamp> NodeTrait<N> for Node256<P, N> {
     }
 }
 
-impl<P: Prefix + Clone, N: Timestamp> Timestamp for Node256<P, N> {
+impl<P: KeyTrait + Clone, N: Timestamp> Timestamp for Node256<P, N> {
     fn ts(&self) -> u64 {
         self.ts
     }
@@ -557,8 +649,9 @@ impl<P: Prefix + Clone, N: Timestamp> Timestamp for Node256<P, N> {
 
 #[cfg(test)]
 mod tests {
-    use super::{FlatNode, LeafNode, Node256, Node48, NodeTrait, Timestamp, VecArray};
-    use crate::ArrayPrefix;
+    use crate::ArrayKey;
+
+    use super::{FlatNode, Node256, Node48, NodeTrait, Timestamp, TwigNode};
     use std::sync::Arc;
 
     macro_rules! impl_timestamp {
@@ -575,103 +668,7 @@ mod tests {
 
     impl_timestamp!(usize, u8, u16, u32, u64);
 
-    #[test]
-    fn new() {
-        let v: VecArray<i32, 10> = VecArray::new();
-        assert_eq!(v.storage.capacity(), 10);
-    }
-
-    #[test]
-    fn push_and_pop() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        let index = v.push(5);
-        assert_eq!(v.get(index), Some(&5));
-        assert_eq!(v.pop(), Some(5));
-    }
-
-    #[test]
-    fn last() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.push(5);
-        v.push(6);
-        assert_eq!(v.last(), Some(&6));
-    }
-
-    #[test]
-    fn last_used_pos() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.push(5);
-        v.push(6);
-        assert_eq!(v.last_used_pos(), Some(1));
-    }
-
-    #[test]
-    fn first_free_pos() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.push(5);
-        assert_eq!(v.first_free_pos(), 1);
-    }
-
-    #[test]
-    fn get_and_set() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.set(5, 6);
-        assert_eq!(v.get(5), Some(&6));
-    }
-
-    #[test]
-    fn get_mut() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.set(5, 6);
-        if let Some(value) = v.get_mut(5) {
-            *value = 7;
-        }
-        assert_eq!(v.get(5), Some(&7));
-    }
-
-    #[test]
-    fn erase() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.push(5);
-        assert_eq!(v.erase(0), Some(5));
-        assert_eq!(v.get(0), None);
-    }
-
-    #[test]
-    fn clear() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.push(5);
-        v.clear();
-        assert_eq!(v.is_empty(), true);
-    }
-
-    #[test]
-    fn is_empty() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        assert_eq!(v.is_empty(), true);
-        v.push(5);
-        assert_eq!(v.is_empty(), false);
-    }
-
-    #[test]
-    fn iter_keys() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.push(5);
-        v.push(6);
-        let keys: Vec<usize> = v.iter_keys().collect();
-        assert_eq!(keys, vec![0, 1]);
-    }
-
-    #[test]
-    fn iter() {
-        let mut v: VecArray<i32, 10> = VecArray::new();
-        v.push(5);
-        v.push(6);
-        let values: Vec<(usize, &i32)> = v.iter().collect();
-        assert_eq!(values, vec![(0, &5), (1, &6)]);
-    }
-
-    fn node_test(mut node: impl NodeTrait<usize>, size: usize) {
+    fn node_test<N: NodeTrait<usize>>(mut node: N, size: usize) {
         for i in 0..size {
             node = node.add_child(i as u8, i);
         }
@@ -684,52 +681,52 @@ mod tests {
             node = node.delete_child(i as u8);
         }
 
-        assert!(matches!(node.num_children(), 0));
+        assert_eq!(node.num_children(), 0);
     }
 
     #[test]
     fn test_flatnode() {
-        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
+        let dummy_prefix: ArrayKey<8> = ArrayKey::create_key("foo".as_bytes());
 
         node_test(
-            FlatNode::<ArrayPrefix<8>, usize, 4>::new(dummy_prefix.clone()),
+            FlatNode::<ArrayKey<8>, usize, 4>::new(dummy_prefix.clone()),
             4,
         );
         node_test(
-            FlatNode::<ArrayPrefix<8>, usize, 16>::new(dummy_prefix.clone()),
+            FlatNode::<ArrayKey<8>, usize, 16>::new(dummy_prefix.clone()),
             16,
         );
         node_test(
-            FlatNode::<ArrayPrefix<8>, usize, 32>::new(dummy_prefix.clone()),
+            FlatNode::<ArrayKey<8>, usize, 32>::new(dummy_prefix.clone()),
             32,
         );
         node_test(
-            FlatNode::<ArrayPrefix<8>, usize, 48>::new(dummy_prefix.clone()),
+            FlatNode::<ArrayKey<8>, usize, 48>::new(dummy_prefix.clone()),
             48,
         );
         node_test(
-            FlatNode::<ArrayPrefix<8>, usize, 64>::new(dummy_prefix.clone()),
+            FlatNode::<ArrayKey<8>, usize, 64>::new(dummy_prefix.clone()),
             64,
         );
 
-        // resize from 16 to 4
-        let mut node = FlatNode::<ArrayPrefix<8>, usize, 16>::new(dummy_prefix.clone());
+        // Resize from 16 to 4
+        let mut node = FlatNode::<ArrayKey<8>, usize, 16>::new(dummy_prefix.clone());
         for i in 0..4 {
             node = node.add_child(i as u8, i);
         }
 
-        let resized: FlatNode<ArrayPrefix<8>, usize, 4> = node.resize();
+        let resized: FlatNode<ArrayKey<8>, usize, 4> = node.resize();
         assert_eq!(resized.num_children, 4);
         for i in 0..4 {
             assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i.into()));
         }
 
-        // resize from 4 to 16
-        let mut node = FlatNode::<ArrayPrefix<8>, usize, 4>::new(dummy_prefix.clone());
+        // Resize from 4 to 16
+        let mut node = FlatNode::<ArrayKey<8>, usize, 4>::new(dummy_prefix.clone());
         for i in 0..4 {
             node = node.add_child(i as u8, i);
         }
-        let mut resized: FlatNode<ArrayPrefix<8>, usize, 16> = node.resize();
+        let mut resized: FlatNode<ArrayKey<8>, usize, 16> = node.resize();
         assert_eq!(resized.num_children, 4);
         for i in 4..16 {
             resized = resized.add_child(i as u8, i);
@@ -739,8 +736,8 @@ mod tests {
             assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i.into()));
         }
 
-        // resize from 16 to 48
-        let mut node = FlatNode::<ArrayPrefix<8>, usize, 16>::new(dummy_prefix.clone());
+        // Resize from 16 to 48
+        let mut node = FlatNode::<ArrayKey<8>, usize, 16>::new(dummy_prefix.clone());
         for i in 0..16 {
             node = node.add_child(i as u8, i);
         }
@@ -751,7 +748,8 @@ mod tests {
             assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i.into()));
         }
 
-        let mut node = FlatNode::<ArrayPrefix<8>, usize, 4>::new(dummy_prefix.clone());
+        // Additional test for adding and deleting children
+        let mut node = FlatNode::<ArrayKey<8>, usize, 4>::new(dummy_prefix.clone());
         node = node.add_child(1, 1);
         node = node.add_child(2, 2);
         node = node.add_child(3, 3);
@@ -767,20 +765,15 @@ mod tests {
         node = node.delete_child(2);
         node = node.delete_child(3);
         node = node.delete_child(4);
-        // // assert_eq!(node.delete_child(1), Some(1));
-        // // assert_eq!(node.delete_child(2), Some(2));
-        // // assert_eq!(node.delete_child(3), Some(3));
-        // // assert_eq!(node.delete_child(4), Some(4));
-        // // assert_eq!(node.delete_child(5), None);
         assert_eq!(node.num_children(), 0);
     }
 
     #[test]
     fn test_node48() {
-        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
+        let dummy_prefix: ArrayKey<8> = ArrayKey::create_key("foo".as_bytes());
 
-        // node_test(super::Node48::<usize, 48>::new(), 48);
-        let mut n48 = Node48::<ArrayPrefix<8>, u8>::new(dummy_prefix.clone());
+        // Create and test Node48
+        let mut n48 = Node48::<ArrayKey<8>, u8>::new(dummy_prefix.clone());
         for i in 0..48 {
             n48 = n48.add_child(i, i);
         }
@@ -794,10 +787,10 @@ mod tests {
             assert!(n48.find_child(i as u8).is_none());
         }
 
-        // resize from 48 to 16
-        let mut node = Node48::<ArrayPrefix<8>, u8>::new(dummy_prefix.clone());
+        // Resize from 48 to 16
+        let mut node = Node48::<ArrayKey<8>, u8>::new(dummy_prefix.clone());
         for i in 0..18 {
-            node = node.add_child(i as u8, i);
+            node = node.add_child(i, i);
         }
         assert_eq!(node.num_children, 18);
         node = node.delete_child(0);
@@ -807,39 +800,39 @@ mod tests {
         let resized = node.shrink::<16>();
         assert_eq!(resized.num_children, 16);
         for i in 2..18 {
-            assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i.into()));
+            assert!(matches!(resized.find_child(i), Some(v) if *v == i.into()));
         }
 
-        // resize from 48 to 4
-        let mut node = Node48::<ArrayPrefix<8>, u8>::new(dummy_prefix.clone());
+        // Resize from 48 to 4
+        let mut node = Node48::<ArrayKey<8>, u8>::new(dummy_prefix.clone());
         for i in 0..4 {
-            node = node.add_child(i as u8, i);
+            node = node.add_child(i, i);
         }
         let resized = node.shrink::<4>();
         assert_eq!(resized.num_children, 4);
         for i in 0..4 {
-            assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i.into()));
+            assert!(matches!(resized.find_child(i), Some(v) if *v == i.into()));
         }
 
-        // resize from 48 to 256
-        let mut node = Node48::<ArrayPrefix<8>, u8>::new(dummy_prefix.clone());
+        // Resize from 48 to 256
+        let mut node = Node48::<ArrayKey<8>, u8>::new(dummy_prefix);
         for i in 0..48 {
-            node = node.add_child(i as u8, i);
+            node = node.add_child(i, i);
         }
 
         let resized = node.grow();
         assert_eq!(resized.num_children, 48);
         for i in 0..48 {
-            assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i.into()));
+            assert!(matches!(resized.find_child(i), Some(v) if *v == i.into()));
         }
     }
 
     #[test]
     fn test_node256() {
-        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
+        let dummy_prefix: ArrayKey<8> = ArrayKey::create_key("foo".as_bytes());
 
         node_test(
-            Node256::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone()),
+            Node256::<ArrayKey<8>, usize>::new(dummy_prefix.clone()),
             255,
         );
 
@@ -852,7 +845,7 @@ mod tests {
         }
 
         // resize from 256 to 48
-        let mut node = Node256::new(dummy_prefix.clone());
+        let mut node = Node256::new(dummy_prefix);
         for i in 0..48 {
             node = node.add_child(i, i);
         }
@@ -860,23 +853,23 @@ mod tests {
         let resized = node.shrink();
         assert_eq!(resized.num_children, 48);
         for i in 0..48 {
-            assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i.into()));
+            assert!(matches!(resized.find_child(i), Some(v) if *v == i.into()));
         }
     }
 
     #[test]
     fn test_flatnode_update_ts() {
         const WIDTH: usize = 4;
-        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
+        let dummy_prefix: ArrayKey<8> = ArrayKey::create_key("foo".as_bytes());
 
         // Prepare some child nodes
-        let mut child1 = FlatNode::<ArrayPrefix<8>, usize, WIDTH>::new(dummy_prefix.clone());
+        let mut child1 = FlatNode::<ArrayKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
         child1.ts = 5;
-        let mut child2 = FlatNode::<ArrayPrefix<8>, usize, WIDTH>::new(dummy_prefix.clone());
+        let mut child2 = FlatNode::<ArrayKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
         child2.ts = 10;
-        let mut child3 = FlatNode::<ArrayPrefix<8>, usize, WIDTH>::new(dummy_prefix.clone());
+        let mut child3 = FlatNode::<ArrayKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
         child3.ts = 3;
-        let mut child4 = FlatNode::<ArrayPrefix<8>, usize, WIDTH>::new(dummy_prefix.clone());
+        let mut child4 = FlatNode::<ArrayKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
         child4.ts = 7;
 
         let mut parent = FlatNode {
@@ -898,7 +891,7 @@ mod tests {
         assert_eq!(parent.ts(), 10);
 
         // Add a new child with a larger timestamp (15), parent's timestamp should update to 15
-        let mut child5 = FlatNode::<ArrayPrefix<8>, usize, WIDTH>::new(dummy_prefix.clone());
+        let mut child5 = FlatNode::<ArrayKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
         child5.ts = 15;
         parent = parent.add_child(3, child5);
         assert_eq!(parent.ts(), 15);
@@ -908,7 +901,7 @@ mod tests {
         assert_eq!(parent.ts(), 10);
 
         // Update a child's timestamp to be the largest (20), parent's timestamp should update to 20
-        let mut child6 = FlatNode::<ArrayPrefix<8>, usize, WIDTH>::new(dummy_prefix.clone());
+        let mut child6 = FlatNode::<ArrayKey<8>, usize, WIDTH>::new(dummy_prefix);
         child6.ts = 20;
         parent.children[2] = Some(Arc::new(child6));
         parent.update_ts();
@@ -918,17 +911,16 @@ mod tests {
     #[test]
     fn test_flatnode_repeated_update_ts() {
         const WIDTH: usize = 1;
-        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
+        let dummy_prefix: ArrayKey<8> = ArrayKey::create_key("foo".as_bytes());
 
-        let child = FlatNode::<ArrayPrefix<8>, usize, WIDTH>::new(dummy_prefix.clone());
-        let mut parent: FlatNode<ArrayPrefix<8>, FlatNode<ArrayPrefix<8>, usize, 1>, 1> =
-            FlatNode {
-                prefix: dummy_prefix.clone(),
-                ts: 6,
-                keys: [0; WIDTH],
-                children: vec![Some(Arc::new(child))],
-                num_children: 1,
-            };
+        let child = FlatNode::<ArrayKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
+        let mut parent: FlatNode<ArrayKey<8>, FlatNode<ArrayKey<8>, usize, 1>, 1> = FlatNode {
+            prefix: dummy_prefix,
+            ts: 6,
+            keys: [0; WIDTH],
+            children: vec![Some(Arc::new(child))],
+            num_children: 1,
+        };
 
         // Calling update_ts once should update the timestamp.
         parent.update_ts();
@@ -942,21 +934,19 @@ mod tests {
     #[test]
     fn test_node48_update_ts() {
         const WIDTH: usize = 4;
-        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
+        let dummy_prefix: ArrayKey<8> = ArrayKey::create_key("foo".as_bytes());
 
         // Prepare some child nodes with varying timestamps
         let children: Vec<_> = (0..WIDTH)
             .map(|i| {
-                let mut child = FlatNode::<ArrayPrefix<8>, usize, WIDTH>::new(dummy_prefix.clone());
+                let mut child = FlatNode::<ArrayKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
                 child.ts = i as u64;
                 child
             })
             .collect();
 
-        let mut parent: Node48<ArrayPrefix<8>, FlatNode<ArrayPrefix<8>, usize, WIDTH>> =
-            Node48::<ArrayPrefix<8>, FlatNode<ArrayPrefix<8>, usize, WIDTH>>::new(
-                dummy_prefix.clone(),
-            );
+        let mut parent: Node48<ArrayKey<8>, FlatNode<ArrayKey<8>, usize, WIDTH>> =
+            Node48::<ArrayKey<8>, FlatNode<ArrayKey<8>, usize, WIDTH>>::new(dummy_prefix);
 
         // Add children to parent
         for (i, child) in children.iter().enumerate() {
@@ -971,21 +961,19 @@ mod tests {
     #[test]
     fn test_node256_update_ts() {
         const WIDTH: usize = 256;
-        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
+        let dummy_prefix: ArrayKey<8> = ArrayKey::create_key("foo".as_bytes());
 
         // Prepare some child nodes with varying timestamps
         let children: Vec<_> = (0..WIDTH)
             .map(|i| {
-                let mut child = FlatNode::<ArrayPrefix<8>, usize, WIDTH>::new(dummy_prefix.clone());
+                let mut child = FlatNode::<ArrayKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
                 child.ts = i as u64;
                 child
             })
             .collect();
 
-        let mut parent: Node256<ArrayPrefix<8>, FlatNode<ArrayPrefix<8>, usize, WIDTH>> =
-            Node256::<ArrayPrefix<8>, FlatNode<ArrayPrefix<8>, usize, WIDTH>>::new(
-                dummy_prefix.clone(),
-            );
+        let mut parent: Node256<ArrayKey<8>, FlatNode<ArrayKey<8>, usize, WIDTH>> =
+            Node256::<ArrayKey<8>, FlatNode<ArrayKey<8>, usize, WIDTH>>::new(dummy_prefix);
 
         // Add children to parent
         for (i, child) in children.iter().enumerate() {
@@ -998,31 +986,35 @@ mod tests {
         assert_eq!(parent.ts(), (WIDTH - 1) as u64);
     }
 
-    // TODO: add more scenarios to this as leaf nodes have the actual data with timestamps
+    // TODO: add more scenarios to this as twig nodes have the actual data with timestamps
     #[test]
-    fn test_leaf_nodes() {
+    fn test_twig_nodes() {
         const WIDTH: usize = 4;
-        let dummy_prefix: ArrayPrefix<8> = ArrayPrefix::create_key("foo".as_bytes());
+        let dummy_prefix: ArrayKey<8> = ArrayKey::create_key("foo".as_bytes());
 
         // Prepare some child nodes
-        let mut leaf1 = LeafNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), 1);
-        leaf1.ts = 5;
-        let mut leaf2 = LeafNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), 1);
-        leaf2.ts = 10;
-        let mut leaf3 = LeafNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), 1);
-        leaf3.ts = 3;
-        let mut leaf4 = LeafNode::<ArrayPrefix<8>, usize>::new(dummy_prefix.clone(), 1);
-        leaf4.ts = 7;
+        let mut twig1 =
+            TwigNode::<ArrayKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        twig1.ts = 5;
+        let mut twig2 =
+            TwigNode::<ArrayKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        twig2.ts = 10;
+        let mut twig3 =
+            TwigNode::<ArrayKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        twig3.ts = 3;
+        let mut twig4 =
+            TwigNode::<ArrayKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        twig4.ts = 7;
 
         let mut parent = FlatNode {
-            prefix: dummy_prefix.clone(),
+            prefix: dummy_prefix,
             ts: 0,
             keys: [0; WIDTH],
             children: vec![
-                Some(Arc::new(leaf1)),
-                Some(Arc::new(leaf2)),
-                Some(Arc::new(leaf3)),
-                Some(Arc::new(leaf4)),
+                Some(Arc::new(twig1)),
+                Some(Arc::new(twig2)),
+                Some(Arc::new(twig3)),
+                Some(Arc::new(twig4)),
             ],
             num_children: 3,
         };
@@ -1031,5 +1023,79 @@ mod tests {
         // the parent's timestamp should be updated to 10.
         parent.update_ts();
         assert_eq!(parent.ts(), 10);
+    }
+
+    #[test]
+    fn test_twig_insert() {
+        let dummy_prefix: ArrayKey<8> = ArrayKey::create_key("foo".as_bytes());
+
+        let node = TwigNode::<ArrayKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+
+        let new_node = node.insert(42, 123);
+        assert_eq!(node.values.len(), 0);
+        assert_eq!(new_node.values.len(), 1);
+        assert_eq!(new_node.values[0].value, 42);
+        assert_eq!(new_node.values[0].ts, 123);
+    }
+
+    #[test]
+    fn test_twig_insert_mut() {
+        let dummy_prefix: ArrayKey<8> = ArrayKey::create_key("foo".as_bytes());
+
+        let mut node =
+            TwigNode::<ArrayKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+
+        node.insert_mut(42, 123);
+        assert_eq!(node.values.len(), 1);
+        assert_eq!(node.values[0].value, 42);
+        assert_eq!(node.values[0].ts, 123);
+    }
+
+    #[test]
+    fn test_twig_get_latest_leaf() {
+        let dummy_prefix: ArrayKey<8> = ArrayKey::create_key("foo".as_bytes());
+        let mut node =
+            TwigNode::<ArrayKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        node.insert_mut(42, 123);
+        node.insert_mut(43, 124);
+        let latest_leaf = node.get_latest_leaf();
+        assert_eq!(latest_leaf.unwrap().value, 43);
+    }
+
+    #[test]
+    fn test_twig_get_latest_value() {
+        let dummy_prefix: ArrayKey<8> = ArrayKey::create_key("foo".as_bytes());
+        let mut node =
+            TwigNode::<ArrayKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        node.insert_mut(42, 123);
+        node.insert_mut(43, 124);
+        let latest_value = node.get_latest_value();
+        assert_eq!(latest_value.unwrap(), 43);
+    }
+
+    #[test]
+    fn test_twig_get_leaf_by_ts() {
+        let dummy_prefix: ArrayKey<8> = ArrayKey::create_key("foo".as_bytes());
+        let mut node =
+            TwigNode::<ArrayKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        node.insert_mut(42, 123);
+        node.insert_mut(43, 124);
+        let leaf_by_ts = node.get_leaf_by_ts(123);
+        assert_eq!(leaf_by_ts.unwrap().value, 42);
+        let leaf_by_ts = node.get_leaf_by_ts(124);
+        assert_eq!(leaf_by_ts.unwrap().value, 43);
+    }
+
+    #[test]
+    fn test_twig_iter() {
+        let dummy_prefix: ArrayKey<8> = ArrayKey::create_key("foo".as_bytes());
+        let mut node =
+            TwigNode::<ArrayKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        node.insert_mut(42, 123);
+        node.insert_mut(43, 124);
+        let mut iter = node.iter();
+        assert_eq!(iter.next().unwrap().value, 42);
+        assert_eq!(iter.next().unwrap().value, 43);
+        assert!(iter.next().is_none());
     }
 }

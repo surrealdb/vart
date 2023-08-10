@@ -5,9 +5,12 @@ edition = "2021"
 
 
 [dependencies]
-criterion = "0.3.5"
 
 [[bench]]
 name = "vec_bench"
-path = "benches/vec_array_bench.rs"
+path = "benches/art_bench.rs"
 harness = false
+
+[dev-dependencies]
+rand = "0.8.5"
+criterion = "0.3.5"
