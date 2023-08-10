@@ -3,17 +3,17 @@ use std::sync::Arc;
 
 use crate::art::{Node, NodeType, TrieError};
 use crate::snapshot::Snapshot;
-use crate::{Key, PrefixTrait};
+use crate::KeyTrait;
 
 // TODO: need to add more tests for snapshot readers
 /// A structure representing a pointer for iterating over the Trie's key-value pairs.
-pub struct IterationPointer<'a, P: PrefixTrait, V: Clone> {
+pub struct IterationPointer<'a, P: KeyTrait, V: Clone> {
     pub(crate) id: u64,
     root: Arc<Node<P, V>>,
     snap: &'a mut Snapshot<P, V>,
 }
 
-impl<'a, P: PrefixTrait, V: Clone> IterationPointer<'a, P, V> {
+impl<'a, P: KeyTrait, V: Clone> IterationPointer<'a, P, V> {
     /// Creates a new IterationPointer instance.
     ///
     /// # Arguments
@@ -54,11 +54,11 @@ impl<'a, P: PrefixTrait, V: Clone> IterationPointer<'a, P, V> {
 }
 
 /// An iterator over the nodes in the Trie.
-struct NodeIter<'a, P: PrefixTrait, V: Clone> {
+struct NodeIter<'a, P: KeyTrait, V: Clone> {
     node: Box<dyn Iterator<Item = (u8, &'a Arc<Node<P, V>>)> + 'a>,
 }
 
-impl<'a, P: PrefixTrait, V: Clone> NodeIter<'a, P, V> {
+impl<'a, P: KeyTrait, V: Clone> NodeIter<'a, P, V> {
     /// Creates a new NodeIter instance.
     ///
     /// # Arguments
@@ -75,7 +75,7 @@ impl<'a, P: PrefixTrait, V: Clone> NodeIter<'a, P, V> {
     }
 }
 
-impl<'a, P: PrefixTrait, V: Clone> Iterator for NodeIter<'a, P, V> {
+impl<'a, P: KeyTrait, V: Clone> Iterator for NodeIter<'a, P, V> {
     type Item = (u8, &'a Arc<Node<P, V>>);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -84,12 +84,12 @@ impl<'a, P: PrefixTrait, V: Clone> Iterator for NodeIter<'a, P, V> {
 }
 
 /// An iterator over key-value pairs in the Trie.
-pub struct Iter<'a, P: PrefixTrait + 'a, V: Clone> {
+pub struct Iter<'a, P: KeyTrait + 'a, V: Clone> {
     inner: Box<dyn Iterator<Item = (Vec<u8>, &'a V, &'a u64)> + 'a>,
     _marker: std::marker::PhantomData<P>,
 }
 
-impl<'a, P: PrefixTrait + 'a, V: Clone> Iter<'a, P, V> {
+impl<'a, P: KeyTrait + 'a, V: Clone> Iter<'a, P, V> {
     /// Creates a new Iter instance.
     ///
     /// # Arguments
@@ -111,7 +111,7 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iter<'a, P, V> {
     }
 }
 
-impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
+impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
     type Item = (Vec<u8>, &'a V, &'a u64);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -120,12 +120,12 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
 }
 
 /// An internal state for the Iter iterator.
-struct IterState<'a, P: PrefixTrait + 'a, V: Clone> {
+struct IterState<'a, P: KeyTrait + 'a, V: Clone> {
     node_iter: Vec<NodeIter<'a, P, V>>,
     leafs: VecDeque<(&'a P, &'a V, &'a u64)>,
 }
 
-impl<'a, P: PrefixTrait + 'a, V: Clone> IterState<'a, P, V> {
+impl<'a, P: KeyTrait + 'a, V: Clone> IterState<'a, P, V> {
     /// Creates a new IterState instance.
     ///
     /// # Arguments
@@ -143,7 +143,7 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> IterState<'a, P, V> {
     }
 }
 
-impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
+impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
     type Item = (Vec<u8>, &'a V, &'a u64);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -176,7 +176,7 @@ impl<'a, P: PrefixTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
 
         self.leafs
             .pop_front()
-            .map(|leaf| (leaf.0.as_byte_slice().to_vec(), leaf.1, leaf.2))
+            .map(|leaf| (leaf.0.as_slice().to_vec(), leaf.1, leaf.2))
     }
 }
 
@@ -187,7 +187,7 @@ enum RangeResult<'a, V: Clone> {
 }
 
 /// An iterator for the Range operation.
-struct RangeIterator<'a, K: Key + 'a, P: PrefixTrait, V: Clone> {
+struct RangeIterator<'a, K: KeyTrait + 'a, P: KeyTrait, V: Clone> {
     iter: Iter<'a, P, V>,
     end_bound: Bound<K>,
     _marker: std::marker::PhantomData<P>,
@@ -195,15 +195,15 @@ struct RangeIterator<'a, K: Key + 'a, P: PrefixTrait, V: Clone> {
 
 struct EmptyRangeIterator;
 
-trait RangeIteratorTrait<'a, K: Key + 'a, P: PrefixTrait, V: Clone> {
+trait RangeIteratorTrait<'a, K: KeyTrait + 'a, P: KeyTrait, V: Clone> {
     fn next(&mut self) -> RangeResult<'a, V>;
 }
 
-pub struct Range<'a, K: Key + 'a, P: PrefixTrait, V: Clone> {
+pub struct Range<'a, K: KeyTrait + 'a, P: KeyTrait, V: Clone> {
     inner: Box<dyn RangeIteratorTrait<'a, K, P, V> + 'a>,
 }
 
-impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeIteratorTrait<'a, K, P, V>
+impl<'a, K: KeyTrait + 'a, P: KeyTrait, V: Clone> RangeIteratorTrait<'a, K, P, V>
     for EmptyRangeIterator
 {
     fn next(&mut self) -> RangeResult<'a, V> {
@@ -211,7 +211,7 @@ impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeIteratorTrait<'a, K, P, V>
     }
 }
 
-impl<'a, K: Key, P: PrefixTrait, V: Clone> RangeIterator<'a, K, P, V> {
+impl<'a, K: KeyTrait, P: KeyTrait, V: Clone> RangeIterator<'a, K, P, V> {
     pub fn new(iter: Iter<'a, P, V>, end_bound: Bound<K>) -> Self {
         Self {
             iter,
@@ -221,7 +221,7 @@ impl<'a, K: Key, P: PrefixTrait, V: Clone> RangeIterator<'a, K, P, V> {
     }
 }
 
-impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeIteratorTrait<'a, K, P, V>
+impl<'a, K: KeyTrait + 'a, P: KeyTrait, V: Clone> RangeIteratorTrait<'a, K, P, V>
     for RangeIterator<'a, K, P, V>
 {
     fn next(&mut self) -> RangeResult<'a, V> {
@@ -243,7 +243,7 @@ impl<'a, K: Key + 'a, P: PrefixTrait, V: Clone> RangeIteratorTrait<'a, K, P, V>
     }
 }
 
-impl<'a, K: Key, P: PrefixTrait + 'a, V: Clone + 'a> Iterator for Range<'a, K, P, V> {
+impl<'a, K: KeyTrait, P: KeyTrait + 'a, V: Clone + 'a> Iterator for Range<'a, K, P, V> {
     type Item = (Vec<u8>, &'a V, &'a u64);
 
     fn next(&mut self) -> Option<(Vec<u8>, &'a V, &'a u64)> {
@@ -258,7 +258,7 @@ impl<'a, K: Key, P: PrefixTrait + 'a, V: Clone + 'a> Iterator for Range<'a, K, P
     }
 }
 
-impl<'a, K: Key + 'a, P: PrefixTrait + 'a, V: Clone> Range<'a, K, P, V> {
+impl<'a, K: KeyTrait + 'a, P: KeyTrait + 'a, V: Clone> Range<'a, K, P, V> {
     pub fn empty() -> Self {
         Self {
             inner: Box::new(EmptyRangeIterator),

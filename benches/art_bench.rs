@@ -6,16 +6,15 @@ use rand::{thread_rng, Rng};
 
 use art::art::Tree;
 use art::ArrayKey;
-use art::ArrayPrefix;
 
 pub fn seq_insert(c: &mut Criterion) {
     let mut group = c.benchmark_group("seq_insert");
     group.throughput(Throughput::Elements(1));
     group.bench_function("seq_insert", |b| {
-        let mut tree = Tree::<ArrayPrefix<16>, _>::new();
+        let mut tree = Tree::<ArrayKey<16>, _>::new();
         let mut key = 0u64;
         b.iter(|| {
-            tree.insert::<ArrayKey<16>>(&key.into(), key, 0);
+            tree.insert(&key.into(), key, 0);
             key += 1;
         })
     });
@@ -30,11 +29,11 @@ pub fn rand_insert(c: &mut Criterion) {
     let keys = gen_keys(3, 2, 3);
 
     group.bench_function("art", |b| {
-        let mut tree = Tree::<ArrayPrefix<16>, _>::new();
+        let mut tree = Tree::<ArrayKey<16>, _>::new();
         let mut rng = thread_rng();
         b.iter(|| {
             let key = &keys[rng.gen_range(0..keys.len())];
-            tree.insert::<ArrayKey<16>>(&key.into(), key.clone(), 0);
+            tree.insert(&key.into(), key.clone(), 0);
         })
     });
 
@@ -45,14 +44,14 @@ pub fn seq_delete(c: &mut Criterion) {
     let mut group = c.benchmark_group("seq_delete");
     group.throughput(Throughput::Elements(1));
     group.bench_function("art", |b| {
-        let mut tree = Tree::<ArrayPrefix<16>, _>::new();
+        let mut tree = Tree::<ArrayKey<16>, _>::new();
         b.iter_custom(|iters| {
             for i in 0..iters {
-                tree.insert::<ArrayKey<16>>(&i.into(), i, 0);
+                tree.insert(&i.into(), i, 0);
             }
             let start = Instant::now();
             for i in 0..iters {
-                tree.remove::<ArrayKey<16>>(&i.into());
+                tree.remove(&i.into());
             }
             start.elapsed()
         })
@@ -67,14 +66,14 @@ pub fn rand_delete(c: &mut Criterion) {
 
     group.throughput(Throughput::Elements(1));
     group.bench_function("art", |b| {
-        let mut tree = Tree::<ArrayPrefix<16>, _>::new();
+        let mut tree = Tree::<ArrayKey<16>, _>::new();
         let mut rng = thread_rng();
         for key in &keys {
-            tree.insert::<ArrayKey<16>>(&key.into(), key, 0);
+            tree.insert(&key.into(), key, 0);
         }
         b.iter(|| {
             let key = &keys[rng.gen_range(0..keys.len())];
-            criterion::black_box(tree.remove::<ArrayKey<16>>(&key.into()));
+            criterion::black_box(tree.remove(&key.into()));
         })
     });
 
@@ -88,14 +87,14 @@ pub fn rand_get(c: &mut Criterion) {
     {
         let size = 1_000_000;
         group.bench_with_input(BenchmarkId::new("art", size), &size, |b, size| {
-            let mut tree = Tree::<ArrayPrefix<16>, _>::new();
+            let mut tree = Tree::<ArrayKey<16>, _>::new();
             for i in 0..*size as u64 {
-                tree.insert::<ArrayKey<16>>(&i.into(), i, 0);
+                tree.insert(&i.into(), i, 0);
             }
             let mut rng = thread_rng();
             b.iter(|| {
                 let key: u64 = rng.gen_range(0..*size);
-                criterion::black_box(tree.get::<ArrayKey<16>>(&key.into(), 0));
+                criterion::black_box(tree.get(&key.into(), 0));
             })
         });
     }
@@ -110,14 +109,14 @@ pub fn rand_get_str(c: &mut Criterion) {
     {
         let size = 1_000_000;
         group.bench_with_input(BenchmarkId::new("art", size), &size, |b, _size| {
-            let mut tree = Tree::<ArrayPrefix<16>, _>::new();
+            let mut tree = Tree::<ArrayKey<16>, _>::new();
             for (i, key) in keys.iter().enumerate() {
-                tree.insert::<ArrayKey<16>>(&key.into(), i, 0);
+                tree.insert(&key.into(), i, 0);
             }
             let mut rng = thread_rng();
             b.iter(|| {
                 let key = &keys[rng.gen_range(0..keys.len())];
-                criterion::black_box(tree.get::<ArrayKey<16>>(&key.into(), 0));
+                criterion::black_box(tree.get(&key.into(), 0));
             })
         });
     }
@@ -132,13 +131,13 @@ pub fn seq_get(c: &mut Criterion) {
     {
         let size = 1_000_000;
         group.bench_with_input(BenchmarkId::new("art", size), &size, |b, size| {
-            let mut tree = Tree::<ArrayPrefix<16>, _>::new();
+            let mut tree = Tree::<ArrayKey<16>, _>::new();
             for i in 0..*size as u64 {
-                tree.insert::<ArrayKey<16>>(&i.into(), i, 0);
+                tree.insert(&i.into(), i, 0);
             }
             let mut key = 0u64;
             b.iter(|| {
-                criterion::black_box(tree.get::<ArrayKey<16>>(&key.into(), 0));
+                criterion::black_box(tree.get(&key.into(), 0));
                 key += 1;
             })
         });

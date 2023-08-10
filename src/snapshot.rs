@@ -3,18 +3,18 @@
 use crate::art::{Node, Tree, TrieError};
 use crate::iter::IterationPointer;
 use crate::node::Timestamp;
-use crate::{Key, PrefixTrait};
+use crate::KeyTrait;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Represents a pointer to a specific snapshot within the Trie structure.
-pub struct SnapshotPointer<'a, P: PrefixTrait, V: Clone> {
+pub struct SnapshotPointer<'a, P: KeyTrait, V: Clone> {
     id: u64,
     tree: &'a mut Tree<P, V>,
 }
 
-impl<'a, P: PrefixTrait, V: Clone> SnapshotPointer<'a, P, V> {
+impl<'a, P: KeyTrait, V: Clone> SnapshotPointer<'a, P, V> {
     /// Creates a new SnapshotPointer instance pointing to a specific snapshot in the Tree.
     pub fn new(tree: &'a mut Tree<P, V>, snapshot_id: u64) -> Self {
         SnapshotPointer {
@@ -33,7 +33,7 @@ impl<'a, P: PrefixTrait, V: Clone> SnapshotPointer<'a, P, V> {
     }
 
     /// Inserts a key-value pair into the snapshot referred to by this SnapshotPointer.
-    pub fn insert<K: Key>(&mut self, key: &K, value: V) -> Result<(), TrieError> {
+    pub fn insert(&mut self, key: &P, value: V) -> Result<(), TrieError> {
         self.tree
             .snapshots
             .get_mut(&self.id)
@@ -42,7 +42,7 @@ impl<'a, P: PrefixTrait, V: Clone> SnapshotPointer<'a, P, V> {
     }
 
     /// Retrieves the value associated with the given key from the snapshot referred to by this SnapshotPointer.
-    pub fn get<K: Key>(&self, key: &K, ts: u64) -> Result<(V, u64), TrieError> {
+    pub fn get(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
         self.tree
             .snapshots
             .get(&self.id)
@@ -82,7 +82,7 @@ impl<'a, P: PrefixTrait, V: Clone> SnapshotPointer<'a, P, V> {
 }
 
 /// Represents a snapshot of the data within the Trie.
-pub struct Snapshot<P: PrefixTrait, V: Clone> {
+pub struct Snapshot<P: KeyTrait, V: Clone> {
     id: u64,
     ts: u64,
     root: Arc<Node<P, V>>,
@@ -91,7 +91,7 @@ pub struct Snapshot<P: PrefixTrait, V: Clone> {
     closed: bool,
 }
 
-impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
+impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
     pub(crate) fn new(id: u64, root: Arc<Node<P, V>>, ts: u64) -> Self {
         Snapshot {
             id,
@@ -122,14 +122,14 @@ impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
     }
 
     /// Inserts a key-value pair into the snapshot.
-    pub fn insert<K: Key>(&mut self, key: &K, value: V) -> Result<(), TrieError> {
+    pub fn insert(&mut self, key: &P, value: V) -> Result<(), TrieError> {
         let (new_node, _) = Node::insert_recurse(&self.root, key, value, self.ts, 0)?;
         self.root = new_node;
         Ok(())
     }
 
     /// Retrieves the value and timestamp associated with the given key from the snapshot.
-    pub fn get<K: Key>(&self, key: &K, ts: u64) -> Result<(V, u64), TrieError> {
+    pub fn get(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
         Node::get_recurse(self.root.as_ref(), key, ts).map(|(_, value, ts)| (value, ts))
     }
 
@@ -156,12 +156,11 @@ impl<P: PrefixTrait, V: Clone> Snapshot<P, V> {
 #[cfg(test)]
 mod tests {
     use super::Tree;
-    use crate::ArrayPrefix;
     use crate::VectorKey;
 
     #[test]
     fn test_snapshot_creation() {
-        let mut tree: Tree<ArrayPrefix<32>, i32> = Tree::<ArrayPrefix<32>, i32>::new();
+        let mut tree: Tree<VectorKey, i32> = Tree::<VectorKey, i32>::new();
         assert!(tree.insert(&VectorKey::from_str("key_1"), 1, 0).is_ok());
         assert!(tree.insert(&VectorKey::from_str("key_2"), 1, 0).is_ok());
         assert!(tree.insert(&VectorKey::from_str("key_3"), 1, 0).is_ok());
@@ -175,7 +174,7 @@ mod tests {
 
     #[test]
     fn test_snapshot_isolation() {
-        let mut tree: Tree<ArrayPrefix<32>, i32> = Tree::<ArrayPrefix<32>, i32>::new();
+        let mut tree: Tree<VectorKey, i32> = Tree::<VectorKey, i32>::new();
         assert!(tree.insert(&VectorKey::from_str("key_1"), 1, 0).is_ok());
         let initial_ts = tree.ts();
 
@@ -255,7 +254,7 @@ mod tests {
 
     #[test]
     fn test_snapshot_readers() {
-        let mut tree: Tree<ArrayPrefix<32>, i32> = Tree::<ArrayPrefix<32>, i32>::new();
+        let mut tree: Tree<VectorKey, i32> = Tree::<VectorKey, i32>::new();
         assert!(tree.insert(&VectorKey::from_str("key_1"), 1, 0).is_ok());
         assert!(tree.insert(&VectorKey::from_str("key_2"), 1, 0).is_ok());
         assert!(tree.insert(&VectorKey::from_str("key_3"), 1, 0).is_ok());
