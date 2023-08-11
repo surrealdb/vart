@@ -1098,4 +1098,37 @@ mod tests {
         assert_eq!(iter.next().unwrap().value, 43);
         assert!(iter.next().is_none());
     }
+
+    #[test]
+    fn test_memory_leak() {
+        let dummy_prefix: ArrayKey<8> = ArrayKey::create_key("foo".as_bytes());
+
+        // Create and test flatnode
+        let mut node = FlatNode::<ArrayKey<8>, usize, 4>::new(dummy_prefix.clone());
+        for i in 0..4 {
+            node = node.add_child(i as u8, i);
+        }
+
+        for child in node.iter() {
+            assert_eq!(Arc::strong_count(child.1), 1);
+        }
+
+        // Create and test Node48
+        let mut n48 = Node48::<ArrayKey<8>, u8>::new(dummy_prefix.clone());
+        for i in 0..48 {
+            n48 = n48.add_child(i, i);
+        }
+        for child in n48.iter() {
+            assert_eq!(Arc::strong_count(child.1), 1);
+        }
+
+        // Create and test Node256
+        let mut n256 = Node256::new(dummy_prefix.clone());
+        for i in 0..255 {
+            n256 = n256.add_child(i, i);
+        }
+        for child in n256.iter() {
+            assert_eq!(Arc::strong_count(child.1), 1);
+        }
+    }
 }
