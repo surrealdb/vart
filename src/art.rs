@@ -5,7 +5,7 @@ use std::error::Error;
 use std::fmt;
 use std::ops::RangeBounds;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::iter::{Iter, Range};
 use crate::node::{FlatNode, Node256, Node48, NodeTrait, Timestamp, TwigNode};
@@ -144,7 +144,7 @@ pub struct Tree<P: KeyTrait, V: Clone> {
     /// An optional shared reference to the root node of the tree.
     pub(crate) root: Option<Arc<Node<P, V>>>,
     /// A mapping of snapshot IDs to their corresponding snapshots.
-    pub(crate) snapshots: HashMap<u64, Snapshot<P, V>>,
+    pub(crate) snapshots: RwLock<HashMap<u64, Snapshot<P, V>>>,
     /// An atomic value indicating the maximum snapshot ID assigned.
     pub(crate) max_snapshot_id: AtomicU64,
     /// The maximum number of active snapshots allowed.
@@ -904,7 +904,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Tree {
             root: None,
             max_snapshot_id: AtomicU64::new(0),
-            snapshots: HashMap::new(),
+            snapshots: RwLock::new(HashMap::new()),
             max_active_snapshots: DEFAULT_MAX_ACTIVE_SNAPSHOTS,
         }
     }
@@ -1033,7 +1033,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// Returns a `Result` containing the `SnapshotPointer` if the snapshot is created successfully,
     /// or an `Err` with an appropriate error message if creation fails.
     ///
-    pub fn create_snapshot(&mut self) -> Result<SnapshotPointer<P, V>, TrieError> {
+    pub fn create_snapshot(&self) -> Result<SnapshotPointer<P, V>, TrieError> {
         if self.root.is_none() {
             return Err(TrieError::Other(
                 "cannot create snapshot from empty tree".to_string(),
@@ -1053,7 +1053,8 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         let root = self.root.as_ref().unwrap();
         let new_snapshot = Snapshot::new(new_snapshot_id, root.clone(), root.ts() + 1);
 
-        self.snapshots.insert(new_snapshot_id, new_snapshot);
+        let mut snapshots = self.snapshots.write().unwrap();
+        snapshots.insert(new_snapshot_id, new_snapshot);
 
         Ok(SnapshotPointer::new(self, new_snapshot_id))
     }
@@ -1064,6 +1065,8 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     ) -> Result<SnapshotPointer<P, V>, TrieError> {
         let _snapshot = self
             .snapshots
+            .read()
+            .unwrap()
             .get(&snapshot_id)
             .ok_or(TrieError::SnapshotNotFound)?;
         Ok(SnapshotPointer::new(self, snapshot_id))
@@ -1084,15 +1087,16 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// Returns `Ok(())` if the snapshot is successfully closed and removed. Returns an `Err`
     /// with `TrieError::SnapshotNotFound` if the snapshot with the given ID is not found.
     ///
-    pub(crate) fn close(&mut self, snapshot_id: u64) -> Result<(), TrieError> {
+    pub(crate) fn close(&self, snapshot_id: u64) -> Result<(), TrieError> {
         let snapshot = self
             .snapshots
+            .write()
+            .unwrap()
             .get_mut(&snapshot_id)
-            .ok_or(TrieError::SnapshotNotFound)?;
+            .ok_or(TrieError::SnapshotNotFound)?
+            .close()?;
 
-        snapshot.close()?;
-
-        self.snapshots.remove(&snapshot_id);
+        self.snapshots.write().unwrap().remove(&snapshot_id);
 
         Ok(())
     }
@@ -1107,7 +1111,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// if there is an issue retrieving the snapshot count.
     ///
     pub fn snapshot_count(&self) -> Result<usize, TrieError> {
-        Ok(self.snapshots.len())
+        Ok(self.snapshots.read().unwrap().len())
     }
 
     /// Creates an iterator over the Trie's key-value pairs.
@@ -1796,14 +1800,14 @@ mod tests {
     #[test]
     fn test_same_key_with_versions() {
         let mut tree = Tree::<VectorKey, i32>::new();
-    
+
         // Insertions
         let key1 = VectorKey::from_str("abc");
         let key2 = VectorKey::from_str("efg");
         tree.insert(&key1, 1, 0);
         tree.insert(&key1, 2, 10);
         tree.insert(&key2, 3, 11);
-    
+
         // Versioned retrievals and assertions
         let (_, val, _) = tree.get(&key1, 1).unwrap();
         assert_eq!(val, 1);
@@ -1811,7 +1815,7 @@ mod tests {
         assert_eq!(val, 2);
         let (_, val, _) = tree.get(&key2, 11).unwrap();
         assert_eq!(val, 3);
-    
+
         // Iteration and verification
         let mut len = 0;
         let tree_iter = tree.iter();
@@ -1819,5 +1823,5 @@ mod tests {
             len += 1;
         }
         assert_eq!(len, 3);
-    }    
+    }
 }

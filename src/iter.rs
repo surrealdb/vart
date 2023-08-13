@@ -2,7 +2,7 @@ use std::collections::{Bound, VecDeque};
 use std::sync::Arc;
 
 use crate::art::{Node, NodeType, TrieError};
-use crate::snapshot::Snapshot;
+use crate::snapshot::SnapshotPointer;
 use crate::KeyTrait;
 
 // TODO: need to add more tests for snapshot readers
@@ -10,7 +10,7 @@ use crate::KeyTrait;
 pub struct IterationPointer<'a, P: KeyTrait, V: Clone> {
     pub(crate) id: u64,
     root: Arc<Node<P, V>>,
-    snap: &'a mut Snapshot<P, V>,
+    snap: &'a SnapshotPointer<'a, P, V>,
 }
 
 impl<'a, P: KeyTrait, V: Clone> IterationPointer<'a, P, V> {
@@ -23,7 +23,7 @@ impl<'a, P: KeyTrait, V: Clone> IterationPointer<'a, P, V> {
     /// * `id` - The ID of the snapshot.
     ///
     pub fn new(
-        snap: &'a mut Snapshot<P, V>,
+        snap: &'a SnapshotPointer<P, V>,
         root: Arc<Node<P, V>>,
         id: u64,
     ) -> IterationPointer<'a, P, V> {
@@ -46,7 +46,7 @@ impl<'a, P: KeyTrait, V: Clone> IterationPointer<'a, P, V> {
     ///
     /// Returns a Result indicating success or an error.
     ///
-    pub fn close(&mut self) -> Result<(), TrieError> {
+    pub fn close(&self) -> Result<(), TrieError> {
         // Call the close method of the Tree with the id of the snapshot to close it
         self.snap.close_reader(self.id)?;
         Ok(())
