@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{KeyTrait, VecArray};
+use crate::{KeyTrait, SparseArray};
 
 /*
     Immutable nodes
@@ -361,8 +361,8 @@ impl<P: KeyTrait + Clone, N: Timestamp, const WIDTH: usize> Timestamp for FlatNo
 pub struct Node48<P: KeyTrait + Clone, N: Timestamp> {
     pub(crate) prefix: P,
     pub(crate) ts: u64,
-    child_ptr_indexes: Box<VecArray<u8, 256>>,
-    children: Box<VecArray<Arc<N>, 48>>,
+    child_ptr_indexes: Box<SparseArray<u8, 256>>,
+    children: Box<SparseArray<Arc<N>, 48>>,
     num_children: u8,
 }
 
@@ -371,8 +371,8 @@ impl<P: KeyTrait + Clone, N: Timestamp> Node48<P, N> {
         Self {
             prefix,
             ts: 0,
-            child_ptr_indexes: Box::new(VecArray::new()),
-            children: Box::new(VecArray::new()),
+            child_ptr_indexes: Box::new(SparseArray::new()),
+            children: Box::new(SparseArray::new()),
             num_children: 0,
         }
     }
@@ -519,7 +519,7 @@ pub struct Node256<P: KeyTrait + Clone, N: Timestamp> {
     pub(crate) prefix: P, // Prefix associated with the node
     pub(crate) ts: u64,   // Timestamp for node256
 
-    children: Box<VecArray<Arc<N>, 256>>,
+    children: Box<SparseArray<Arc<N>, 256>>,
     num_children: usize,
 }
 
@@ -528,7 +528,7 @@ impl<P: KeyTrait + Clone, N: Timestamp> Node256<P, N> {
         Self {
             prefix,
             ts: 0,
-            children: Box::new(VecArray::new()),
+            children: Box::new(SparseArray::new()),
             num_children: 0,
         }
     }

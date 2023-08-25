@@ -7,7 +7,7 @@ edition = "2021"
 [dependencies]
 
 [[bench]]
-name = "vec_bench"
+name = "art_bench"
 path = "benches/art_bench.rs"
 harness = false
 
