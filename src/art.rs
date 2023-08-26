@@ -242,7 +242,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
             NodeType::Node4(n) => self.num_children() >= n.size(),
             NodeType::Node16(n) => self.num_children() >= n.size(),
             NodeType::Node48(n) => self.num_children() >= n.size(),
-            NodeType::Node256(_) => self.num_children() > 256,
+            NodeType::Node256(n) => self.num_children() > n.size(),
             NodeType::Twig(_) => panic!("Unexpected Twig node encountered in is_full()"),
         }
     }
@@ -1717,7 +1717,7 @@ mod tests {
         let mut tree = Tree::<ArrayKey<32>, u16>::new();
 
         // Insertion
-        for i in 0..=u16::MAX {
+        for i in 0..u16::MAX {
             let key: ArrayKey<32> = i.into();
             tree.insert(&key, i, 0);
         }
@@ -1735,7 +1735,7 @@ mod tests {
         }
 
         // Final assertion
-        assert_eq!(len, u16::MAX as usize + 1);
+        assert_eq!(len, u16::MAX as usize);
     }
 
     #[test]
@@ -1743,7 +1743,7 @@ mod tests {
         let mut tree: Tree<ArrayKey<32>, u8> = Tree::<ArrayKey<32>, u8>::new();
 
         // Insertion
-        for i in 0..=u8::MAX {
+        for i in 0..u8::MAX {
             let key: ArrayKey<32> = i.into();
             tree.insert(&key, i, 0);
         }
@@ -1761,7 +1761,7 @@ mod tests {
         }
 
         // Final assertion
-        assert_eq!(len, u8::MAX as usize + 1);
+        assert_eq!(len, u8::MAX as usize);
     }
 
     #[test]
