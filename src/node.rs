@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::rc::Rc;
 
 use crate::{KeyTrait, SparseArray};
 
@@ -9,11 +9,11 @@ use crate::{KeyTrait, SparseArray};
 pub trait NodeTrait<N> {
     fn clone(&self) -> Self;
     fn add_child(&self, key: u8, node: N) -> Self;
-    fn find_child(&self, key: u8) -> Option<&Arc<N>>;
+    fn find_child(&self, key: u8) -> Option<&Rc<N>>;
     fn delete_child(&self, key: u8) -> Self;
     fn num_children(&self) -> usize;
     fn size(&self) -> usize;
-    fn replace_child(&self, key: u8, node: Arc<N>) -> Self;
+    fn replace_child(&self, key: u8, node: Rc<N>) -> Self;
 }
 
 pub trait Timestamp {
@@ -24,7 +24,7 @@ pub trait Timestamp {
 pub struct TwigNode<K: KeyTrait + Clone, V: Clone> {
     pub(crate) prefix: K,
     pub(crate) key: K,
-    pub(crate) values: Vec<Arc<LeafValue<V>>>,
+    pub(crate) values: Vec<Rc<LeafValue<V>>>,
     pub(crate) ts: u64, // Timestamp for the twig node
 }
 
@@ -77,7 +77,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
             Ok(index) => index,
             Err(index) => index,
         };
-        new_values.insert(insertion_index, Arc::new(new_leaf_value));
+        new_values.insert(insertion_index, Rc::new(new_leaf_value));
 
         let new_ts = new_values
             .iter()
@@ -104,13 +104,12 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
             Ok(index) => index,
             Err(index) => index,
         };
-        self.values
-            .insert(insertion_index, Arc::new(new_leaf_value));
+        self.values.insert(insertion_index, Rc::new(new_leaf_value));
 
         self.ts = self.ts(); // Update LeafNode's timestamp
     }
 
-    pub fn get_latest_leaf(&self) -> Option<Arc<LeafValue<V>>> {
+    pub fn get_latest_leaf(&self) -> Option<Rc<LeafValue<V>>> {
         self.values.iter().max_by_key(|value| value.ts).cloned()
     }
 
@@ -121,7 +120,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
             .map(|value| value.value.clone())
     }
 
-    pub fn get_leaf_by_ts(&self, timestamp: u64) -> Option<Arc<LeafValue<V>>> {
+    pub fn get_leaf_by_ts(&self, timestamp: u64) -> Option<Rc<LeafValue<V>>> {
         self.values
             .iter()
             .filter(|value| value.ts <= timestamp)
@@ -129,7 +128,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
             .cloned()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Arc<LeafValue<V>>> {
+    pub fn iter(&self) -> impl Iterator<Item = &Rc<LeafValue<V>>> {
         self.values.iter()
     }
 }
@@ -160,7 +159,7 @@ pub struct FlatNode<P: KeyTrait + Clone, N: Timestamp, const WIDTH: usize> {
     pub(crate) prefix: P,
     pub(crate) ts: u64,
     keys: [u8; WIDTH],
-    children: Vec<Option<Arc<N>>>,
+    children: Vec<Option<Rc<N>>>,
     num_children: u8,
 }
 
@@ -213,7 +212,7 @@ impl<P: KeyTrait + Clone, N: Timestamp, const WIDTH: usize> FlatNode<P, N, WIDTH
 
     // Helper function to insert a child node at the specified position
     #[inline]
-    fn insert_child(&mut self, idx: usize, key: u8, node: Arc<N>) {
+    fn insert_child(&mut self, idx: usize, key: u8, node: Rc<N>) {
         for i in (idx..self.num_children as usize).rev() {
             self.keys[i + 1] = self.keys[i];
             self.children[i + 1] = self.children[i].clone();
@@ -258,7 +257,7 @@ impl<P: KeyTrait + Clone, N: Timestamp, const WIDTH: usize> FlatNode<P, N, WIDTH
     }
 
     #[inline]
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (u8, &Arc<N>)> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (u8, &Rc<N>)> {
         self.keys
             .iter()
             .zip(self.children.iter())
@@ -279,7 +278,7 @@ impl<P: KeyTrait + Clone, N: Timestamp, const WIDTH: usize> NodeTrait<N> for Fla
         new_node
     }
 
-    fn replace_child(&self, key: u8, node: Arc<N>) -> Self {
+    fn replace_child(&self, key: u8, node: Rc<N>) -> Self {
         let mut new_node = self.clone();
         let idx = new_node.index(key).unwrap();
         new_node.keys[idx] = key;
@@ -296,12 +295,12 @@ impl<P: KeyTrait + Clone, N: Timestamp, const WIDTH: usize> NodeTrait<N> for Fla
         // Update the timestamp if the new child has a greater timestamp
         new_node.update_if_newer(node.ts());
 
-        // Convert the node to Arc<N> and insert it
-        new_node.insert_child(idx, key, Arc::new(node));
+        // Convert the node to Rc<N> and insert it
+        new_node.insert_child(idx, key, Rc::new(node));
         new_node
     }
 
-    fn find_child(&self, key: u8) -> Option<&Arc<N>> {
+    fn find_child(&self, key: u8) -> Option<&Rc<N>> {
         let idx = self.index(key)?;
         let child = self.children[idx].as_ref();
         child
@@ -362,7 +361,7 @@ pub struct Node48<P: KeyTrait + Clone, N: Timestamp> {
     pub(crate) prefix: P,
     pub(crate) ts: u64,
     child_ptr_indexes: Box<SparseArray<u8, 256>>,
-    children: Box<SparseArray<Arc<N>, 48>>,
+    children: Box<SparseArray<Rc<N>, 48>>,
     num_children: u8,
 }
 
@@ -377,7 +376,7 @@ impl<P: KeyTrait + Clone, N: Timestamp> Node48<P, N> {
         }
     }
 
-    pub fn insert_child(&mut self, key: u8, node: Arc<N>) {
+    pub fn insert_child(&mut self, key: u8, node: Rc<N>) {
         let pos = self.children.first_free_pos();
 
         self.child_ptr_indexes.set(key as usize, pos as u8);
@@ -436,7 +435,7 @@ impl<P: KeyTrait + Clone, N: Timestamp> Node48<P, N> {
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (u8, &Arc<N>)> {
+    pub fn iter(&self) -> impl Iterator<Item = (u8, &Rc<N>)> {
         self.child_ptr_indexes
             .iter()
             .map(move |(key, pos)| (key as u8, self.children.get(*pos as usize).unwrap()))
@@ -454,7 +453,7 @@ impl<P: KeyTrait + Clone, N: Timestamp> NodeTrait<N> for Node48<P, N> {
         }
     }
 
-    fn replace_child(&self, key: u8, node: Arc<N>) -> Self {
+    fn replace_child(&self, key: u8, node: Rc<N>) -> Self {
         let mut new_node = self.clone();
         let idx = new_node.child_ptr_indexes.get(key as usize).unwrap();
         new_node.children.set(*idx as usize, node);
@@ -469,7 +468,7 @@ impl<P: KeyTrait + Clone, N: Timestamp> NodeTrait<N> for Node48<P, N> {
         // Update the timestamp if the new child has a greater timestamp
         new_node.update_if_newer(node.ts());
 
-        new_node.insert_child(key, Arc::new(node));
+        new_node.insert_child(key, Rc::new(node));
         new_node
     }
 
@@ -484,7 +483,7 @@ impl<P: KeyTrait + Clone, N: Timestamp> NodeTrait<N> for Node48<P, N> {
         new_node
     }
 
-    fn find_child(&self, key: u8) -> Option<&Arc<N>> {
+    fn find_child(&self, key: u8) -> Option<&Rc<N>> {
         let idx = self.child_ptr_indexes.get(key as usize)?;
         let child = self.children.get(*idx as usize)?;
         Some(child)
@@ -494,7 +493,7 @@ impl<P: KeyTrait + Clone, N: Timestamp> NodeTrait<N> for Node48<P, N> {
         self.num_children as usize
     }
 
-    #[inline]
+    #[inline(always)]
     fn size(&self) -> usize {
         48
     }
@@ -519,7 +518,7 @@ pub struct Node256<P: KeyTrait + Clone, N: Timestamp> {
     pub(crate) prefix: P, // Prefix associated with the node
     pub(crate) ts: u64,   // Timestamp for node256
 
-    children: Box<SparseArray<Arc<N>, 256>>,
+    children: Box<SparseArray<Rc<N>, 256>>,
     num_children: usize,
 }
 
@@ -545,7 +544,7 @@ impl<P: KeyTrait + Clone, N: Timestamp> Node256<P, N> {
     }
 
     #[inline]
-    fn insert_child(&mut self, key: u8, node: Arc<N>) {
+    fn insert_child(&mut self, key: u8, node: Rc<N>) {
         self.children.set(key as usize, node);
         self.num_children += 1;
     }
@@ -580,7 +579,7 @@ impl<P: KeyTrait + Clone, N: Timestamp> Node256<P, N> {
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (u8, &Arc<N>)> {
+    pub fn iter(&self) -> impl Iterator<Item = (u8, &Rc<N>)> {
         self.children.iter().map(|(key, node)| (key as u8, node))
     }
 }
@@ -595,7 +594,7 @@ impl<P: KeyTrait + Clone, N: Timestamp> NodeTrait<N> for Node256<P, N> {
         }
     }
 
-    fn replace_child(&self, key: u8, node: Arc<N>) -> Self {
+    fn replace_child(&self, key: u8, node: Rc<N>) -> Self {
         let mut new_node = self.clone();
 
         new_node.children.set(key as usize, node);
@@ -610,12 +609,12 @@ impl<P: KeyTrait + Clone, N: Timestamp> NodeTrait<N> for Node256<P, N> {
         // Update the timestamp if the new child has a greater timestamp
         new_node.update_if_newer(node.ts());
 
-        new_node.insert_child(key, Arc::new(node));
+        new_node.insert_child(key, Rc::new(node));
         new_node
     }
 
     #[inline]
-    fn find_child(&self, key: u8) -> Option<&Arc<N>> {
+    fn find_child(&self, key: u8) -> Option<&Rc<N>> {
         let child = self.children.get(key as usize)?;
         Some(child)
     }
@@ -636,6 +635,7 @@ impl<P: KeyTrait + Clone, N: Timestamp> NodeTrait<N> for Node256<P, N> {
         self.num_children
     }
 
+    #[inline(always)]
     fn size(&self) -> usize {
         256
     }
@@ -652,7 +652,7 @@ mod tests {
     use crate::ArrayKey;
 
     use super::{FlatNode, Node256, Node48, NodeTrait, Timestamp, TwigNode};
-    use std::sync::Arc;
+    use std::rc::Rc;
 
     macro_rules! impl_timestamp {
         ($($t:ty),*) => {
@@ -877,9 +877,9 @@ mod tests {
             ts: 6,
             keys: [0; WIDTH],
             children: vec![
-                Some(Arc::new(child1)),
-                Some(Arc::new(child2)),
-                Some(Arc::new(child3)),
+                Some(Rc::new(child1)),
+                Some(Rc::new(child2)),
+                Some(Rc::new(child3)),
                 None,
             ],
             num_children: 3,
@@ -903,7 +903,7 @@ mod tests {
         // Update a child's timestamp to be the largest (20), parent's timestamp should update to 20
         let mut child6 = FlatNode::<ArrayKey<8>, usize, WIDTH>::new(dummy_prefix);
         child6.ts = 20;
-        parent.children[2] = Some(Arc::new(child6));
+        parent.children[2] = Some(Rc::new(child6));
         parent.update_ts();
         assert_eq!(parent.ts(), 20);
     }
@@ -918,7 +918,7 @@ mod tests {
             prefix: dummy_prefix,
             ts: 6,
             keys: [0; WIDTH],
-            children: vec![Some(Arc::new(child))],
+            children: vec![Some(Rc::new(child))],
             num_children: 1,
         };
 
@@ -1011,10 +1011,10 @@ mod tests {
             ts: 0,
             keys: [0; WIDTH],
             children: vec![
-                Some(Arc::new(twig1)),
-                Some(Arc::new(twig2)),
-                Some(Arc::new(twig3)),
-                Some(Arc::new(twig4)),
+                Some(Rc::new(twig1)),
+                Some(Rc::new(twig2)),
+                Some(Rc::new(twig3)),
+                Some(Rc::new(twig4)),
             ],
             num_children: 3,
         };
@@ -1110,7 +1110,7 @@ mod tests {
         }
 
         for child in node.iter() {
-            assert_eq!(Arc::strong_count(child.1), 1);
+            assert_eq!(Rc::strong_count(child.1), 1);
         }
 
         // Create and test Node48
@@ -1119,7 +1119,7 @@ mod tests {
             n48 = n48.add_child(i, i);
         }
         for child in n48.iter() {
-            assert_eq!(Arc::strong_count(child.1), 1);
+            assert_eq!(Rc::strong_count(child.1), 1);
         }
 
         // Create and test Node256
@@ -1128,7 +1128,7 @@ mod tests {
             n256 = n256.add_child(i, i);
         }
         for child in n256.iter() {
-            assert_eq!(Arc::strong_count(child.1), 1);
+            assert_eq!(Rc::strong_count(child.1), 1);
         }
     }
 }

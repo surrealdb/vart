@@ -1,15 +1,15 @@
 use core::panic;
 use std::cmp::min;
-use std::collections::{Bound, HashMap};
+use std::collections::{Bound, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::ops::RangeBounds;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
 
 use crate::iter::{Iter, Range};
 use crate::node::{FlatNode, Node256, Node48, NodeTrait, Timestamp, TwigNode};
-use crate::snapshot::{Snapshot, SnapshotPointer};
+use crate::snapshot::Snapshot;
 use crate::KeyTrait;
 
 // Minimum and maximum number of children for Node4
@@ -37,8 +37,10 @@ pub enum TrieError {
     NotFound,
     KeyNotFound,
     SnapshotNotFound,
+    SnapshotNotClosed,
     SnapshotAlreadyClosed,
     SnapshotReadersNotClosed,
+    TreeAlreadyClosed,
     Other(String),
 }
 
@@ -52,10 +54,12 @@ impl fmt::Display for TrieError {
             TrieError::NotFound => write!(f, "Not found"),
             TrieError::KeyNotFound => write!(f, "Key not found"),
             TrieError::SnapshotNotFound => write!(f, "Snapshot not found"),
+            TrieError::SnapshotNotClosed => write!(f, "Snapshot not closed"),
             TrieError::SnapshotAlreadyClosed => write!(f, "Snapshot already closed"),
             TrieError::SnapshotReadersNotClosed => {
                 write!(f, "Readers in the snapshot are not closed")
             }
+            TrieError::TreeAlreadyClosed => write!(f, "Tree already closed"),
             TrieError::Other(ref message) => write!(f, "Other error: {}", message),
         }
     }
@@ -135,20 +139,22 @@ pub(crate) enum NodeType<P: KeyTrait + Clone, V: Clone> {
 ///
 /// # Fields
 ///
-/// - `root`: An optional shared reference (using `Arc`) to the root node of the tree.
-/// - `snapshots`: A `HashMap` storing snapshots of the tree's state, mapped by snapshot IDs.
+/// - `root`: An optional shared reference (using `Rc`) to the root node of the tree.
+/// - `snapshots`: A `HashSet` storing snapshots of the tree's state, mapped by snapshot IDs.
 /// - `max_snapshot_id`: An `AtomicU64` representing the maximum snapshot ID assigned.
 /// - `max_active_snapshots`: The maximum number of active snapshots allowed.
 ///
 pub struct Tree<P: KeyTrait, V: Clone> {
     /// An optional shared reference to the root node of the tree.
-    pub(crate) root: Option<Arc<Node<P, V>>>,
+    pub(crate) root: Option<Rc<Node<P, V>>>,
     /// A mapping of snapshot IDs to their corresponding snapshots.
-    pub(crate) snapshots: RwLock<HashMap<u64, Snapshot<P, V>>>,
+    pub(crate) snapshots: HashSet<u64>,
     /// An atomic value indicating the maximum snapshot ID assigned.
     pub(crate) max_snapshot_id: AtomicU64,
     /// The maximum number of active snapshots allowed.
     pub(crate) max_active_snapshots: u64,
+    /// A flag indicating whether the tree is closed.
+    pub(crate) closed: bool,
 }
 
 impl<P: KeyTrait + Clone, V: Clone> NodeType<P, V> {
@@ -372,7 +378,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     /// Returns an `Option` containing a reference to the found child node or `None` if not found.
     ///
     #[inline]
-    fn find_child(&self, key: u8) -> Option<&Arc<Node<P, V>>> {
+    fn find_child(&self, key: u8) -> Option<&Rc<Node<P, V>>> {
         // If there are no children, return None.
         if self.num_children() == 0 {
             return None;
@@ -401,7 +407,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     ///
     /// Returns a new `Node` instance with the child node replaced.
     ///
-    fn replace_child(&self, key: u8, node: Arc<Node<P, V>>) -> Self {
+    fn replace_child(&self, key: u8, node: Rc<Node<P, V>>) -> Self {
         match &self.node_type {
             NodeType::Node4(n) => {
                 // Replace the child node in the Node4 instance and update the NodeType.
@@ -685,12 +691,12 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     /// Returns the updated node and the old value (if any) for the given key.
     ///
     pub(crate) fn insert_recurse(
-        cur_node: &Arc<Node<P, V>>,
+        cur_node: &Rc<Node<P, V>>,
         key: &P,
         value: V,
         commit_ts: u64,
         depth: usize,
-    ) -> Result<(Arc<Node<P, V>>, Option<V>), TrieError> {
+    ) -> Result<(Rc<Node<P, V>>, Option<V>), TrieError> {
         // Obtain the current node's prefix and its length.
         let cur_node_prefix = cur_node.prefix().clone();
         let cur_node_prefix_len = cur_node.prefix().len();
@@ -715,7 +721,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
                 let old_val = twig.get_leaf_by_ts(commit_ts).unwrap();
                 let new_twig = twig.insert(value, commit_ts);
                 return Ok((
-                    Arc::new(Node {
+                    Rc::new(Node {
                         node_type: NodeType::Twig(new_twig),
                     }),
                     Some(old_val.value.clone()),
@@ -738,7 +744,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
                 commit_ts,
             );
             n4 = n4.add_child(k1, old_node).add_child(k2, new_twig);
-            return Ok((Arc::new(n4), None));
+            return Ok((Rc::new(n4), None));
         }
 
         // Continue the insertion process by finding or creating the appropriate child node for the next character.
@@ -749,7 +755,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
             {
                 Ok((new_child, old_value)) => {
                     let new_node = cur_node.replace_child(k, new_child);
-                    return Ok((Arc::new(new_node), old_value));
+                    return Ok((Rc::new(new_node), old_value));
                 }
                 Err(err) => {
                     return Err(err);
@@ -765,7 +771,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
             commit_ts,
         );
         let new_node = cur_node.add_child(k, new_twig);
-        Ok((Arc::new(new_node), None))
+        Ok((Rc::new(new_node), None))
     }
 
     /// Removes a key recursively from the node and its children.
@@ -783,10 +789,10 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     /// Returns a tuple containing the updated node (or `None`) and a flag indicating if the key was removed.
     ///
     fn remove_recurse(
-        cur_node: &Arc<Node<P, V>>,
+        cur_node: &Rc<Node<P, V>>,
         key: &P,
         depth: usize,
-    ) -> (Option<Arc<Node<P, V>>>, bool) {
+    ) -> (Option<Rc<Node<P, V>>>, bool) {
         // Obtain the prefix of the current node.
         let prefix = cur_node.prefix().clone();
 
@@ -816,7 +822,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
             if removed {
                 // If the key was successfully removed from the child node, update the current node's child pointer.
                 let new_node = cur_node.delete_child(k);
-                return (Some(Arc::new(new_node)), true);
+                return (Some(Rc::new(new_node)), true);
             }
         }
 
@@ -888,7 +894,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     /// Returns a boxed iterator that yields tuples containing keys and references to child nodes.
     ///
     #[allow(dead_code)]
-    pub fn iter(&self) -> Box<dyn Iterator<Item = (u8, &Arc<Self>)> + '_> {
+    pub fn iter(&self) -> Box<dyn Iterator<Item = (u8, &Rc<Self>)> + '_> {
         match &self.node_type {
             NodeType::Node4(n) => Box::new(n.iter()),
             NodeType::Node16(n) => Box::new(n.iter()),
@@ -904,8 +910,9 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Tree {
             root: None,
             max_snapshot_id: AtomicU64::new(0),
-            snapshots: RwLock::new(HashMap::new()),
+            snapshots: HashSet::new(),
             max_active_snapshots: DEFAULT_MAX_ACTIVE_SNAPSHOTS,
+            closed: false,
         }
     }
 
@@ -931,6 +938,9 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// Returns an error if the given timestamp is older than the root's current timestamp.
     ///
     pub fn insert(&mut self, key: &P, value: V, ts: u64) -> Result<Option<V>, TrieError> {
+        // Check if the tree is already closed
+        self.is_closed()?;
+
         let (new_root, old_node) = match &self.root {
             None => {
                 let mut commit_ts = ts;
@@ -938,7 +948,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                     commit_ts += 1;
                 }
                 (
-                    Arc::new(Node::new_twig(
+                    Rc::new(Node::new_twig(
                         key.as_slice().into(),
                         key.as_slice().into(),
                         value,
@@ -972,7 +982,10 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Ok(old_node)
     }
 
-    pub fn remove(&mut self, key: &P) -> bool {
+    pub fn remove(&mut self, key: &P) -> Result<bool, TrieError> {
+        // Check if the tree is already closed
+        self.is_closed()?;
+
         let (new_root, is_deleted) = match &self.root {
             None => (None, false),
             Some(root) => {
@@ -990,10 +1003,13 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         };
 
         self.root = new_root;
-        is_deleted
+        Ok(is_deleted)
     }
 
     pub fn get(&self, key: &P, ts: u64) -> Result<(P, V, u64), TrieError> {
+        // Check if the tree is already closed
+        self.is_closed()?;
+
         if self.root.is_none() {
             return Err(TrieError::Other("cannot read from empty tree".to_string()));
         }
@@ -1026,14 +1042,17 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// Creates a new snapshot of the Trie.
     ///
     /// This function creates a snapshot of the current state of the Trie. If successful, it returns
-    /// a `SnapshotPointer` that can be used to interact with the newly created snapshot.
+    /// a `Snapshot` that can be used to interact with the newly created snapshot.
     ///
     /// # Returns
     ///
-    /// Returns a `Result` containing the `SnapshotPointer` if the snapshot is created successfully,
+    /// Returns a `Result` containing the `Snapshot` if the snapshot is created successfully,
     /// or an `Err` with an appropriate error message if creation fails.
     ///
-    pub fn create_snapshot(&self) -> Result<SnapshotPointer<P, V>, TrieError> {
+    pub fn create_snapshot(&mut self) -> Result<Snapshot<P, V>, TrieError> {
+        // Check if the tree is already closed
+        self.is_closed()?;
+
         if self.root.is_none() {
             return Err(TrieError::Other(
                 "cannot create snapshot from empty tree".to_string(),
@@ -1049,27 +1068,12 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 
         // Increment the snapshot ID atomically
         let new_snapshot_id = self.max_snapshot_id.fetch_add(1, Ordering::SeqCst);
+        self.snapshots.insert(new_snapshot_id);
 
         let root = self.root.as_ref().unwrap();
         let new_snapshot = Snapshot::new(new_snapshot_id, root.clone(), root.ts() + 1);
 
-        let mut snapshots = self.snapshots.write().unwrap();
-        snapshots.insert(new_snapshot_id, new_snapshot);
-
-        Ok(SnapshotPointer::new(self, new_snapshot_id))
-    }
-
-    pub(crate) fn get_snapshot(
-        &mut self,
-        snapshot_id: u64,
-    ) -> Result<SnapshotPointer<P, V>, TrieError> {
-        let _snapshot = self
-            .snapshots
-            .read()
-            .unwrap()
-            .get(&snapshot_id)
-            .ok_or(TrieError::SnapshotNotFound)?;
-        Ok(SnapshotPointer::new(self, snapshot_id))
+        Ok(new_snapshot)
     }
 
     /// Closes a snapshot and removes it from the list of active snapshots.
@@ -1087,16 +1091,16 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// Returns `Ok(())` if the snapshot is successfully closed and removed. Returns an `Err`
     /// with `TrieError::SnapshotNotFound` if the snapshot with the given ID is not found.
     ///
-    pub(crate) fn close(&self, snapshot_id: u64) -> Result<(), TrieError> {
-        let snapshot = self
-            .snapshots
-            .write()
-            .unwrap()
-            .get_mut(&snapshot_id)
-            .ok_or(TrieError::SnapshotNotFound)?
-            .close()?;
+    pub(crate) fn close_snapshot(&mut self, snapshot_id: u64) -> Result<(), TrieError> {
+        // Check if the tree is already closed
+        self.is_closed()?;
 
-        self.snapshots.write().unwrap().remove(&snapshot_id);
+        let _ = self
+            .snapshots
+            .get(&snapshot_id)
+            .ok_or(TrieError::SnapshotNotFound)?;
+
+        self.snapshots.remove(&snapshot_id);
 
         Ok(())
     }
@@ -1110,8 +1114,8 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// Returns a `Result` containing the count of active snapshots if successful, or an `Err`
     /// if there is an issue retrieving the snapshot count.
     ///
-    pub fn snapshot_count(&self) -> Result<usize, TrieError> {
-        Ok(self.snapshots.read().unwrap().len())
+    pub fn snapshot_count(&self) -> usize {
+        self.snapshots.len()
     }
 
     /// Creates an iterator over the Trie's key-value pairs.
@@ -1176,6 +1180,29 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         // If the start key is not found, return an empty Range iterator
         Range::empty()
     }
+
+    fn is_closed(&self) -> Result<(), TrieError> {
+        if self.closed {
+            return Err(TrieError::SnapshotAlreadyClosed);
+        }
+        Ok(())
+    }
+
+    /// Closes the tree, preventing further modifications, and releases associated resources.
+    pub fn close(&mut self) -> Result<(), TrieError> {
+        // Check if the tree is already closed
+        self.is_closed()?;
+
+        // Check if there are any active readers for the snapshot
+        if self.max_active_snapshots > 0 {
+            return Err(TrieError::SnapshotNotClosed);
+        }
+
+        // Mark the snapshot as closed
+        self.closed = true;
+
+        Ok(())
+    }
 }
 
 /*
@@ -1221,7 +1248,7 @@ mod tests {
             // Deletion phase
             for word in &words {
                 let key = VectorKey::from_str(&word);
-                assert!(tree.remove(&key));
+                assert!(tree.remove(&key).unwrap());
             }
         } else if let Err(err) = read_words_from_file(file_path) {
             eprintln!("Error reading file: {}", err);
@@ -1245,7 +1272,7 @@ mod tests {
 
         // Deletion phase
         for word in &insert_words {
-            assert!(tree.remove(&VectorKey::from_str(word)));
+            assert!(tree.remove(&VectorKey::from_str(word)).unwrap());
         }
     }
 
@@ -1314,7 +1341,7 @@ mod tests {
         tree.insert(&key, value, 0);
 
         // Removal
-        assert!(tree.remove(&key));
+        assert!(tree.remove(&key).unwrap());
 
         // Verification
         assert!(tree.get(&key, 0).is_err());
@@ -1333,7 +1360,7 @@ mod tests {
         tree.insert(&key2, 1, 0);
 
         // Removal
-        assert!(tree.remove(&key1));
+        assert!(tree.remove(&key1).unwrap());
 
         // Root verification
         if let Some(root) = &tree.root {
@@ -1378,7 +1405,7 @@ mod tests {
 
         // Removal
         let key_to_remove = VectorKey::from_slice(&1u32.to_be_bytes());
-        assert!(tree.remove(&key_to_remove));
+        assert!(tree.remove(&key_to_remove).unwrap());
 
         // Root verification
         if let Some(root) = &tree.root {
@@ -1426,7 +1453,7 @@ mod tests {
 
         // Removal
         let key_to_remove = VectorKey::from_slice(&2u32.to_be_bytes());
-        assert!(tree.remove(&key_to_remove));
+        assert!(tree.remove(&key_to_remove).unwrap());
 
         // Root verification
         if let Some(root) = &tree.root {
@@ -1493,7 +1520,7 @@ mod tests {
 
         // Removal
         let key_to_remove = VectorKey::from_slice(&2u32.to_be_bytes());
-        assert!(tree.remove(&key_to_remove));
+        assert!(tree.remove(&key_to_remove).unwrap());
 
         // Root verification
         if let Some(root) = &tree.root {
@@ -1694,8 +1721,8 @@ mod tests {
         assert_eq!(tree.ts(), 2);
 
         // Deletions
-        assert!(tree.remove(&VectorKey::from_str("key_1")));
-        assert!(tree.remove(&VectorKey::from_str("key_2")));
+        assert!(tree.remove(&VectorKey::from_str("key_1")).unwrap());
+        assert!(tree.remove(&VectorKey::from_str("key_2")).unwrap());
         assert_eq!(tree.ts(), 0);
     }
 

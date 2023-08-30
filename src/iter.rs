@@ -1,33 +1,26 @@
 use std::collections::{Bound, VecDeque};
-use std::sync::Arc;
+use std::rc::Rc;
 
-use crate::art::{Node, NodeType, TrieError};
-use crate::snapshot::SnapshotPointer;
+use crate::art::{Node, NodeType};
 use crate::KeyTrait;
 
 // TODO: need to add more tests for snapshot readers
 /// A structure representing a pointer for iterating over the Trie's key-value pairs.
-pub struct IterationPointer<'a, P: KeyTrait, V: Clone> {
+pub struct IterationPointer<P: KeyTrait, V: Clone> {
     pub(crate) id: u64,
-    root: Arc<Node<P, V>>,
-    snap: &'a SnapshotPointer<'a, P, V>,
+    root: Rc<Node<P, V>>,
 }
 
-impl<'a, P: KeyTrait, V: Clone> IterationPointer<'a, P, V> {
+impl<P: KeyTrait, V: Clone> IterationPointer<P, V> {
     /// Creates a new IterationPointer instance.
     ///
     /// # Arguments
     ///
-    /// * `snap` - A mutable reference to the snapshot.
     /// * `root` - The root node of the Trie.
     /// * `id` - The ID of the snapshot.
     ///
-    pub fn new(
-        snap: &'a SnapshotPointer<P, V>,
-        root: Arc<Node<P, V>>,
-        id: u64,
-    ) -> IterationPointer<'a, P, V> {
-        IterationPointer { id, root, snap }
+    pub fn new(root: Rc<Node<P, V>>, id: u64) -> IterationPointer<P, V> {
+        IterationPointer { id, root }
     }
 
     /// Returns an iterator over the key-value pairs within the Trie.
@@ -39,23 +32,11 @@ impl<'a, P: KeyTrait, V: Clone> IterationPointer<'a, P, V> {
     pub fn iter(&self) -> Iter<P, V> {
         Iter::new(Some(&self.root))
     }
-
-    /// Closes the snapshot associated with this IterationPointer.
-    ///
-    /// # Returns
-    ///
-    /// Returns a Result indicating success or an error.
-    ///
-    pub fn close(&self) -> Result<(), TrieError> {
-        // Call the close method of the Tree with the id of the snapshot to close it
-        self.snap.close_reader(self.id)?;
-        Ok(())
-    }
 }
 
 /// An iterator over the nodes in the Trie.
 struct NodeIter<'a, P: KeyTrait, V: Clone> {
-    node: Box<dyn Iterator<Item = (u8, &'a Arc<Node<P, V>>)> + 'a>,
+    node: Box<dyn Iterator<Item = (u8, &'a Rc<Node<P, V>>)> + 'a>,
 }
 
 impl<'a, P: KeyTrait, V: Clone> NodeIter<'a, P, V> {
@@ -67,7 +48,7 @@ impl<'a, P: KeyTrait, V: Clone> NodeIter<'a, P, V> {
     ///
     fn new<I>(iter: I) -> Self
     where
-        I: Iterator<Item = (u8, &'a Arc<Node<P, V>>)> + 'a,
+        I: Iterator<Item = (u8, &'a Rc<Node<P, V>>)> + 'a,
     {
         Self {
             node: Box::new(iter),
@@ -76,7 +57,7 @@ impl<'a, P: KeyTrait, V: Clone> NodeIter<'a, P, V> {
 }
 
 impl<'a, P: KeyTrait, V: Clone> Iterator for NodeIter<'a, P, V> {
-    type Item = (u8, &'a Arc<Node<P, V>>);
+    type Item = (u8, &'a Rc<Node<P, V>>);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.node.next()
@@ -96,7 +77,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iter<'a, P, V> {
     ///
     /// * `node` - An optional reference to the root node of the Trie.
     ///
-    pub(crate) fn new(node: Option<&'a Arc<Node<P, V>>>) -> Self {
+    pub(crate) fn new(node: Option<&'a Rc<Node<P, V>>>) -> Self {
         if let Some(node) = node {
             Self {
                 inner: Box::new(IterState::new(node)),
