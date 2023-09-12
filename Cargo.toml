@@ -1,0 +1,16 @@
+[package]
+name = "art"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+
+[[bench]]
+name = "art_bench"
+path = "benches/art_bench.rs"
+harness = false
+
+[dev-dependencies]
+rand = "0.8.5"
+criterion = "0.3.5"
