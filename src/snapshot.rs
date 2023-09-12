@@ -1,4 +1,4 @@
-//! This module defines the SnapshotPointer and Snapshot structs for managing snapshots within a Trie structure.
+//! This module defines the Snapshot struct for managing snapshots within a Trie structure.
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
