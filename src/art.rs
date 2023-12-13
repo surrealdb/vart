@@ -1,14 +1,15 @@
-use core::panic;
+use std::panic;
 use std::cmp::min;
-use std::collections::{Bound, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::ops::RangeBounds;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+use hashbrown::HashSet;
 
 use crate::iter::{Iter, Range};
-use crate::node::{FlatNode, Node256, Node48, NodeTrait, Timestamp, TwigNode};
+use crate::node::{FlatNode, Node256, Node48, NodeTrait, TwigNode, Version};
 use crate::snapshot::Snapshot;
 use crate::KeyTrait;
 
@@ -28,15 +29,16 @@ const NODE48MAX: usize = 48;
 const NODE256MIN: usize = NODE48MAX + 1;
 
 // Maximum number of active snapshots
-const DEFAULT_MAX_ACTIVE_SNAPSHOTS: u64 = 100;
+pub(crate) const DEFAULT_MAX_ACTIVE_SNAPSHOTS: u64 = 10000;
 
 // Define a custom error enum representing different error cases for the Trie
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum TrieError {
     IllegalArguments,
     NotFound,
     KeyNotFound,
     SnapshotNotFound,
+    SnapshotEmpty,
     SnapshotNotClosed,
     SnapshotAlreadyClosed,
     SnapshotReadersNotClosed,
@@ -61,6 +63,7 @@ impl fmt::Display for TrieError {
             }
             TrieError::TreeAlreadyClosed => write!(f, "Tree already closed"),
             TrieError::Other(ref message) => write!(f, "Other error: {}", message),
+            TrieError::SnapshotEmpty => write!(f, "Snapshot is empty"),
         }
     }
 }
@@ -85,14 +88,15 @@ pub struct Node<P: KeyTrait + Clone, V: Clone> {
     pub(crate) node_type: NodeType<P, V>, // Type of the node
 }
 
-impl<P: KeyTrait + Clone, V: Clone> Timestamp for Node<P, V> {
-    fn ts(&self) -> u64 {
+impl<P: KeyTrait + Clone, V: Clone> Version for Node<P, V> {
+    fn version(&self) -> u64 {
         match &self.node_type {
-            NodeType::Twig(twig) => twig.ts(),
-            NodeType::Node4(n) => n.ts(),
-            NodeType::Node16(n) => n.ts(),
-            NodeType::Node48(n) => n.ts(),
-            NodeType::Node256(n) => n.ts(),
+            NodeType::Twig(twig) => twig.version(),
+            NodeType::Node1(n) => n.version(),
+            NodeType::Node4(n) => n.version(),
+            NodeType::Node16(n) => n.version(),
+            NodeType::Node48(n) => n.version(),
+            NodeType::Node256(n) => n.version(),
         }
     }
 }
@@ -120,67 +124,17 @@ pub(crate) enum NodeType<P: KeyTrait + Clone, V: Clone> {
     // Twig node of the adaptive radix trie
     Twig(TwigNode<P, V>),
     // Inner node of the adaptive radix trie
+    Node1(FlatNode<P, Node<P, V>, 1>), // Node with 1 key and 1 children
     Node4(FlatNode<P, Node<P, V>, 4>), // Node with 4 keys and 4 children
     Node16(FlatNode<P, Node<P, V>, 16>), // Node with 16 keys and 16 children
     Node48(Node48<P, Node<P, V>>),     // Node with 256 keys and 48 children
     Node256(Node256<P, Node<P, V>>),   // Node with 256 keys and 256 children
 }
 
-/// A struct representing an Adaptive Radix Trie.
-///
-/// The `Tree` struct encompasses the entire adaptive radix trie data structure.
-/// It manages the root node of the tree, maintains snapshots of the tree's state,
-/// and keeps track of various properties related to snapshot management.
-///
-/// # Type Parameters
-///
-/// - `P`: A type implementing the `KeyTrait` trait, defining the prefix traits for nodes.
-/// - `V`: The type of value associated with nodes.
-///
-/// # Fields
-///
-/// - `root`: An optional shared reference (using `Rc`) to the root node of the tree.
-/// - `snapshots`: A `HashSet` storing snapshots of the tree's state, mapped by snapshot IDs.
-/// - `max_snapshot_id`: An `AtomicU64` representing the maximum snapshot ID assigned.
-/// - `max_active_snapshots`: The maximum number of active snapshots allowed.
-///
-pub struct Tree<P: KeyTrait, V: Clone> {
-    /// An optional shared reference to the root node of the tree.
-    pub(crate) root: Option<Rc<Node<P, V>>>,
-    /// A mapping of snapshot IDs to their corresponding snapshots.
-    pub(crate) snapshots: HashSet<u64>,
-    /// An atomic value indicating the maximum snapshot ID assigned.
-    pub(crate) max_snapshot_id: AtomicU64,
-    /// The maximum number of active snapshots allowed.
-    pub(crate) max_active_snapshots: u64,
-    /// A flag indicating whether the tree is closed.
-    pub(crate) closed: bool,
-}
-
-impl<P: KeyTrait + Clone, V: Clone> NodeType<P, V> {
-    fn clone(&self) -> Self {
-        match self {
-            // twig value not actually cloned
-            NodeType::Twig(twig) => NodeType::Twig(twig.clone()),
-            NodeType::Node4(n) => NodeType::Node4(n.clone()),
-            NodeType::Node16(n) => NodeType::Node16(n.clone()),
-            NodeType::Node48(n) => NodeType::Node48(n.clone()),
-            NodeType::Node256(n) => NodeType::Node256(n.clone()),
-        }
-    }
-}
-
-// Default implementation for the Tree struct
-impl<P: KeyTrait, V: Clone> Default for Tree<P, V> {
-    fn default() -> Self {
-        Tree::new()
-    }
-}
-
 impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
-    /// Creates a new Twig node with a given prefix, key, value, and timestamp.
+    /// Creates a new Twig node with a given prefix, key, value, and version.
     ///
-    /// Constructs a new Twig node using the provided prefix, key, and value. The timestamp
+    /// Constructs a new Twig node using the provided prefix, key, and value. The version
     /// indicates the time of the insertion.
     ///
     /// # Parameters
@@ -188,19 +142,19 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     /// - `prefix`: The common prefix for the node.
     /// - `key`: The key associated with the Twig node.
     /// - `value`: The value to be associated with the key.
-    /// - `ts`: The timestamp when the value was inserted.
+    /// - `ts`: The version when the value was inserted.
     ///
     /// # Returns
     ///
-    /// Returns a new `Node` instance with a Twig node containing the provided key, value, and timestamp.
+    /// Returns a new `Node` instance with a Twig node containing the provided key, value, and version.
     ///
     #[inline]
-    pub(crate) fn new_twig(prefix: P, key: P, value: V, ts: u64) -> Node<P, V> {
+    pub(crate) fn new_twig(prefix: P, key: P, value: V, version: u64, ts: u64) -> Node<P, V> {
         // Create a new TwigNode instance using the provided prefix and key.
         let mut twig = TwigNode::new(prefix, key);
 
-        // Insert the provided value into the TwigNode along with the timestamp.
-        twig.insert_mut(value, ts);
+        // Insert the provided value into the TwigNode along with the version.
+        twig.insert_mut(value, version, ts);
 
         // Return a new Node instance encapsulating the constructed Twig node.
         Self {
@@ -245,6 +199,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     #[inline]
     fn is_full(&self) -> bool {
         match &self.node_type {
+            NodeType::Node1(n) => self.num_children() >= n.size(),
             NodeType::Node4(n) => self.num_children() >= n.size(),
             NodeType::Node16(n) => self.num_children() >= n.size(),
             NodeType::Node48(n) => self.num_children() >= n.size(),
@@ -270,6 +225,20 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     #[inline]
     fn add_child(&self, key: u8, child: Node<P, V>) -> Self {
         match &self.node_type {
+            NodeType::Node1(n) => {
+                // Add the child node to the Node1 instance.
+                let node = NodeType::Node1(n.add_child(key, child));
+
+                // Create a new Node instance with the updated NodeType.
+                let mut new_node = Self { node_type: node };
+
+                // Check if the node has become full and needs to be grown.
+                if new_node.is_full() {
+                    new_node.grow();
+                }
+
+                new_node
+            }
             NodeType::Node4(n) => {
                 // Add the child node to the Node4 instance.
                 let node = NodeType::Node4(n.add_child(key, child));
@@ -342,6 +311,11 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     #[inline]
     fn grow(&mut self) {
         match &mut self.node_type {
+            NodeType::Node1(n) => {
+                // Grow a Node4 to a Node16 by resizing.
+                let n4 = NodeType::Node4(n.resize());
+                self.node_type = n4;
+            }
             NodeType::Node4(n) => {
                 // Grow a Node4 to a Node16 by resizing.
                 let n16 = NodeType::Node16(n.resize());
@@ -378,7 +352,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     /// Returns an `Option` containing a reference to the found child node or `None` if not found.
     ///
     #[inline]
-    fn find_child(&self, key: u8) -> Option<&Rc<Node<P, V>>> {
+    fn find_child(&self, key: u8) -> Option<&Arc<Node<P, V>>> {
         // If there are no children, return None.
         if self.num_children() == 0 {
             return None;
@@ -386,6 +360,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
 
         // Match the node type to find the child using the appropriate method.
         match &self.node_type {
+            NodeType::Node1(n) => n.find_child(key),
             NodeType::Node4(n) => n.find_child(key),
             NodeType::Node16(n) => n.find_child(key),
             NodeType::Node48(n) => n.find_child(key),
@@ -407,8 +382,13 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     ///
     /// Returns a new `Node` instance with the child node replaced.
     ///
-    fn replace_child(&self, key: u8, node: Rc<Node<P, V>>) -> Self {
+    fn replace_child(&self, key: u8, node: Arc<Node<P, V>>) -> Self {
         match &self.node_type {
+            NodeType::Node1(n) => {
+                // Replace the child node in the Node4 instance and update the NodeType.
+                let node = NodeType::Node1(n.replace_child(key, node));
+                Self { node_type: node }
+            }
             NodeType::Node4(n) => {
                 // Replace the child node in the Node4 instance and update the NodeType.
                 let node = NodeType::Node4(n.replace_child(key, node));
@@ -449,6 +429,12 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     #[inline]
     fn delete_child(&self, key: u8) -> Self {
         match &self.node_type {
+            NodeType::Node1(n) => {
+                // Delete the child node from the Node1 instance and update the NodeType.
+                let node = NodeType::Node1(n.delete_child(key));
+
+                Self { node_type: node }
+            }
             NodeType::Node4(n) => {
                 // Delete the child node from the Node4 instance and update the NodeType.
                 let node = NodeType::Node4(n.delete_child(key));
@@ -539,6 +525,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     #[inline]
     pub(crate) fn prefix(&self) -> &P {
         match &self.node_type {
+            NodeType::Node1(n) => &n.prefix,
             NodeType::Node4(n) => &n.prefix,
             NodeType::Node16(n) => &n.prefix,
             NodeType::Node48(n) => &n.prefix,
@@ -558,6 +545,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     #[inline]
     fn set_prefix(&mut self, prefix: P) {
         match &mut self.node_type {
+            NodeType::Node1(n) => n.prefix = prefix,
             NodeType::Node4(n) => n.prefix = prefix,
             NodeType::Node16(n) => n.prefix = prefix,
             NodeType::Node48(n) => n.prefix = prefix,
@@ -580,9 +568,13 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     /// before replacing itself.
     fn shrink(&mut self) {
         match &mut self.node_type {
+            NodeType::Node1(n) => {
+                // Shrink Node1 to Node1 by resizing it.
+                self.node_type = NodeType::Node1(n.resize());
+            }
             NodeType::Node4(n) => {
-                // Shrink Node4 to Node4 by resizing it.
-                self.node_type = NodeType::Node4(n.resize());
+                // Shrink Node4 to Node1 by resizing it.
+                self.node_type = NodeType::Node1(n.resize());
             }
             NodeType::Node16(n) => {
                 // Shrink Node16 to Node4 by resizing it.
@@ -610,6 +602,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     #[inline]
     pub fn num_children(&self) -> usize {
         match &self.node_type {
+            NodeType::Node1(n) => n.num_children(),
             NodeType::Node4(n) => n.num_children(),
             NodeType::Node16(n) => n.num_children(),
             NodeType::Node48(n) => n.num_children(),
@@ -619,38 +612,39 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     }
 
     /// TODO: fix having separate key and prefix traits to avoid copying
-    /// Retrieves a value from a Twig node by the specified timestamp.
+    /// Retrieves a value from a Twig node by the specified version.
     ///
-    /// Retrieves a value from the current Twig node by matching the provided timestamp.
+    /// Retrieves a value from the current Twig node by matching the provided version.
     ///
     /// # Parameters
     ///
-    /// - `ts`: The timestamp for which to retrieve the value.
+    /// - `ts`: The version for which to retrieve the value.
     ///
     /// # Returns
     ///
-    /// Returns `Some((key, value, timestamp))` if a matching value is found in the Twig node for the given timestamp.
+    /// Returns `Some((key, value, version))` if a matching value is found in the Twig node for the given version.
     /// If no matching value is found, returns `None`.
     ///
     #[inline]
-    pub fn get_value_by_ts(&self, ts: u64) -> Option<(P, V, u64)> {
+    pub fn get_value_by_version(&self, version: u64) -> Option<(P, V, u64, u64)> {
         // Unwrap the NodeType::Twig to access the TwigNode instance.
         let NodeType::Twig(twig) = &self.node_type else {
             return None;
         };
 
-        // Get the value from the TwigNode instance by the specified timestamp.
-        let Some(val) = twig.get_leaf_by_ts(ts) else{
+        // Get the value from the TwigNode instance by the specified version.
+        let Some(val) = twig.get_leaf_by_version(version) else {
             return None;
         };
 
-        // Return the retrieved key, value, and timestamp as a tuple.
+        // Return the retrieved key, value, and version as a tuple.
         // TODO: should return copy of value or reference?
-        Some((twig.key.clone(), val.value.clone(), val.ts))
+        Some((twig.key.clone(), val.value.clone(), val.version, val.ts))
     }
 
     pub fn node_type_name(&self) -> String {
         match &self.node_type {
+            NodeType::Node1(_) => "Node1".to_string(),
             NodeType::Node4(_) => "Node4".to_string(),
             NodeType::Node16(_) => "Node16".to_string(),
             NodeType::Node48(_) => "Node48".to_string(),
@@ -683,7 +677,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     /// - `cur_node`: A reference to the current node.
     /// - `key`: The key to be inserted.
     /// - `value`: The value associated with the key.
-    /// - `commit_ts`: The timestamp when the value was inserted.
+    /// - `commit_version`: The version when the value was inserted.
     /// - `depth`: The depth of the insertion process.
     ///
     /// # Returns
@@ -691,12 +685,13 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     /// Returns the updated node and the old value (if any) for the given key.
     ///
     pub(crate) fn insert_recurse(
-        cur_node: &Rc<Node<P, V>>,
+        cur_node: &Arc<Node<P, V>>,
         key: &P,
         value: V,
-        commit_ts: u64,
+        commit_version: u64,
+        ts: u64,
         depth: usize,
-    ) -> Result<(Rc<Node<P, V>>, Option<V>), TrieError> {
+    ) -> Result<(Arc<Node<P, V>>, Option<V>), TrieError> {
         // Obtain the current node's prefix and its length.
         let cur_node_prefix = cur_node.prefix().clone();
         let cur_node_prefix_len = cur_node.prefix().len();
@@ -718,10 +713,10 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
         // update the existing value in the Twig node.
         if let NodeType::Twig(ref twig) = &cur_node.node_type {
             if is_prefix_match && cur_node_prefix.len() == key_prefix.len() {
-                let old_val = twig.get_leaf_by_ts(commit_ts).unwrap();
-                let new_twig = twig.insert(value, commit_ts);
+                let old_val = twig.get_leaf_by_version(commit_version).unwrap();
+                let new_twig = twig.insert(value, commit_version, ts);
                 return Ok((
-                    Rc::new(Node {
+                    Arc::new(Node {
                         node_type: NodeType::Twig(new_twig),
                     }),
                     Some(old_val.value.clone()),
@@ -741,21 +736,28 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
                 key_prefix[longest_common_prefix..].into(),
                 key.as_slice().into(),
                 value,
-                commit_ts,
+                commit_version,
+                ts,
             );
             n4 = n4.add_child(k1, old_node).add_child(k2, new_twig);
-            return Ok((Rc::new(n4), None));
+            return Ok((Arc::new(n4), None));
         }
 
         // Continue the insertion process by finding or creating the appropriate child node for the next character.
         let k = key_prefix[longest_common_prefix];
         let child_for_key = cur_node.find_child(k);
         if let Some(child) = child_for_key {
-            match Node::insert_recurse(child, key, value, commit_ts, depth + longest_common_prefix)
-            {
+            match Node::insert_recurse(
+                child,
+                key,
+                value,
+                commit_version,
+                ts,
+                depth + longest_common_prefix,
+            ) {
                 Ok((new_child, old_value)) => {
                     let new_node = cur_node.replace_child(k, new_child);
-                    return Ok((Rc::new(new_node), old_value));
+                    return Ok((Arc::new(new_node), old_value));
                 }
                 Err(err) => {
                     return Err(err);
@@ -768,10 +770,11 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
             key_prefix[longest_common_prefix..].into(),
             key.as_slice().into(),
             value,
-            commit_ts,
+            commit_version,
+            ts,
         );
         let new_node = cur_node.add_child(k, new_twig);
-        Ok((Rc::new(new_node), None))
+        Ok((Arc::new(new_node), None))
     }
 
     /// Removes a key recursively from the node and its children.
@@ -788,11 +791,11 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     ///
     /// Returns a tuple containing the updated node (or `None`) and a flag indicating if the key was removed.
     ///
-    fn remove_recurse(
-        cur_node: &Rc<Node<P, V>>,
+    pub(crate) fn remove_recurse(
+        cur_node: &Arc<Node<P, V>>,
         key: &P,
         depth: usize,
-    ) -> (Option<Rc<Node<P, V>>>, bool) {
+    ) -> (Option<Arc<Node<P, V>>>, bool) {
         // Obtain the prefix of the current node.
         let prefix = cur_node.prefix().clone();
 
@@ -822,7 +825,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
             if removed {
                 // If the key was successfully removed from the child node, update the current node's child pointer.
                 let new_node = cur_node.delete_child(k);
-                return (Some(Rc::new(new_node)), true);
+                return (Some(Arc::new(new_node)), true);
             }
         }
 
@@ -832,19 +835,23 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
 
     /// Recursively searches for a key in the node and its children.
     ///
-    /// Recursively searches for a key in the current node and its child nodes, considering timestamps.
+    /// Recursively searches for a key in the current node and its child nodes, considering versions.
     ///
     /// # Parameters
     ///
     /// - `cur_node`: A reference to the current node.
     /// - `key`: The key to be searched for.
-    /// - `ts`: The timestamp for which to retrieve the value.
+    /// - `ts`: The version for which to retrieve the value.
     ///
     /// # Returns
     ///
-    /// Returns a result containing the prefix, value, and timestamp if the key is found, or Error if not.
+    /// Returns a result containing the prefix, value, and version if the key is found, or Error if not.
     ///
-    pub fn get_recurse(cur_node: &Node<P, V>, key: &P, ts: u64) -> Result<(P, V, u64), TrieError> {
+    pub fn get_recurse(
+        cur_node: &Node<P, V>,
+        key: &P,
+        version: u64,
+    ) -> Result<(P, V, u64, u64), TrieError> {
         // Initialize the traversal variables.
         let mut cur_node = cur_node;
         let mut depth = 0;
@@ -866,10 +873,10 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
 
             // If the current node's prefix length matches the key's prefix length, retrieve the value.
             if prefix.len() == key_prefix.len() {
-                let Some(val) = cur_node.get_value_by_ts(ts) else {
+                let Some(val) = cur_node.get_value_by_version(version) else {
                     return Err(TrieError::KeyNotFound);
                 };
-                return Ok((val.0, val.1, val.2));
+                return Ok((val.0, val.1, val.2, val.3));
             }
 
             // Determine the character at the next position after the prefix in the key.
@@ -894,14 +901,85 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     /// Returns a boxed iterator that yields tuples containing keys and references to child nodes.
     ///
     #[allow(dead_code)]
-    pub fn iter(&self) -> Box<dyn Iterator<Item = (u8, &Rc<Self>)> + '_> {
+    pub fn iter(&self) -> Box<dyn Iterator<Item = (u8, &Arc<Self>)> + '_> {
         match &self.node_type {
+            NodeType::Node1(n) => Box::new(n.iter()),
             NodeType::Node4(n) => Box::new(n.iter()),
             NodeType::Node16(n) => Box::new(n.iter()),
             NodeType::Node48(n) => Box::new(n.iter()),
             NodeType::Node256(n) => Box::new(n.iter()),
             NodeType::Twig(_) => Box::new(std::iter::empty()),
         }
+    }
+}
+
+/// A struct representing an Adaptive Radix Trie.
+///
+/// The `Tree` struct encompasses the entire adaptive radix trie data structure.
+/// It manages the root node of the tree, maintains snapshots of the tree's state,
+/// and keeps track of various properties related to snapshot management.
+///
+/// # Type Parameters
+///
+/// - `P`: A type implementing the `KeyTrait` trait, defining the prefix traits for nodes.
+/// - `V`: The type of value associated with nodes.
+///
+/// # Fields
+///
+/// - `root`: An optional shared reference (using `Rc`) to the root node of the tree.
+/// - `snapshots`: A `HashSet` storing snapshots of the tree's state, mapped by snapshot IDs.
+/// - `max_snapshot_id`: An `AtomicU64` representing the maximum snapshot ID assigned.
+/// - `max_active_snapshots`: The maximum number of active snapshots allowed.
+///
+pub struct Tree<P: KeyTrait, V: Clone> {
+    /// An optional shared reference to the root node of the tree.
+    pub(crate) root: Option<Arc<Node<P, V>>>,
+    /// A mapping of snapshot IDs to their corresponding snapshots.
+    pub(crate) snapshots: HashSet<u64>,
+    /// An atomic value indicating the maximum snapshot ID assigned.
+    pub(crate) max_snapshot_id: AtomicU64,
+    /// The maximum number of active snapshots allowed.
+    pub(crate) max_active_snapshots: u64,
+    /// A flag indicating whether the tree is closed.
+    pub(crate) closed: bool,
+}
+
+pub struct KV<P, V> {
+    pub key: P,
+    pub value: V,
+    pub version: u64,
+    pub ts: u64,
+}
+
+impl<P: KeyTrait, V: Clone> KV<P, V> {
+    pub fn new(key: P, value: V, version: u64, timestamp: u64) -> Self {
+        KV {
+            key,
+            value,
+            version,
+            ts: timestamp,
+        }
+    }
+}
+
+impl<P: KeyTrait + Clone, V: Clone> NodeType<P, V> {
+    fn clone(&self) -> Self {
+        match self {
+            // twig value not actually cloned
+            NodeType::Twig(twig) => NodeType::Twig(twig.clone()),
+            NodeType::Node1(n) => NodeType::Node1(n.clone()),
+            NodeType::Node4(n) => NodeType::Node4(n.clone()),
+            NodeType::Node16(n) => NodeType::Node16(n.clone()),
+            NodeType::Node48(n) => NodeType::Node48(n.clone()),
+            NodeType::Node256(n) => NodeType::Node256(n.clone()),
+        }
+    }
+}
+
+// Default implementation for the Tree struct
+impl<P: KeyTrait, V: Clone> Default for Tree<P, V> {
+    fn default() -> Self {
+        Tree::new()
     }
 }
 
@@ -916,17 +994,21 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         }
     }
 
-    /// Inserts a new key-value pair with the specified timestamp into the Trie.
+    pub fn set_max_active_snapshots(&mut self, max_active_snapshots: u64) {
+        self.max_active_snapshots = max_active_snapshots;
+    }
+
+    /// Inserts a new key-value pair with the specified version into the Trie.
     ///
     /// This function inserts a new key-value pair into the Trie. If the key already exists,
-    /// the previous value associated with the key is returned. The timestamp `ts` is used to
+    /// the previous value associated with the key is returned. The version `ts` is used to
     /// ensure proper ordering of values for versioning.
     ///
     /// # Arguments
     ///
     /// * `key`: A reference to the key to be inserted.
     /// * `value`: The value to be associated with the key.
-    /// * `ts`: The timestamp for the insertion, used for versioning.
+    /// * `ts`: The version for the insertion, used for versioning.
     ///
     /// # Returns
     ///
@@ -935,41 +1017,48 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the given timestamp is older than the root's current timestamp.
+    /// Returns an error if the given version is older than the root's current version.
     ///
-    pub fn insert(&mut self, key: &P, value: V, ts: u64) -> Result<Option<V>, TrieError> {
+    pub fn insert(
+        &mut self,
+        key: &P,
+        value: V,
+        version: u64,
+        ts: u64,
+    ) -> Result<Option<V>, TrieError> {
         // Check if the tree is already closed
         self.is_closed()?;
 
         let (new_root, old_node) = match &self.root {
             None => {
-                let mut commit_ts = ts;
-                if ts == 0 {
-                    commit_ts += 1;
+                let mut commit_version = version;
+                if version == 0 {
+                    commit_version += 1;
                 }
                 (
-                    Rc::new(Node::new_twig(
+                    Arc::new(Node::new_twig(
                         key.as_slice().into(),
                         key.as_slice().into(),
                         value,
-                        commit_ts,
+                        commit_version,
+                        ts,
                     )),
                     None,
                 )
             }
             Some(root) => {
-                // Check if the given timestamp is older than the root's current timestamp.
+                // Check if the given version is older than the root's current version.
                 // If so, return an error and do not insert the new node.
-                let curr_ts = root.ts();
-                let mut commit_ts = ts;
-                if ts == 0 {
-                    commit_ts = curr_ts + 1;
-                } else if curr_ts >= ts {
+                let curr_version = root.version();
+                let mut commit_version = version;
+                if version == 0 {
+                    commit_version = curr_version + 1;
+                } else if curr_version >= version {
                     return Err(TrieError::Other(
-                        "given timestamp is older than root's current timestamp".to_string(),
+                        "given version is older than root's current version".to_string(),
                     ));
                 }
-                match Node::insert_recurse(root, key, value, commit_ts, 0) {
+                match Node::insert_recurse(root, key, value, commit_version, ts, 0) {
                     Ok((new_node, old_node)) => (new_node, old_node),
                     Err(err) => {
                         return Err(err);
@@ -980,6 +1069,75 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 
         self.root = Some(new_root);
         Ok(old_node)
+    }
+
+    pub fn bulk_insert(&mut self, kv_pairs: &[KV<P, V>]) -> Result<(), TrieError> {
+        // Check if the tree is already closed
+        self.is_closed()?;
+
+        let curr_version = self.version();
+        let mut new_version = 0;
+
+        for kv in kv_pairs {
+            let k = kv.key.clone(); // Clone the key
+            let v = kv.value.clone(); // Clone the value
+            let mut t = kv.version;
+
+            if t == 0 {
+                // Zero-valued timestamps are associated with current time plus one
+                t = curr_version + 1;
+            } else if kv.version < curr_version {
+                return Err(TrieError::Other(
+                    "given version is older than root's current version".to_string(),
+                ));
+            }
+
+            // Create a new KV instance
+            let new_kv = KV {
+                key: k,
+                value: v,
+                version: t,
+                ts: kv.ts,
+            };
+
+            // Insert the new KV instance using the insert function
+            // self.insert(&new_kv.key, new_kv.value, new_kv.version, new_kv.ts)?;
+            match &self.root {
+                None => {
+                    self.root = Some(Arc::new(Node::new_twig(
+                        new_kv.key.as_slice().into(),
+                        new_kv.key.as_slice().into(),
+                        new_kv.value,
+                        new_kv.version,
+                        new_kv.ts,
+                    )))
+                }
+                Some(root) => {
+                    match Node::insert_recurse(
+                        root,
+                        &new_kv.key,
+                        new_kv.value,
+                        new_kv.version,
+                        new_kv.ts,
+                        0,
+                    ) {
+                        Ok((new_node, _)) => {
+                            self.root = Some(new_node);
+                        }
+                        Err(err) => {
+                            return Err(err);
+                        }
+                    }
+                }
+            }
+
+            // Update new_version if necessary
+            if t > new_version {
+                new_version = t;
+            }
+        }
+
+        Ok(())
     }
 
     pub fn remove(&mut self, key: &P) -> Result<bool, TrieError> {
@@ -1006,7 +1164,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Ok(is_deleted)
     }
 
-    pub fn get(&self, key: &P, ts: u64) -> Result<(P, V, u64), TrieError> {
+    pub fn get(&self, key: &P, version: u64) -> Result<(P, V, u64, u64), TrieError> {
         // Check if the tree is already closed
         self.is_closed()?;
 
@@ -1015,27 +1173,27 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         }
 
         let root = self.root.as_ref().unwrap();
-        let mut commit_ts = ts;
-        if commit_ts == 0 {
-            commit_ts = root.ts();
+        let mut commit_version = version;
+        if commit_version == 0 {
+            commit_version = root.version();
         }
 
-        Node::get_recurse(root, key, commit_ts)
+        Node::get_recurse(root, key, commit_version)
     }
 
-    /// Retrieves the latest timestamp of the Trie.
+    /// Retrieves the latest version of the Trie.
     ///
-    /// This function returns the timestamp of the latest version of the Trie. If the Trie is empty,
+    /// This function returns the version of the latest version of the Trie. If the Trie is empty,
     /// it returns `0`.
     ///
     /// # Returns
     ///
-    /// Returns the timestamp of the latest version of the Trie, or `0` if the Trie is empty.
+    /// Returns the version of the latest version of the Trie, or `0` if the Trie is empty.
     ///
-    pub fn ts(&self) -> u64 {
+    pub fn version(&self) -> u64 {
         match &self.root {
             None => 0,
-            Some(root) => root.ts(),
+            Some(root) => root.version(),
         }
     }
 
@@ -1053,14 +1211,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         // Check if the tree is already closed
         self.is_closed()?;
 
-        if self.root.is_none() {
-            return Err(TrieError::Other(
-                "cannot create snapshot from empty tree".to_string(),
-            ));
-        }
-
-        let max_snapshot_id = self.max_snapshot_id.load(Ordering::SeqCst);
-        if max_snapshot_id >= self.max_active_snapshots {
+        if self.snapshots.len() >= self.max_active_snapshots as usize {
             return Err(TrieError::Other(
                 "max number of snapshots reached".to_string(),
             ));
@@ -1070,8 +1221,9 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         let new_snapshot_id = self.max_snapshot_id.fetch_add(1, Ordering::SeqCst);
         self.snapshots.insert(new_snapshot_id);
 
-        let root = self.root.as_ref().unwrap();
-        let new_snapshot = Snapshot::new(new_snapshot_id, root.clone(), root.ts() + 1);
+        let root = self.root.as_ref().cloned();
+        let version = self.root.as_ref().map_or(1, |root| root.version() + 1);
+        let new_snapshot = Snapshot::new(new_snapshot_id, root, version);
 
         Ok(new_snapshot)
     }
@@ -1095,14 +1247,11 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         // Check if the tree is already closed
         self.is_closed()?;
 
-        let _ = self
-            .snapshots
-            .get(&snapshot_id)
-            .ok_or(TrieError::SnapshotNotFound)?;
-
-        self.snapshots.remove(&snapshot_id);
-
-        Ok(())
+        if self.snapshots.remove(&snapshot_id) {
+            Ok(())
+        } else {
+            Err(TrieError::SnapshotNotFound)
+        }
     }
 
     /// Returns the count of active snapshots.
@@ -1146,39 +1295,20 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// Returns a `Range` iterator instance that iterates over the key-value pairs within the given range.
     /// If the Trie is empty, an empty `Range` iterator is returned.
     ///
-    pub fn range<'a, K: KeyTrait, R>(&'a self, range: R) -> Range<K, P, V>
+    pub fn range<'a, R>(
+        &'a self,
+        range: R,
+    ) -> impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>
     where
-        R: RangeBounds<K> + 'a,
+        R: RangeBounds<P> + 'a,
     {
         // If the Trie is empty, return an empty Range iterator
         if self.root.is_none() {
-            return Range::empty();
+            return Range::empty(range);
         }
 
-        let mut iter = self.iter();
-
-        // Determine the start key based on the range's start bound
-        let start_key = match range.start_bound() {
-            Bound::Included(start_key) | Bound::Excluded(start_key) => start_key,
-            Bound::Unbounded => {
-                let bound = range.end_bound().cloned();
-                return Range::for_iter(iter, bound);
-            }
-        };
-
-        // Iterate through the Trie until the start key is found or the end of the Trie is reached
-        while let Some((k, _, _)) = iter.next() {
-            if start_key.as_slice() == k.as_slice() {
-                if let Bound::Excluded(_) = range.start_bound() {
-                    iter.next();
-                }
-                let bound = range.end_bound().cloned();
-                return Range::for_iter(iter, bound);
-            }
-        }
-
-        // If the start key is not found, return an empty Range iterator
-        Range::empty()
+        let root = self.root.as_ref();
+        return Range::new(root, range);
     }
 
     fn is_closed(&self) -> Result<(), TrieError> {
@@ -1194,7 +1324,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         self.is_closed()?;
 
         // Check if there are any active readers for the snapshot
-        if self.max_active_snapshots > 0 {
+        if self.snapshot_count() > 0 {
             return Err(TrieError::SnapshotNotClosed);
         }
 
@@ -1211,11 +1341,9 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 
 #[cfg(test)]
 mod tests {
-    use super::Tree;
-    use crate::{ArrayKey, VectorKey};
+    use super::{Tree, KV};
+    use crate::{FixedKey, VariableKey};
 
-    use rand::{thread_rng, Rng};
-    use std::collections::BTreeMap;
     use std::fs::File;
     use std::io::{self, BufRead, BufReader};
 
@@ -1227,39 +1355,39 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_search_delete_words() {
-        let mut tree: Tree<VectorKey, i32> = Tree::<VectorKey, i32>::new();
+    fn insert_search_delete_words() {
+        let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
         let file_path = "testdata/words.txt";
 
         if let Ok(words) = read_words_from_file(file_path) {
             // Insertion phase
             for word in &words {
-                let key = &VectorKey::from_str(&word);
-                tree.insert(key, 1, 0);
+                let key = &VariableKey::from_str(word);
+                tree.insert(key, 1, 0, 0);
             }
 
             // Search phase
             for word in &words {
-                let key = VectorKey::from_str(&word);
-                let (_, val, _) = tree.get(&key, 0).unwrap();
+                let key = VariableKey::from_str(word);
+                let (_, val, _, _) = tree.get(&key, 0).unwrap();
                 assert_eq!(val, 1);
             }
 
             // Deletion phase
             for word in &words {
-                let key = VectorKey::from_str(&word);
+                let key = VariableKey::from_str(word);
                 assert!(tree.remove(&key).unwrap());
             }
         } else if let Err(err) = read_words_from_file(file_path) {
             eprintln!("Error reading file: {}", err);
         }
 
-        assert_eq!(tree.ts(), 0);
+        assert_eq!(tree.version(), 0);
     }
 
     #[test]
-    fn test_string_insert_delete() {
-        let mut tree = Tree::<VectorKey, i32>::new();
+    fn string_insert_delete() {
+        let mut tree = Tree::<VariableKey, i32>::new();
 
         // Insertion phase
         let insert_words = [
@@ -1267,18 +1395,18 @@ mod tests {
         ];
 
         for word in &insert_words {
-            tree.insert(&VectorKey::from_str(word), 1, 0);
+            tree.insert(&VariableKey::from_str(word), 1, 0, 0);
         }
 
         // Deletion phase
         for word in &insert_words {
-            assert!(tree.remove(&VectorKey::from_str(word)).unwrap());
+            assert!(tree.remove(&VariableKey::from_str(word)).unwrap());
         }
     }
 
     #[test]
-    fn test_string_long() {
-        let mut tree = Tree::<VectorKey, i32>::new();
+    fn string_long() {
+        let mut tree = Tree::<VariableKey, i32>::new();
 
         // Insertion phase
         let words_to_insert = [
@@ -1288,57 +1416,54 @@ mod tests {
         ];
 
         for (word, val) in &words_to_insert {
-            tree.insert(&VectorKey::from_str(word), *val, 0);
+            tree.insert(&VariableKey::from_str(word), *val, 0, 0);
         }
 
         // Verification phase
         for (word, expected_val) in &words_to_insert {
-            let (_, val, _) = tree.get(&VectorKey::from_str(word), 0).unwrap();
+            let (_, val, _, _) = tree.get(&VariableKey::from_str(word), 0).unwrap();
             assert_eq!(val, *expected_val);
         }
     }
 
     #[test]
-    fn test_root_set_get() {
-        let mut tree = Tree::<VectorKey, i32>::new();
+    fn root_set_get() {
+        let mut tree = Tree::<VariableKey, i32>::new();
 
         // Insertion phase
-        let key = VectorKey::from_str("abc");
+        let key = VariableKey::from_str("abc");
         let value = 1;
-        tree.insert(&key, value, 0);
+        tree.insert(&key, value, 0, 0);
 
         // Verification phase
-        if let (_, val, _ts) = tree.get(&key, 0).unwrap() {
-            assert_eq!(val, value);
-        } else {
-            panic!("Key not found");
-        }
+        let (_, val, _ts, _) = tree.get(&key, 0).unwrap();
+        assert_eq!(val, value);
     }
 
     #[test]
-    fn test_string_duplicate_insert() {
-        let mut tree = Tree::<VectorKey, i32>::new();
+    fn string_duplicate_insert() {
+        let mut tree = Tree::<VariableKey, i32>::new();
 
         // First insertion
-        let key = VectorKey::from_str("abc");
+        let key = VariableKey::from_str("abc");
         let value = 1;
-        let result = tree.insert(&key, value, 0).expect("Failed to insert");
+        let result = tree.insert(&key, value, 0, 0).expect("Failed to insert");
         assert!(result.is_none());
 
         // Second insertion (duplicate)
-        let result = tree.insert(&key, value, 0).expect("Failed to insert");
+        let result = tree.insert(&key, value, 0, 0).expect("Failed to insert");
         assert!(result.is_some());
     }
 
     // Inserting a single value into the tree and removing it should result in a nil tree root.
     #[test]
-    fn test_insert_and_remove() {
-        let mut tree = Tree::<VectorKey, i32>::new();
+    fn insert_and_remove() {
+        let mut tree = Tree::<VariableKey, i32>::new();
 
         // Insertion
-        let key = VectorKey::from_str("test");
+        let key = VariableKey::from_str("test");
         let value = 1;
-        tree.insert(&key, value, 0);
+        tree.insert(&key, value, 0, 0);
 
         // Removal
         assert!(tree.remove(&key).unwrap());
@@ -1346,25 +1471,48 @@ mod tests {
         // Verification
         assert!(tree.get(&key, 0).is_err());
     }
-    // Inserting Two values into the tree and removing one of them
-    // should result in a tree root of type twig
-    #[test]
-    fn test_insert2_and_remove1_and_root_should_be_node4() {
-        let key1 = VectorKey::from_str("test1");
-        let key2 = VectorKey::from_str("test2");
 
-        let mut tree = Tree::<VectorKey, i32>::new();
+    #[test]
+    fn inserting_keys_with_common_prefix() {
+        let key1 = VariableKey::from_str("foo");
+        let key2 = VariableKey::from_str("foo2");
+
+        let mut tree = Tree::<VariableKey, i32>::new();
 
         // Insertion
-        tree.insert(&key1, 1, 0);
-        tree.insert(&key2, 1, 0);
+        tree.insert(&key1, 1, 0, 0);
+        tree.insert(&key2, 1, 0, 0);
 
         // Removal
         assert!(tree.remove(&key1).unwrap());
 
         // Root verification
         if let Some(root) = &tree.root {
-            assert_eq!(root.node_type_name(), "Node4");
+            assert_eq!(root.node_type_name(), "Node1");
+        } else {
+            panic!("Tree root is None");
+        }
+    }
+
+    // Inserting Two values into the tree and removing one of them
+    // should result in a tree root of type twig
+    #[test]
+    fn insert2_and_remove1_and_root_should_be_node1() {
+        let key1 = VariableKey::from_str("test1");
+        let key2 = VariableKey::from_str("test2");
+
+        let mut tree = Tree::<VariableKey, i32>::new();
+
+        // Insertion
+        tree.insert(&key1, 1, 0, 0);
+        tree.insert(&key2, 1, 0, 0);
+
+        // Removal
+        assert!(tree.remove(&key1).unwrap());
+
+        // Root verification
+        if let Some(root) = &tree.root {
+            assert_eq!(root.node_type_name(), "Node1");
         } else {
             panic!("Tree root is None");
         }
@@ -1375,12 +1523,12 @@ mod tests {
     // // This tests the expansion of the root into a NODE4 and
     // // successfully collapsing into a twig and then nil upon successive removals
     // #[test]
-    // fn test_insert2_and_remove2_and_root_should_be_nil() {
-    //     let key1 = &VectorKey::from_str("test1");
-    //     let key2 = &VectorKey::from_str("test2");
+    // fn insert2_and_remove2_and_root_should_be_nil() {
+    //     let key1 = &VariableKey::from_str("test1");
+    //     let key2 = &VariableKey::from_str("test2");
 
-    //     let mut tree = Tree::<VectorKey, i32>::new();
-    //     tree.insert(key1, 1, 0);
+    //     let mut tree = Tree::<VariableKey, i32>::new();
+    //     tree.insert(key1, 1, 0, 0);
     //     tree.insert(key2, 1, 0);
 
     //     assert_eq!(tree.remove(key1), true);
@@ -1394,17 +1542,17 @@ mod tests {
     // This tests the expansion of the root into a NODE16 and
     // successfully collapsing into a NODE4 upon successive removals
     #[test]
-    fn test_insert5_and_remove1_and_root_should_be_node4() {
-        let mut tree = Tree::<VectorKey, i32>::new();
+    fn insert5_and_remove1_and_root_should_be_node4() {
+        let mut tree = Tree::<VariableKey, i32>::new();
 
         // Insertion
         for i in 0..5u32 {
-            let key = VectorKey::from_slice(&i.to_be_bytes());
-            tree.insert(&key, 1, 0);
+            let key = VariableKey::from_slice(&i.to_be_bytes());
+            tree.insert(&key, 1, 0, 0);
         }
 
         // Removal
-        let key_to_remove = VectorKey::from_slice(&1u32.to_be_bytes());
+        let key_to_remove = VariableKey::from_slice(&1u32.to_be_bytes());
         assert!(tree.remove(&key_to_remove).unwrap());
 
         // Root verification
@@ -1421,16 +1569,16 @@ mod tests {
     //     // This tests the expansion of the root into a NODE16 and
     //     // successfully collapsing into a NODE4, twig, then nil
     //     #[test]
-    //     fn test_insert5_and_remove5_and_root_should_be_nil() {
-    //         let mut tree = Tree::<VectorKey, i32>::new();
+    //     fn insert5_and_remove5_and_root_should_be_nil() {
+    //         let mut tree = Tree::<VariableKey, i32>::new();
 
     //         for i in 0..5u32 {
-    //             let key = &VectorKey::from_slice(&i.to_be_bytes());
+    //             let key = &VariableKey::from_slice(&i.to_be_bytes());
     //             tree.insert(key, 1);
     //         }
 
     //         for i in 0..5u32 {
-    //             let key = &VectorKey::from_slice(&i.to_be_bytes());
+    //             let key = &VariableKey::from_slice(&i.to_be_bytes());
     //             tree.remove(key);
     //         }
 
@@ -1442,17 +1590,17 @@ mod tests {
     // This tests the expansion of the root into a NODE48, and
     // successfully collapsing into a NODE16
     #[test]
-    fn test_insert17_and_remove1_and_root_should_be_node16() {
-        let mut tree = Tree::<VectorKey, i32>::new();
+    fn insert17_and_remove1_and_root_should_be_node16() {
+        let mut tree = Tree::<VariableKey, i32>::new();
 
         // Insertion
         for i in 0..17u32 {
-            let key = VectorKey::from_slice(&i.to_be_bytes());
-            tree.insert(&key, 1, 0);
+            let key = VariableKey::from_slice(&i.to_be_bytes());
+            tree.insert(&key, 1, 0, 0);
         }
 
         // Removal
-        let key_to_remove = VectorKey::from_slice(&2u32.to_be_bytes());
+        let key_to_remove = VariableKey::from_slice(&2u32.to_be_bytes());
         assert!(tree.remove(&key_to_remove).unwrap());
 
         // Root verification
@@ -1465,13 +1613,13 @@ mod tests {
     }
 
     #[test]
-    fn test_insert17_and_root_should_be_node48() {
-        let mut tree = Tree::<VectorKey, i32>::new();
+    fn insert17_and_root_should_be_node48() {
+        let mut tree = Tree::<VariableKey, i32>::new();
 
         // Insertion
         for i in 0..17u32 {
-            let key = VectorKey::from_slice(&i.to_be_bytes());
-            tree.insert(&key, 1, 0);
+            let key = VariableKey::from_slice(&i.to_be_bytes());
+            tree.insert(&key, 1, 0, 0);
         }
 
         // Root verification
@@ -1488,16 +1636,16 @@ mod tests {
     // // This tests the expansion of the root into a NODE48, and
     // // successfully collapsing into a NODE16, NODE4, twig, and then nil
     // #[test]
-    // fn test_insert17_and_remove17_and_root_should_be_nil() {
-    //     let mut tree = Tree::<VectorKey, i32>::new();
+    // fn insert17_and_remove17_and_root_should_be_nil() {
+    //     let mut tree = Tree::<VariableKey, i32>::new();
 
     //     for i in 0..17u32 {
-    //         let key = VectorKey::from_slice(&i.to_be_bytes());
+    //         let key = VariableKey::from_slice(&i.to_be_bytes());
     //         tree.insert(&key, 1);
     //     }
 
     //     for i in 0..17u32 {
-    //         let key = VectorKey::from_slice(&i.to_be_bytes());
+    //         let key = VariableKey::from_slice(&i.to_be_bytes());
     //         tree.remove(&key);
     //     }
 
@@ -1509,17 +1657,17 @@ mod tests {
     // This tests the expansion of the root into a NODE256, and
     // successfully collapasing into a NODE48
     #[test]
-    fn test_insert49_and_remove1_and_root_should_be_node48() {
-        let mut tree = Tree::<VectorKey, i32>::new();
+    fn insert49_and_remove1_and_root_should_be_node48() {
+        let mut tree = Tree::<VariableKey, i32>::new();
 
         // Insertion
         for i in 0..49u32 {
-            let key = VectorKey::from_slice(&i.to_be_bytes());
-            tree.insert(&key, 1, 0);
+            let key = VariableKey::from_slice(&i.to_be_bytes());
+            tree.insert(&key, 1, 0, 0);
         }
 
         // Removal
-        let key_to_remove = VectorKey::from_slice(&2u32.to_be_bytes());
+        let key_to_remove = VariableKey::from_slice(&2u32.to_be_bytes());
         assert!(tree.remove(&key_to_remove).unwrap());
 
         // Root verification
@@ -1532,13 +1680,13 @@ mod tests {
     }
 
     #[test]
-    fn test_insert49_and_root_should_be_node248() {
-        let mut tree = Tree::<VectorKey, i32>::new();
+    fn insert49_and_root_should_be_node248() {
+        let mut tree = Tree::<VariableKey, i32>::new();
 
         // Insertion
         for i in 0..49u32 {
-            let key = VectorKey::from_slice(&i.to_be_bytes());
-            tree.insert(&key, 1, 0);
+            let key = VariableKey::from_slice(&i.to_be_bytes());
+            tree.insert(&key, 1, 0, 0);
         }
 
         // Root verification
@@ -1555,16 +1703,16 @@ mod tests {
     //     // // This tests the expansion of the root into a NODE256, and
     //     // // successfully collapsing into a Node48, Node16, Node4, twig, and finally nil
     //     // #[test]
-    //     // fn test_insert49_and_remove49_and_root_should_be_nil() {
-    //     //     let mut tree = Tree::<VectorKey, i32>::new();
+    //     // fn insert49_and_remove49_and_root_should_be_nil() {
+    //     //     let mut tree = Tree::<VariableKey, i32>::new();
 
     //     //     for i in 0..49u32 {
-    //     //         let key = &VectorKey::from_slice(&i.to_be_bytes());
+    //     //         let key = &VariableKey::from_slice(&i.to_be_bytes());
     //     //         tree.insert(key, 1);
     //     //     }
 
     //     //     for i in 0..49u32 {
-    //     //         let key = VectorKey::from_slice(&i.to_be_bytes());
+    //     //         let key = VariableKey::from_slice(&i.to_be_bytes());
     //     //         assert_eq!(tree.remove(&key), true);
     //     //     }
 
@@ -1573,157 +1721,169 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq)]
     struct KVT {
-        k: Vec<u8>, // Key
-        ts: u64,    // Timestamp
+        k: Vec<u8>,   // Key
+        version: u64, // version
     }
 
     #[test]
-    fn test_timed_insertion() {
-        let mut tree: Tree<VectorKey, i32> = Tree::<VectorKey, i32>::new();
+    fn timed_insertion() {
+        let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
 
         let kvts = vec![
             KVT {
                 k: b"key1_0".to_vec(),
-                ts: 0,
+                version: 0,
             },
             KVT {
                 k: b"key2_0".to_vec(),
-                ts: 0,
+                version: 0,
             },
             KVT {
                 k: b"key3_0".to_vec(),
-                ts: 0,
+                version: 0,
             },
             KVT {
                 k: b"key4_0".to_vec(),
-                ts: 0,
+                version: 0,
             },
             KVT {
                 k: b"key5_0".to_vec(),
-                ts: 0,
+                version: 0,
             },
             KVT {
                 k: b"key6_0".to_vec(),
-                ts: 0,
+                version: 0,
             },
         ];
 
         // Insertion
         for (idx, kvt) in kvts.iter().enumerate() {
-            let ts = if kvt.ts == 0 { idx as u64 + 1 } else { kvt.ts };
-            assert!(tree.insert(&VectorKey::from(kvt.k.clone()), 1, ts).is_ok());
+            let ts = if kvt.version == 0 {
+                idx as u64 + 1
+            } else {
+                kvt.version
+            };
+            assert!(tree
+                .insert(&VariableKey::from(kvt.k.clone()), 1, ts, 0)
+                .is_ok());
         }
 
         // Verification
-        let mut curr_ts = 1;
+        let mut curr_version = 1;
         for kvt in &kvts {
-            let key = VectorKey::from(kvt.k.clone());
-            let (_, val, ts) = tree.get(&key, 0).unwrap();
+            let key = VariableKey::from(kvt.k.clone());
+            let (_, val, version, _ts) = tree.get(&key, 0).unwrap();
             assert_eq!(val, 1);
 
-            if kvt.ts == 0 {
-                assert_eq!(curr_ts, ts);
+            if kvt.version == 0 {
+                assert_eq!(curr_version, version);
             } else {
-                assert_eq!(kvt.ts, ts);
+                assert_eq!(kvt.version, version);
             }
 
-            curr_ts += 1;
+            curr_version += 1;
         }
 
-        // Root's timestamp should match the greatest inserted timestamp
-        assert_eq!(kvts.len() as u64, tree.ts());
+        // Root's version should match the greatest inserted version
+        assert_eq!(kvts.len() as u64, tree.version());
     }
 
     #[test]
-    fn test_timed_insertion_update_same_key() {
-        let mut tree: Tree<VectorKey, i32> = Tree::<VectorKey, i32>::new();
+    fn timed_insertion_update_same_key() {
+        let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
 
-        let key1 = &VectorKey::from_str("key_1");
+        let key1 = &VariableKey::from_str("key_1");
 
-        // insert key1 with ts 0
-        assert!(tree.insert(key1, 1, 0).is_ok());
-        // update key1 with ts 0
-        assert!(tree.insert(key1, 1, 0).is_ok());
+        // insert key1 with version 0
+        assert!(tree.insert(key1, 1, 0, 1).is_ok());
+        // update key1 with version 0
+        assert!(tree.insert(key1, 1, 0, 3).is_ok());
 
-        // get key1 should return ts 2 as the same key was inserted and updated
-        let (_, val, ts) = tree.get(key1, 0).unwrap();
+        // get key1 should return version 2 as the same key was inserted and updated
+        let (_, val, version, ts) = tree.get(key1, 0).unwrap();
         assert_eq!(val, 1);
-        assert_eq!(ts, 2);
+        assert_eq!(version, 2);
+        assert_eq!(ts, 3);
 
-        // update key1 with older timestamp should fail
-        assert!(tree.insert(key1, 1, 1).is_err());
-        assert_eq!(tree.ts(), 2);
+        // update key1 with older version should fail
+        assert!(tree.insert(key1, 1, 1, 0).is_err());
+        assert_eq!(tree.version(), 2);
 
-        // update key1 with newer timestamp should pass
-        assert!(tree.insert(key1, 1, 8).is_ok());
-        let (_, val, ts) = tree.get(key1, 0).unwrap();
+        // update key1 with newer version should pass
+        assert!(tree.insert(key1, 1, 8, 5).is_ok());
+        let (_, val, version, ts) = tree.get(key1, 0).unwrap();
         assert_eq!(val, 1);
-        assert_eq!(ts, 8);
+        assert_eq!(version, 8);
+        assert_eq!(ts, 5);
 
-        assert_eq!(tree.ts(), 8);
+        assert_eq!(tree.version(), 8);
     }
 
     #[test]
-    fn test_timed_insertion_update_non_increasing_ts() {
-        let mut tree: Tree<VectorKey, i32> = Tree::<VectorKey, i32>::new();
+    fn timed_insertion_update_non_increasing_version() {
+        let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
 
-        let key1 = VectorKey::from_str("key_1");
-        let key2 = VectorKey::from_str("key_2");
+        let key1 = VariableKey::from_str("key_1");
+        let key2 = VariableKey::from_str("key_2");
 
         // Initial insertion
-        assert!(tree.insert(&key1, 1, 10).is_ok());
-        let initial_ts_key1 = tree.ts();
+        assert!(tree.insert(&key1, 1, 10, 0).is_ok());
+        let initial_version_key1 = tree.version();
 
-        // Attempt update with non-increasing timestamp
-        assert!(tree.insert(&key1, 1, 2).is_err());
-        assert_eq!(initial_ts_key1, tree.ts());
-        let (_, val, ts) = tree.get(&key1, 0).unwrap();
+        // Attempt update with non-increasing version
+        assert!(tree.insert(&key1, 1, 2, 0).is_err());
+        assert_eq!(initial_version_key1, tree.version());
+        let (_, val, version, _) = tree.get(&key1, 0).unwrap();
         assert_eq!(val, 1);
-        assert_eq!(ts, 10);
+        assert_eq!(version, 10);
 
         // Insert another key
-        assert!(tree.insert(&key2, 1, 15).is_ok());
-        let initial_ts_key2 = tree.ts();
+        assert!(tree.insert(&key2, 1, 15, 0).is_ok());
+        let initial_version_key2 = tree.version();
 
-        // Attempt update with non-increasing timestamp for the second key
-        assert!(tree.insert(&key2, 1, 11).is_err());
-        assert_eq!(initial_ts_key2, tree.ts());
-        let (_, val, ts) = tree.get(&key2, 0).unwrap();
+        // Attempt update with non-increasing version for the second key
+        assert!(tree.insert(&key2, 1, 11, 0).is_err());
+        assert_eq!(initial_version_key2, tree.version());
+        let (_, val, version, _ts) = tree.get(&key2, 0).unwrap();
         assert_eq!(val, 1);
-        assert_eq!(ts, 15);
+        assert_eq!(version, 15);
 
-        // Check if the max timestamp of the tree is the max of the two inserted timestamps
-        assert_eq!(tree.ts(), 15);
+        // Check if the max version of the tree is the max of the two inserted versions
+        assert_eq!(tree.version(), 15);
     }
 
     #[test]
-    fn test_timed_insertion_update_equal_to_root_ts() {
-        let mut tree: Tree<VectorKey, i32> = Tree::<VectorKey, i32>::new();
+    fn timed_insertion_update_equal_to_root_version() {
+        let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
 
-        let key1 = VectorKey::from_str("key_1");
-        let key2 = VectorKey::from_str("key_2");
+        let key1 = VariableKey::from_str("key_1");
+        let key2 = VariableKey::from_str("key_2");
 
         // Initial insertion
-        assert!(tree.insert(&key1, 1, 10).is_ok());
-        let initial_ts = tree.ts();
+        assert!(tree.insert(&key1, 1, 10, 0).is_ok());
+        let initial_version = tree.version();
 
-        // Attempt update with timestamp equal to root's timestamp
-        assert!(tree.insert(&key2, 1, initial_ts).is_err());
+        // Attempt update with version equal to root's version
+        assert!(tree.insert(&key2, 1, initial_version, 0).is_err());
     }
 
     #[test]
-    fn test_timed_deletion_check_root_ts() {
-        let mut tree: Tree<VectorKey, i32> = Tree::<VectorKey, i32>::new();
+    fn timed_deletion_check_root_ts() {
+        let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
 
         // Initial insertions
-        assert!(tree.insert(&VectorKey::from_str("key_1"), 1, 0).is_ok());
-        assert!(tree.insert(&VectorKey::from_str("key_2"), 1, 0).is_ok());
-        assert_eq!(tree.ts(), 2);
+        assert!(tree
+            .insert(&VariableKey::from_str("key_1"), 1, 0, 0)
+            .is_ok());
+        assert!(tree
+            .insert(&VariableKey::from_str("key_2"), 1, 0, 0)
+            .is_ok());
+        assert_eq!(tree.version(), 2);
 
         // Deletions
-        assert!(tree.remove(&VectorKey::from_str("key_1")).unwrap());
-        assert!(tree.remove(&VectorKey::from_str("key_2")).unwrap());
-        assert_eq!(tree.ts(), 0);
+        assert!(tree.remove(&VariableKey::from_str("key_1")).unwrap());
+        assert!(tree.remove(&VariableKey::from_str("key_2")).unwrap());
+        assert_eq!(tree.version(), 0);
     }
 
     fn from_be_bytes_key(k: &[u8]) -> u64 {
@@ -1740,13 +1900,13 @@ mod tests {
     }
 
     #[test]
-    fn test_iter_seq_u16() {
-        let mut tree = Tree::<ArrayKey<32>, u16>::new();
+    fn iter_seq_u16() {
+        let mut tree = Tree::<FixedKey<16>, u16>::new();
 
         // Insertion
         for i in 0..u16::MAX {
-            let key: ArrayKey<32> = i.into();
-            tree.insert(&key, i, 0);
+            let key: FixedKey<16> = i.into();
+            tree.insert(&key, i, 0, i as u64);
         }
 
         // Iteration and verification
@@ -1757,6 +1917,8 @@ mod tests {
         for tree_entry in tree_iter {
             let k = from_be_bytes_key(&tree_entry.0);
             assert_eq!(expected as u64, k);
+            let ts = tree_entry.3;
+            assert_eq!(expected as u64, *ts);
             expected = expected.wrapping_add(1);
             len += 1;
         }
@@ -1766,13 +1928,13 @@ mod tests {
     }
 
     #[test]
-    fn test_iter_seq_u8() {
-        let mut tree: Tree<ArrayKey<32>, u8> = Tree::<ArrayKey<32>, u8>::new();
+    fn iter_seq_u8() {
+        let mut tree: Tree<FixedKey<32>, u8> = Tree::<FixedKey<32>, u8>::new();
 
         // Insertion
         for i in 0..u8::MAX {
-            let key: ArrayKey<32> = i.into();
-            tree.insert(&key, i, 0);
+            let key: FixedKey<32> = i.into();
+            tree.insert(&key, i, 0, 0);
         }
 
         // Iteration and verification
@@ -1792,55 +1954,91 @@ mod tests {
     }
 
     #[test]
-    fn test_range() {
-        let mut tree = Tree::<ArrayKey<16>, u64>::new();
-        let count = 10000;
-        let mut rng = thread_rng();
-        let mut keys_inserted = BTreeMap::new();
+    fn range_seq_u8() {
+        let mut tree: Tree<FixedKey<8>, u8> = Tree::<FixedKey<8>, u8>::new();
 
-        // Insertion and tracking of keys inserted
-        for i in 0..count {
-            let random_val = rng.gen_range(0..count);
-            let random_key: ArrayKey<16> = random_val.into();
-
-            if let Ok(_) = tree.get(&random_key, 0) {
-                continue;
-            }
-
-            if tree.insert(&random_key, random_val, 0).unwrap().is_none() {
-                keys_inserted.insert(random_val, random_val);
-            }
+        let max = u8::MAX;
+        // Insertion
+        for i in 0..=max {
+            let key: FixedKey<8> = i.into();
+            tree.insert(&key, i, 0, 0);
         }
 
-        // Range query and verification
-        let end_key: ArrayKey<16> = 100u64.into();
-        let art_range = tree.range(..end_key);
-        let btree_range = keys_inserted.range(..100);
-
-        for (art_entry, btree_entry) in art_range.zip(btree_range) {
-            let art_key = from_be_bytes_key(&art_entry.0);
-            assert_eq!(art_key, *btree_entry.0);
-            assert_eq!(art_entry.1, btree_entry.1);
+        // Test inclusive range
+        let start_key: FixedKey<8> = 5u8.into();
+        let end_key: FixedKey<8> = max.into();
+        let mut len = 0usize;
+        for _ in tree.range(start_key..=end_key) {
+            len += 1;
         }
+        assert_eq!(len, max as usize - 4);
+
+        // Test exclusive range
+        let start_key: FixedKey<8> = 5u8.into();
+        let end_key: FixedKey<8> = max.into();
+        let mut len = 0usize;
+        for _ in tree.range(start_key..end_key) {
+            len += 1;
+        }
+        assert_eq!(len, max as usize - 5);
+
+        // Test range with different start and end keys
+        let start_key: FixedKey<8> = 3u8.into();
+        let end_key: FixedKey<8> = 7u8.into();
+        let mut len = 0usize;
+        for _ in tree.range(start_key..=end_key) {
+            len += 1;
+        }
+        assert_eq!(len, 5);
+
+        // Test range with all keys
+        let start_key: FixedKey<8> = 0u8.into();
+        let end_key: FixedKey<8> = max.into();
+        let mut len = 0usize;
+        for _ in tree.range(start_key..=end_key) {
+            len += 1;
+        }
+        assert_eq!(len, 256);
     }
 
     #[test]
-    fn test_same_key_with_versions() {
-        let mut tree = Tree::<VectorKey, i32>::new();
+    fn range_seq_u16() {
+        let mut tree: Tree<FixedKey<16>, u16> = Tree::<FixedKey<16>, u16>::new();
+
+        let max = u16::MAX;
+        // Insertion
+        for i in 0..=max {
+            let key: FixedKey<16> = i.into();
+            tree.insert(&key, i, 0, 0);
+        }
+
+        let mut len = 0usize;
+        let start_key: FixedKey<16> = 0u8.into();
+        let end_key: FixedKey<16> = max.into();
+
+        for _ in tree.range(start_key..=end_key) {
+            len += 1;
+        }
+        assert_eq!(len, max as usize + 1);
+    }
+
+    #[test]
+    fn same_key_with_versions() {
+        let mut tree = Tree::<VariableKey, i32>::new();
 
         // Insertions
-        let key1 = VectorKey::from_str("abc");
-        let key2 = VectorKey::from_str("efg");
-        tree.insert(&key1, 1, 0);
-        tree.insert(&key1, 2, 10);
-        tree.insert(&key2, 3, 11);
+        let key1 = VariableKey::from_str("abc");
+        let key2 = VariableKey::from_str("efg");
+        tree.insert(&key1, 1, 0, 0);
+        tree.insert(&key1, 2, 10, 0);
+        tree.insert(&key2, 3, 11, 0);
 
         // Versioned retrievals and assertions
-        let (_, val, _) = tree.get(&key1, 1).unwrap();
+        let (_, val, _, _) = tree.get(&key1, 1).unwrap();
         assert_eq!(val, 1);
-        let (_, val, _) = tree.get(&key1, 10).unwrap();
+        let (_, val, _, _) = tree.get(&key1, 10).unwrap();
         assert_eq!(val, 2);
-        let (_, val, _) = tree.get(&key2, 11).unwrap();
+        let (_, val, _, _) = tree.get(&key2, 11).unwrap();
         assert_eq!(val, 3);
 
         // Iteration and verification
@@ -1849,6 +2047,68 @@ mod tests {
         for _ in tree_iter {
             len += 1;
         }
-        assert_eq!(len, 3);
+        assert_eq!(len, 2);
+    }
+
+    #[test]
+    fn bulk_insert() {
+        let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
+        let curr_version = tree.version();
+        // Create a vector of KV<P, V>
+        let kv_pairs = vec![
+            KV {
+                key: VariableKey::from_str("key_1"),
+                value: 1,
+                version: 0,
+                ts: 0,
+            },
+            KV {
+                key: VariableKey::from_str("key_2"),
+                value: 1,
+                version: 2,
+                ts: 0,
+            },
+            KV {
+                key: VariableKey::from_str("key_3"),
+                value: 1,
+                version: curr_version + 1,
+                ts: 0,
+            },
+            KV {
+                key: VariableKey::from_str("key_4"),
+                value: 1,
+                version: curr_version + 1,
+                ts: 0,
+            },
+            KV {
+                key: VariableKey::from_str("key_5"),
+                value: 1,
+                version: curr_version + 2,
+                ts: 0,
+            },
+            KV {
+                key: VariableKey::from_str("key_6"),
+                value: 1,
+                version: 0,
+                ts: 0,
+            },
+        ];
+
+        assert!(tree.bulk_insert(&kv_pairs).is_ok());
+        assert!(tree.version() == curr_version + 2);
+
+        for kv in kv_pairs {
+            let (_, val, version, _) = tree.get(&kv.key, 0).unwrap();
+            assert_eq!(val, kv.value);
+            if kv.version == 0 {
+                assert_eq!(version, curr_version + 1);
+            } else {
+                assert_eq!(version, kv.version);
+            }
+        }
+        assert!(tree
+            .insert(&VariableKey::from_str("key_7"), 1, 0, 0)
+            .is_ok());
+        assert!(tree.version() == curr_version + 3);
     }
 }

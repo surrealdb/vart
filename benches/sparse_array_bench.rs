@@ -1,9 +1,9 @@
-use art::SparseArray;
+use art::SparseVector;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::mem;
 
 fn bench_vec_array_push(c: &mut Criterion) {
-    let mut vec_array: SparseArray<u64, 1000> = SparseArray::new();
+    let mut vec_array: SparseVector<u64, 1000> = SparseVector::new();
     c.bench_function("vec_array_push", |b| {
         b.iter(|| {
             for i in 0..1000 {
@@ -17,7 +17,7 @@ fn bench_vec_array_push(c: &mut Criterion) {
 }
 
 fn bench_vec_array_get(c: &mut Criterion) {
-    let mut vec_array: SparseArray<u32, 1000> = SparseArray::new();
+    let mut vec_array: SparseVector<u32, 1000> = SparseVector::new();
     for i in 0..1000 {
         vec_array.push(i);
     }
