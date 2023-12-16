@@ -1,8 +1,8 @@
-use std::panic;
 use std::cmp::min;
 use std::error::Error;
 use std::fmt;
 use std::ops::RangeBounds;
+use std::panic;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
