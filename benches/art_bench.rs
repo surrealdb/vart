@@ -86,11 +86,11 @@ pub fn rand_get(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1));
     {
         let size = 1_000_000;
+        let mut tree = Tree::<FixedKey<16>, _>::new();
+        for i in 0..size as u64 {
+            tree.insert(&i.into(), i, 0, 0).unwrap();
+        }
         group.bench_with_input(BenchmarkId::new("art", size), &size, |b, size| {
-            let mut tree = Tree::<FixedKey<16>, _>::new();
-            for i in 0..*size as u64 {
-                tree.insert(&i.into(), i, 0, 0);
-            }
             let mut rng = thread_rng();
             b.iter(|| {
                 let key: u64 = rng.gen_range(0..*size);
@@ -108,11 +108,11 @@ pub fn rand_get_str(c: &mut Criterion) {
 
     {
         let size = 1_000_000;
+        let mut tree = Tree::<FixedKey<16>, _>::new();
+        for (i, key) in keys.iter().enumerate() {
+            tree.insert(&key.into(), i, 0, 0).unwrap();
+        }
         group.bench_with_input(BenchmarkId::new("art", size), &size, |b, _size| {
-            let mut tree = Tree::<FixedKey<16>, _>::new();
-            for (i, key) in keys.iter().enumerate() {
-                tree.insert(&key.into(), i, 0, 0);
-            }
             let mut rng = thread_rng();
             b.iter(|| {
                 let key = &keys[rng.gen_range(0..keys.len())];
@@ -130,11 +130,11 @@ pub fn seq_get(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1));
     {
         let size = 1_000_000;
+        let mut tree = Tree::<FixedKey<16>, _>::new();
+        for i in 0..size as u64 {
+            tree.insert(&i.into(), i, 0, 0).unwrap();
+        }
         group.bench_with_input(BenchmarkId::new("art", size), &size, |b, size| {
-            let mut tree = Tree::<FixedKey<16>, _>::new();
-            for i in 0..*size as u64 {
-                tree.insert(&i.into(), i, 0, 0);
-            }
             let mut key = 0u64;
             b.iter(|| {
                 criterion::black_box(tree.get(&key.into(), 0));
@@ -170,5 +170,5 @@ fn gen_keys(l1_prefix: usize, l2_prefix: usize, suffix: usize) -> Vec<String> {
 
 criterion_group!(delete_benches, seq_delete, rand_delete);
 criterion_group!(insert_benches, seq_insert, rand_insert);
-criterion_group!(retr_benches, seq_get, rand_get, rand_get_str);
-criterion_main!(insert_benches);
+criterion_group!(read_benches, seq_get, rand_get, rand_get_str);
+criterion_main!(insert_benches, read_benches);
