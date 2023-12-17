@@ -1,7 +1,7 @@
 use std::mem::MaybeUninit;
 use std::sync::Arc;
 
-use crate::{BitArray, KeyTrait};
+use crate::{KeyTrait, SparseVector};
 
 /*
     Immutable nodes
@@ -379,8 +379,8 @@ impl<P: KeyTrait + Clone, N: Version, const WIDTH: usize> Drop for FlatNode<P, N
 pub struct Node48<P: KeyTrait + Clone, N: Version> {
     pub(crate) prefix: P,
     pub(crate) version: u64,
-    keys: BitArray<u8, 256>,
-    children: BitArray<Arc<N>, 48>,
+    keys: SparseVector<u8, 256>,
+    children: SparseVector<Arc<N>, 48>,
     num_children: u8,
 }
 
@@ -389,14 +389,14 @@ impl<P: KeyTrait + Clone, N: Version> Node48<P, N> {
         Self {
             prefix,
             version: 0,
-            keys: BitArray::new(),
-            children: BitArray::new(),
+            keys: SparseVector::new(),
+            children: SparseVector::new(),
             num_children: 0,
         }
     }
 
     pub fn insert_child(&mut self, key: u8, node: Arc<N>) {
-        let pos = self.children.first_free_pos().unwrap();
+        let pos = self.children.first_free_pos();
         assert!(pos < 48);
 
         self.keys.set(key as usize, pos as u8);
@@ -546,7 +546,7 @@ pub struct Node256<P: KeyTrait + Clone, N: Version> {
     pub(crate) prefix: P,    // Prefix associated with the node
     pub(crate) version: u64, // Version for node256
 
-    children: BitArray<Arc<N>, 256>,
+    children: SparseVector<Arc<N>, 256>,
     num_children: usize,
 }
 
@@ -555,7 +555,7 @@ impl<P: KeyTrait + Clone, N: Version> Node256<P, N> {
         Self {
             prefix,
             version: 0,
-            children: BitArray::new(),
+            children: SparseVector::new(),
             num_children: 0,
         }
     }
