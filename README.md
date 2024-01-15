@@ -1,16 +1,13 @@
-# tart: Timed-Adaptive Radix Trie for Rust
+# vart: Versioned Adaptive Radix Trie for Rust
 
-tart is a Rust library that implements an immutable Timed-Adaptive Radix Trie data structure. It allows you to efficiently manage key-value pairs with timestamps, making it ideal for applications that require tracking changes over time and enabling snapshot reads. With tart, you can handle versioned data, insert, delete, and query key-value items based on specific versions (or timestamps), and more.
+vart is a Rust library that implements an immutable Versioned Adaptive Radix Trie data structure. It allows you to efficiently manage key-value pairs with multiple versions and timestamps, making it a useful datastructure for applications that require tracking changes over time and enabling snapshot reads. With vart, you can handle versioned data, insert, delete, and query key-value items based on specific versions.
 
-![](https://img.shields.io/badge/license-Apache_License_2.0-00bfff.svg?style=flat-square)
+![License](https://img.shields.io/badge/license-Apache_License_2.0-00bfff.svg?style=flat-square)
 
 ## Features
 
-- **Immutable:** Built on an immutable radix trie data structure. This means that once a key-value pair is added to tart, it cannot be modified or deleted, ensuring data integrity and enabling safe and predictable operations. Multiple versions of the same key can be stored and retrieved by using the version (or timestamp).
+- **Immutable:** Built on an immutable radix trie data structure employing copy-on-write semantics. This design allows for the storage and retrieval of multiple versions of the same key.
 
-- **Timestamp Tracking:** Associate timestamps with key-value items, allowing for applications that need to track changes over time.
+- **Version Tracking:** Track modifications to the key and manage multiple versions of the same key within the data structure.
 
 - **Snapshot Reads:** Capture the current state of the trie and create immutable snapshots, allowing for point-in-time views of the data.
-
-- **Immutable and Copy-on-Write:** tart supports both immutable and copy-on-write operations, giving you flexibility in managing your data.
-
