@@ -4,8 +4,8 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Through
 use rand::prelude::SliceRandom;
 use rand::{thread_rng, Rng};
 
-use art::art::Tree;
-use art::FixedKey;
+use vart::art::Tree;
+use vart::FixedKey;
 
 pub fn seq_insert(c: &mut Criterion) {
     let mut group = c.benchmark_group("seq_insert");
