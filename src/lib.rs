@@ -52,29 +52,29 @@ impl<T: Key + Clone + PartialOrd + PartialEq + Ord + Debug + for<'a> From<&'a [u
 // because no string can have any characters after the NULL byte!
 //
 #[derive(Clone, Debug, Eq)]
-pub struct FixedKey<const SIZE: usize> {
+pub struct FixedSizeKey<const SIZE: usize> {
     content: [u8; SIZE],
     len: usize,
 }
 
-impl<const SIZE: usize> PartialEq for FixedKey<SIZE> {
+impl<const SIZE: usize> PartialEq for FixedSizeKey<SIZE> {
     fn eq(&self, other: &Self) -> bool {
         self.content[..self.len] == other.content[..other.len]
     }
 }
 
-impl<const SIZE: usize> PartialOrd for FixedKey<SIZE> {
+impl<const SIZE: usize> PartialOrd for FixedSizeKey<SIZE> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-impl<const SIZE: usize> Ord for FixedKey<SIZE> {
+impl<const SIZE: usize> Ord for FixedSizeKey<SIZE> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.content[..self.len].cmp(&other.content[..other.len])
     }
 }
 
-impl<const SIZE: usize> FixedKey<SIZE> {
+impl<const SIZE: usize> FixedSizeKey<SIZE> {
     // Create new instance with data ending in zero byte
     pub fn create_key(src: &[u8]) -> Self {
         debug_assert!(src.len() < SIZE);
@@ -109,19 +109,19 @@ impl<const SIZE: usize> FixedKey<SIZE> {
     }
 }
 
-impl<const SIZE: usize> Key for FixedKey<SIZE> {
+impl<const SIZE: usize> Key for FixedSizeKey<SIZE> {
     // Returns slice of the internal data up to the actual length
     fn as_slice(&self) -> &[u8] {
         &self.content[..self.len]
     }
 
-    // Creates a new instance of FixedKey consisting only of the initial part of the content
+    // Creates a new instance of FixedSizeKey consisting only of the initial part of the content
     fn prefix_before(&self, length: usize) -> Self {
         assert!(length <= self.len);
         Self::from_slice(&self.content[..length])
     }
 
-    // Creates a new instance of FixedKey excluding the initial part of the content
+    // Creates a new instance of FixedSizeKey excluding the initial part of the content
     fn prefix_after(&self, start: usize) -> Self {
         assert!(start <= self.len);
         Self::from_slice(&self.content[start..self.len])
@@ -149,12 +149,12 @@ impl<const SIZE: usize> Key for FixedKey<SIZE> {
     }
 }
 
-impl<const SIZE: usize> FromStr for FixedKey<SIZE> {
+impl<const SIZE: usize> FromStr for FixedSizeKey<SIZE> {
     type Err = TrieError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.len() >= SIZE {
-            return Err(TrieError::FixedKeyLengthExceeded);
+            return Err(TrieError::FixedSizeKeyLengthExceeded);
         }
         let mut arr = [0; SIZE];
         arr[..s.len()].copy_from_slice(s.as_bytes());
@@ -165,54 +165,54 @@ impl<const SIZE: usize> FromStr for FixedKey<SIZE> {
     }
 }
 
-impl<const SIZE: usize> From<&[u8]> for FixedKey<SIZE> {
+impl<const SIZE: usize> From<&[u8]> for FixedSizeKey<SIZE> {
     fn from(src: &[u8]) -> Self {
         Self::from_slice(src)
     }
 }
 
-impl<const N: usize> From<u8> for FixedKey<N> {
+impl<const N: usize> From<u8> for FixedSizeKey<N> {
     fn from(data: u8) -> Self {
         Self::from_slice(data.to_be_bytes().as_ref())
     }
 }
 
-impl<const N: usize> From<u16> for FixedKey<N> {
+impl<const N: usize> From<u16> for FixedSizeKey<N> {
     fn from(data: u16) -> Self {
         Self::from_slice(data.to_be_bytes().as_ref())
     }
 }
 
-impl<const N: usize> From<u64> for FixedKey<N> {
+impl<const N: usize> From<u64> for FixedSizeKey<N> {
     fn from(data: u64) -> Self {
         Self::from_slice(data.to_be_bytes().as_ref())
     }
 }
 
-impl<const N: usize> From<&str> for FixedKey<N> {
+impl<const N: usize> From<&str> for FixedSizeKey<N> {
     fn from(data: &str) -> Self {
         Self::from_str(data).unwrap()
     }
 }
 
-impl<const N: usize> From<String> for FixedKey<N> {
+impl<const N: usize> From<String> for FixedSizeKey<N> {
     fn from(data: String) -> Self {
         Self::from_string(&data)
     }
 }
-impl<const N: usize> From<&String> for FixedKey<N> {
+impl<const N: usize> From<&String> for FixedSizeKey<N> {
     fn from(data: &String) -> Self {
         Self::from_string(data)
     }
 }
 
-// A VariableKey is a variable-length datatype with NULL byte appended to it.
+// A VariableSizeKey is a variable-length datatype with NULL byte appended to it.
 #[derive(Clone, PartialEq, PartialOrd, Ord, Eq, Debug)]
-pub struct VariableKey {
+pub struct VariableSizeKey {
     data: Vec<u8>,
 }
 
-impl VariableKey {
+impl VariableSizeKey {
     pub fn key(src: &[u8]) -> Self {
         let mut data = Vec::with_capacity(src.len() + 1);
         data.extend_from_slice(src);
@@ -256,7 +256,7 @@ impl VariableKey {
     }
 }
 
-impl FromStr for VariableKey {
+impl FromStr for VariableSizeKey {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -267,21 +267,21 @@ impl FromStr for VariableKey {
     }
 }
 
-impl From<&[u8]> for VariableKey {
+impl From<&[u8]> for VariableSizeKey {
     fn from(src: &[u8]) -> Self {
         Self::from_slice(src)
     }
 }
 
-impl Key for VariableKey {
+impl Key for VariableSizeKey {
     fn prefix_before(&self, length: usize) -> Self {
         assert!(length <= self.data.len());
-        VariableKey::from_slice(&self.data[..length])
+        VariableSizeKey::from_slice(&self.data[..length])
     }
 
     fn prefix_after(&self, start: usize) -> Self {
         assert!(start <= self.data.len());
-        VariableKey::from_slice(&self.data[start..self.data.len()])
+        VariableSizeKey::from_slice(&self.data[start..self.data.len()])
     }
 
     #[inline(always)]
@@ -545,7 +545,7 @@ pub enum TrieError {
     SnapshotAlreadyClosed,
     SnapshotReadersNotClosed,
     TreeAlreadyClosed,
-    FixedKeyLengthExceeded,
+    FixedSizeKeyLengthExceeded,
     Other(String),
 }
 
@@ -567,7 +567,7 @@ impl fmt::Display for TrieError {
             TrieError::TreeAlreadyClosed => write!(f, "Tree already closed"),
             TrieError::Other(ref message) => write!(f, "Other error: {}", message),
             TrieError::SnapshotEmpty => write!(f, "Snapshot is empty"),
-            TrieError::FixedKeyLengthExceeded => write!(f, "Fixed key length exceeded"),
+            TrieError::FixedSizeKeyLengthExceeded => write!(f, "Fixed key length exceeded"),
         }
     }
 }

@@ -1303,7 +1303,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 #[cfg(test)]
 mod tests {
     use super::{Tree, KV};
-    use crate::{FixedKey, VariableKey};
+    use crate::{FixedSizeKey, VariableSizeKey};
     use std::str::FromStr;
 
     use std::fs::File;
@@ -1318,26 +1318,26 @@ mod tests {
 
     #[test]
     fn insert_search_delete_words() {
-        let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
         let file_path = "testdata/words.txt";
 
         if let Ok(words) = read_words_from_file(file_path) {
             // Insertion phase
             for word in &words {
-                let key = &VariableKey::from_str(word).unwrap();
+                let key = &VariableSizeKey::from_str(word).unwrap();
                 tree.insert(key, 1, 0, 0);
             }
 
             // Search phase
             for word in &words {
-                let key = VariableKey::from_str(word).unwrap();
+                let key = VariableSizeKey::from_str(word).unwrap();
                 let (_, val, _, _) = tree.get(&key, 0).unwrap();
                 assert_eq!(val, 1);
             }
 
             // Deletion phase
             for word in &words {
-                let key = VariableKey::from_str(word).unwrap();
+                let key = VariableSizeKey::from_str(word).unwrap();
                 assert!(tree.remove(&key).unwrap());
             }
         } else if let Err(err) = read_words_from_file(file_path) {
@@ -1349,7 +1349,7 @@ mod tests {
 
     #[test]
     fn string_insert_delete() {
-        let mut tree = Tree::<VariableKey, i32>::new();
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // Insertion phase
         let insert_words = [
@@ -1357,18 +1357,20 @@ mod tests {
         ];
 
         for word in &insert_words {
-            tree.insert(&VariableKey::from_str(word).unwrap(), 1, 0, 0);
+            tree.insert(&VariableSizeKey::from_str(word).unwrap(), 1, 0, 0);
         }
 
         // Deletion phase
         for word in &insert_words {
-            assert!(tree.remove(&VariableKey::from_str(word).unwrap()).unwrap());
+            assert!(tree
+                .remove(&VariableSizeKey::from_str(word).unwrap())
+                .unwrap());
         }
     }
 
     #[test]
     fn string_long() {
-        let mut tree = Tree::<VariableKey, i32>::new();
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // Insertion phase
         let words_to_insert = [
@@ -1378,22 +1380,24 @@ mod tests {
         ];
 
         for (word, val) in &words_to_insert {
-            tree.insert(&VariableKey::from_str(word).unwrap(), *val, 0, 0);
+            tree.insert(&VariableSizeKey::from_str(word).unwrap(), *val, 0, 0);
         }
 
         // Verification phase
         for (word, expected_val) in &words_to_insert {
-            let (_, val, _, _) = tree.get(&VariableKey::from_str(word).unwrap(), 0).unwrap();
+            let (_, val, _, _) = tree
+                .get(&VariableSizeKey::from_str(word).unwrap(), 0)
+                .unwrap();
             assert_eq!(val, *expected_val);
         }
     }
 
     #[test]
     fn root_set_get() {
-        let mut tree = Tree::<VariableKey, i32>::new();
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // Insertion phase
-        let key = VariableKey::from_str("abc").unwrap();
+        let key = VariableSizeKey::from_str("abc").unwrap();
         let value = 1;
         tree.insert(&key, value, 0, 0);
 
@@ -1404,10 +1408,10 @@ mod tests {
 
     #[test]
     fn string_duplicate_insert() {
-        let mut tree = Tree::<VariableKey, i32>::new();
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // First insertion
-        let key = VariableKey::from_str("abc").unwrap();
+        let key = VariableSizeKey::from_str("abc").unwrap();
         let value = 1;
         let result = tree.insert(&key, value, 0, 0).expect("Failed to insert");
         assert!(result.is_none());
@@ -1420,10 +1424,10 @@ mod tests {
     // Inserting a single value into the tree and removing it should result in a nil tree root.
     #[test]
     fn insert_and_remove() {
-        let mut tree = Tree::<VariableKey, i32>::new();
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // Insertion
-        let key = VariableKey::from_str("test").unwrap();
+        let key = VariableSizeKey::from_str("test").unwrap();
         let value = 1;
         tree.insert(&key, value, 0, 0);
 
@@ -1436,10 +1440,10 @@ mod tests {
 
     #[test]
     fn inserting_keys_with_common_prefix() {
-        let key1 = VariableKey::from_str("foo").unwrap();
-        let key2 = VariableKey::from_str("foo2").unwrap();
+        let key1 = VariableSizeKey::from_str("foo").unwrap();
+        let key2 = VariableSizeKey::from_str("foo2").unwrap();
 
-        let mut tree = Tree::<VariableKey, i32>::new();
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // Insertion
         tree.insert(&key1, 1, 0, 0);
@@ -1460,10 +1464,10 @@ mod tests {
     // should result in a tree root of type twig
     #[test]
     fn insert2_and_remove1_and_root_should_be_node1() {
-        let key1 = VariableKey::from_str("test1").unwrap();
-        let key2 = VariableKey::from_str("test2").unwrap();
+        let key1 = VariableSizeKey::from_str("test1").unwrap();
+        let key2 = VariableSizeKey::from_str("test2").unwrap();
 
-        let mut tree = Tree::<VariableKey, i32>::new();
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // Insertion
         tree.insert(&key1, 1, 0, 0);
@@ -1486,10 +1490,10 @@ mod tests {
     // // successfully collapsing into a twig and then nil upon successive removals
     // #[test]
     // fn insert2_and_remove2_and_root_should_be_nil() {
-    //     let key1 = &VariableKey::from_str("test1");
-    //     let key2 = &VariableKey::from_str("test2");
+    //     let key1 = &VariableSizeKey::from_str("test1");
+    //     let key2 = &VariableSizeKey::from_str("test2");
 
-    //     let mut tree = Tree::<VariableKey, i32>::new();
+    //     let mut tree = Tree::<VariableSizeKey, i32>::new();
     //     tree.insert(key1, 1, 0, 0);
     //     tree.insert(key2, 1, 0);
 
@@ -1505,16 +1509,16 @@ mod tests {
     // successfully collapsing into a NODE4 upon successive removals
     #[test]
     fn insert5_and_remove1_and_root_should_be_node4() {
-        let mut tree = Tree::<VariableKey, i32>::new();
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // Insertion
         for i in 0..5u32 {
-            let key = VariableKey::from_slice(&i.to_be_bytes());
+            let key = VariableSizeKey::from_slice(&i.to_be_bytes());
             tree.insert(&key, 1, 0, 0);
         }
 
         // Removal
-        let key_to_remove = VariableKey::from_slice(&1u32.to_be_bytes());
+        let key_to_remove = VariableSizeKey::from_slice(&1u32.to_be_bytes());
         assert!(tree.remove(&key_to_remove).unwrap());
 
         // Root verification
@@ -1532,15 +1536,15 @@ mod tests {
     //     // successfully collapsing into a NODE4, twig, then nil
     //     #[test]
     //     fn insert5_and_remove5_and_root_should_be_nil() {
-    //         let mut tree = Tree::<VariableKey, i32>::new();
+    //         let mut tree = Tree::<VariableSizeKey, i32>::new();
 
     //         for i in 0..5u32 {
-    //             let key = &VariableKey::from_slice(&i.to_be_bytes());
+    //             let key = &VariableSizeKey::from_slice(&i.to_be_bytes());
     //             tree.insert(key, 1);
     //         }
 
     //         for i in 0..5u32 {
-    //             let key = &VariableKey::from_slice(&i.to_be_bytes());
+    //             let key = &VariableSizeKey::from_slice(&i.to_be_bytes());
     //             tree.remove(key);
     //         }
 
@@ -1553,16 +1557,16 @@ mod tests {
     // successfully collapsing into a NODE16
     #[test]
     fn insert17_and_remove1_and_root_should_be_node16() {
-        let mut tree = Tree::<VariableKey, i32>::new();
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // Insertion
         for i in 0..17u32 {
-            let key = VariableKey::from_slice(&i.to_be_bytes());
+            let key = VariableSizeKey::from_slice(&i.to_be_bytes());
             tree.insert(&key, 1, 0, 0);
         }
 
         // Removal
-        let key_to_remove = VariableKey::from_slice(&2u32.to_be_bytes());
+        let key_to_remove = VariableSizeKey::from_slice(&2u32.to_be_bytes());
         assert!(tree.remove(&key_to_remove).unwrap());
 
         // Root verification
@@ -1576,11 +1580,11 @@ mod tests {
 
     #[test]
     fn insert17_and_root_should_be_node48() {
-        let mut tree = Tree::<VariableKey, i32>::new();
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // Insertion
         for i in 0..17u32 {
-            let key = VariableKey::from_slice(&i.to_be_bytes());
+            let key = VariableSizeKey::from_slice(&i.to_be_bytes());
             tree.insert(&key, 1, 0, 0);
         }
 
@@ -1599,15 +1603,15 @@ mod tests {
     // // successfully collapsing into a NODE16, NODE4, twig, and then nil
     // #[test]
     // fn insert17_and_remove17_and_root_should_be_nil() {
-    //     let mut tree = Tree::<VariableKey, i32>::new();
+    //     let mut tree = Tree::<VariableSizeKey, i32>::new();
 
     //     for i in 0..17u32 {
-    //         let key = VariableKey::from_slice(&i.to_be_bytes());
+    //         let key = VariableSizeKey::from_slice(&i.to_be_bytes());
     //         tree.insert(&key, 1);
     //     }
 
     //     for i in 0..17u32 {
-    //         let key = VariableKey::from_slice(&i.to_be_bytes());
+    //         let key = VariableSizeKey::from_slice(&i.to_be_bytes());
     //         tree.remove(&key);
     //     }
 
@@ -1620,16 +1624,16 @@ mod tests {
     // successfully collapasing into a NODE48
     #[test]
     fn insert49_and_remove1_and_root_should_be_node48() {
-        let mut tree = Tree::<VariableKey, i32>::new();
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // Insertion
         for i in 0..49u32 {
-            let key = VariableKey::from_slice(&i.to_be_bytes());
+            let key = VariableSizeKey::from_slice(&i.to_be_bytes());
             tree.insert(&key, 1, 0, 0);
         }
 
         // Removal
-        let key_to_remove = VariableKey::from_slice(&2u32.to_be_bytes());
+        let key_to_remove = VariableSizeKey::from_slice(&2u32.to_be_bytes());
         assert!(tree.remove(&key_to_remove).unwrap());
 
         // Root verification
@@ -1643,11 +1647,11 @@ mod tests {
 
     #[test]
     fn insert49_and_root_should_be_node248() {
-        let mut tree = Tree::<VariableKey, i32>::new();
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // Insertion
         for i in 0..49u32 {
-            let key = VariableKey::from_slice(&i.to_be_bytes());
+            let key = VariableSizeKey::from_slice(&i.to_be_bytes());
             tree.insert(&key, 1, 0, 0);
         }
 
@@ -1666,15 +1670,15 @@ mod tests {
     //     // // successfully collapsing into a Node48, Node16, Node4, twig, and finally nil
     //     // #[test]
     //     // fn insert49_and_remove49_and_root_should_be_nil() {
-    //     //     let mut tree = Tree::<VariableKey, i32>::new();
+    //     //     let mut tree = Tree::<VariableSizeKey, i32>::new();
 
     //     //     for i in 0..49u32 {
-    //     //         let key = &VariableKey::from_slice(&i.to_be_bytes());
+    //     //         let key = &VariableSizeKey::from_slice(&i.to_be_bytes());
     //     //         tree.insert(key, 1);
     //     //     }
 
     //     //     for i in 0..49u32 {
-    //     //         let key = VariableKey::from_slice(&i.to_be_bytes());
+    //     //         let key = VariableSizeKey::from_slice(&i.to_be_bytes());
     //     //         assert_eq!(tree.remove(&key), true);
     //     //     }
 
@@ -1689,7 +1693,7 @@ mod tests {
 
     #[test]
     fn timed_insertion() {
-        let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
 
         let kvts = vec![
             KVT {
@@ -1726,14 +1730,14 @@ mod tests {
                 kvt.version
             };
             assert!(tree
-                .insert(&VariableKey::from(kvt.k.clone()), 1, ts, 0)
+                .insert(&VariableSizeKey::from(kvt.k.clone()), 1, ts, 0)
                 .is_ok());
         }
 
         // Verification
         let mut curr_version = 1;
         for kvt in &kvts {
-            let key = VariableKey::from(kvt.k.clone());
+            let key = VariableSizeKey::from(kvt.k.clone());
             let (_, val, version, _ts) = tree.get(&key, 0).unwrap();
             assert_eq!(val, 1);
 
@@ -1752,9 +1756,9 @@ mod tests {
 
     #[test]
     fn timed_insertion_update_same_key() {
-        let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
 
-        let key1 = &VariableKey::from_str("key_1").unwrap();
+        let key1 = &VariableSizeKey::from_str("key_1").unwrap();
 
         // insert key1 with version 0
         assert!(tree.insert(key1, 1, 0, 1).is_ok());
@@ -1783,10 +1787,10 @@ mod tests {
 
     #[test]
     fn timed_insertion_update_non_increasing_version() {
-        let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
 
-        let key1 = VariableKey::from_str("key_1").unwrap();
-        let key2 = VariableKey::from_str("key_2").unwrap();
+        let key1 = VariableSizeKey::from_str("key_1").unwrap();
+        let key2 = VariableSizeKey::from_str("key_2").unwrap();
 
         // Initial insertion
         assert!(tree.insert(&key1, 1, 10, 0).is_ok());
@@ -1816,10 +1820,10 @@ mod tests {
 
     #[test]
     fn timed_insertion_update_equal_to_root_version() {
-        let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
 
-        let key1 = VariableKey::from_str("key_1").unwrap();
-        let key2 = VariableKey::from_str("key_2").unwrap();
+        let key1 = VariableSizeKey::from_str("key_1").unwrap();
+        let key2 = VariableSizeKey::from_str("key_2").unwrap();
 
         // Initial insertion
         assert!(tree.insert(&key1, 1, 10, 0).is_ok());
@@ -1831,9 +1835,9 @@ mod tests {
 
     #[test]
     fn timed_deletion_check_root_ts() {
-        let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
-        let key1 = VariableKey::from_str("key_1").unwrap();
-        let key2 = VariableKey::from_str("key_2").unwrap();
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let key1 = VariableSizeKey::from_str("key_1").unwrap();
+        let key2 = VariableSizeKey::from_str("key_2").unwrap();
 
         // Initial insertions
         assert!(tree.insert(&key1, 1, 0, 0).is_ok());
@@ -1861,11 +1865,11 @@ mod tests {
 
     #[test]
     fn iter_seq_u16() {
-        let mut tree = Tree::<FixedKey<16>, u16>::new();
+        let mut tree = Tree::<FixedSizeKey<16>, u16>::new();
 
         // Insertion
         for i in 0..u16::MAX {
-            let key: FixedKey<16> = i.into();
+            let key: FixedSizeKey<16> = i.into();
             tree.insert(&key, i, 0, i as u64);
         }
 
@@ -1889,11 +1893,11 @@ mod tests {
 
     #[test]
     fn iter_seq_u8() {
-        let mut tree: Tree<FixedKey<32>, u8> = Tree::<FixedKey<32>, u8>::new();
+        let mut tree: Tree<FixedSizeKey<32>, u8> = Tree::<FixedSizeKey<32>, u8>::new();
 
         // Insertion
         for i in 0..u8::MAX {
-            let key: FixedKey<32> = i.into();
+            let key: FixedSizeKey<32> = i.into();
             tree.insert(&key, i, 0, 0);
         }
 
@@ -1915,18 +1919,18 @@ mod tests {
 
     #[test]
     fn range_seq_u8() {
-        let mut tree: Tree<FixedKey<8>, u8> = Tree::<FixedKey<8>, u8>::new();
+        let mut tree: Tree<FixedSizeKey<8>, u8> = Tree::<FixedSizeKey<8>, u8>::new();
 
         let max = u8::MAX;
         // Insertion
         for i in 0..=max {
-            let key: FixedKey<8> = i.into();
+            let key: FixedSizeKey<8> = i.into();
             tree.insert(&key, i, 0, 0);
         }
 
         // Test inclusive range
-        let start_key: FixedKey<8> = 5u8.into();
-        let end_key: FixedKey<8> = max.into();
+        let start_key: FixedSizeKey<8> = 5u8.into();
+        let end_key: FixedSizeKey<8> = max.into();
         let mut len = 0usize;
         for _ in tree.range(start_key..=end_key) {
             len += 1;
@@ -1934,8 +1938,8 @@ mod tests {
         assert_eq!(len, max as usize - 4);
 
         // Test exclusive range
-        let start_key: FixedKey<8> = 5u8.into();
-        let end_key: FixedKey<8> = max.into();
+        let start_key: FixedSizeKey<8> = 5u8.into();
+        let end_key: FixedSizeKey<8> = max.into();
         let mut len = 0usize;
         for _ in tree.range(start_key..end_key) {
             len += 1;
@@ -1943,8 +1947,8 @@ mod tests {
         assert_eq!(len, max as usize - 5);
 
         // Test range with different start and end keys
-        let start_key: FixedKey<8> = 3u8.into();
-        let end_key: FixedKey<8> = 7u8.into();
+        let start_key: FixedSizeKey<8> = 3u8.into();
+        let end_key: FixedSizeKey<8> = 7u8.into();
         let mut len = 0usize;
         for _ in tree.range(start_key..=end_key) {
             len += 1;
@@ -1952,8 +1956,8 @@ mod tests {
         assert_eq!(len, 5);
 
         // Test range with all keys
-        let start_key: FixedKey<8> = 0u8.into();
-        let end_key: FixedKey<8> = max.into();
+        let start_key: FixedSizeKey<8> = 0u8.into();
+        let end_key: FixedSizeKey<8> = max.into();
         let mut len = 0usize;
         for _ in tree.range(start_key..=end_key) {
             len += 1;
@@ -1963,18 +1967,18 @@ mod tests {
 
     #[test]
     fn range_seq_u16() {
-        let mut tree: Tree<FixedKey<16>, u16> = Tree::<FixedKey<16>, u16>::new();
+        let mut tree: Tree<FixedSizeKey<16>, u16> = Tree::<FixedSizeKey<16>, u16>::new();
 
         let max = u16::MAX;
         // Insertion
         for i in 0..=max {
-            let key: FixedKey<16> = i.into();
+            let key: FixedSizeKey<16> = i.into();
             tree.insert(&key, i, 0, 0);
         }
 
         let mut len = 0usize;
-        let start_key: FixedKey<16> = 0u8.into();
-        let end_key: FixedKey<16> = max.into();
+        let start_key: FixedSizeKey<16> = 0u8.into();
+        let end_key: FixedSizeKey<16> = max.into();
 
         for _ in tree.range(start_key..=end_key) {
             len += 1;
@@ -1984,11 +1988,11 @@ mod tests {
 
     #[test]
     fn same_key_with_versions() {
-        let mut tree = Tree::<VariableKey, i32>::new();
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // Insertions
-        let key1 = VariableKey::from_str("abc").unwrap();
-        let key2 = VariableKey::from_str("efg").unwrap();
+        let key1 = VariableSizeKey::from_str("abc").unwrap();
+        let key2 = VariableSizeKey::from_str("efg").unwrap();
         tree.insert(&key1, 1, 0, 0);
         tree.insert(&key1, 2, 10, 0);
         tree.insert(&key2, 3, 11, 0);
@@ -2012,42 +2016,42 @@ mod tests {
 
     #[test]
     fn bulk_insert() {
-        let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
         let curr_version = tree.version();
         // Create a vector of KV<P, V>
         let kv_pairs = vec![
             KV {
-                key: VariableKey::from_str("key_1").unwrap(),
+                key: VariableSizeKey::from_str("key_1").unwrap(),
                 value: 1,
                 version: 0,
                 ts: 0,
             },
             KV {
-                key: VariableKey::from_str("key_2").unwrap(),
+                key: VariableSizeKey::from_str("key_2").unwrap(),
                 value: 1,
                 version: 2,
                 ts: 0,
             },
             KV {
-                key: VariableKey::from_str("key_3").unwrap(),
+                key: VariableSizeKey::from_str("key_3").unwrap(),
                 value: 1,
                 version: curr_version + 1,
                 ts: 0,
             },
             KV {
-                key: VariableKey::from_str("key_4").unwrap(),
+                key: VariableSizeKey::from_str("key_4").unwrap(),
                 value: 1,
                 version: curr_version + 1,
                 ts: 0,
             },
             KV {
-                key: VariableKey::from_str("key_5").unwrap(),
+                key: VariableSizeKey::from_str("key_5").unwrap(),
                 value: 1,
                 version: curr_version + 2,
                 ts: 0,
             },
             KV {
-                key: VariableKey::from_str("key_6").unwrap(),
+                key: VariableSizeKey::from_str("key_6").unwrap(),
                 value: 1,
                 version: 0,
                 ts: 0,
@@ -2067,7 +2071,7 @@ mod tests {
             }
         }
         assert!(tree
-            .insert(&VariableKey::from_str("key_7").unwrap(), 1, 0, 0)
+            .insert(&VariableSizeKey::from_str("key_7").unwrap(), 1, 0, 0)
             .is_ok());
         assert!(tree.version() == curr_version + 3);
     }
