@@ -1,13 +1,14 @@
 //! This module defines the Snapshot struct for managing snapshots within a Trie structure.
-use std::cell::Cell;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use hashbrown::HashSet;
 
-use crate::art::{Node, TrieError};
+use crate::art::Node;
 use crate::iter::IterationPointer;
 use crate::node::Version;
-use crate::KeyTrait;
+use crate::{KeyTrait, TrieError};
 
 /// Represents a snapshot of the data within the Trie.
 pub struct Snapshot<P: KeyTrait, V: Clone> {
@@ -15,7 +16,7 @@ pub struct Snapshot<P: KeyTrait, V: Clone> {
     pub(crate) ts: u64,
     pub(crate) root: Option<Arc<Node<P, V>>>,
     pub(crate) readers: HashSet<u64>,
-    pub(crate) max_active_readers: Cell<u64>,
+    pub(crate) max_active_readers: AtomicU64,
     pub(crate) closed: bool,
 }
 
@@ -27,7 +28,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
             ts,
             root,
             readers: HashSet::new(),
-            max_active_readers: Cell::new(0),
+            max_active_readers: AtomicU64::new(0),
             closed: false,
         }
     }
@@ -95,10 +96,9 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         self.is_closed()?;
 
         // Check if there are any active readers for the snapshot
-        if self.max_active_readers.get() > 0 {
+        if self.max_active_readers.load(Ordering::SeqCst) > 0 {
             return Err(TrieError::SnapshotReadersNotClosed);
         }
-
         // Mark the snapshot as closed
         self.closed = true;
 
@@ -113,8 +113,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
             return Err(TrieError::SnapshotEmpty);
         }
 
-        let reader_id = self.max_active_readers.get() + 1;
-        self.max_active_readers.set(reader_id);
+        let reader_id = self.max_active_readers.fetch_add(1, Ordering::SeqCst) + 1;
         self.readers.insert(reader_id);
         Ok(IterationPointer::new(
             self.root.as_ref().unwrap().clone(),
@@ -126,7 +125,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         // Check if the snapshot is already closed
         self.is_closed()?;
 
-        Ok(self.max_active_readers.get())
+        Ok(self.max_active_readers.load(Ordering::SeqCst))
     }
 
     pub fn close_reader(&mut self, reader_id: u64) -> Result<(), TrieError> {
@@ -134,8 +133,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         self.is_closed()?;
 
         self.readers.remove(&reader_id);
-        let readers = self.max_active_readers.get();
-        self.max_active_readers.set(readers - 1);
+        let _readers = self.max_active_readers.fetch_sub(1, Ordering::SeqCst);
         Ok(())
     }
 
@@ -168,21 +166,24 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
 mod tests {
     use crate::art::Tree;
     use crate::iter::IterationPointer;
-    use crate::VariableKey;
+    use crate::VariableSizeKey;
+    use std::str::FromStr;
 
     #[test]
     fn snapshot_creation() {
-        let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
         let keys = ["key_1", "key_2", "key_3"];
 
         for key in keys.iter() {
-            assert!(tree.insert(&VariableKey::from_str(key), 1, 0, 0).is_ok());
+            assert!(tree
+                .insert(&VariableSizeKey::from_str(key).unwrap(), 1, 0, 0)
+                .is_ok());
         }
 
         let mut snap1 = tree.create_snapshot().unwrap();
         let key_to_insert = "key_1";
         assert!(snap1
-            .insert(&VariableKey::from_str(key_to_insert), 1, 0)
+            .insert(&VariableSizeKey::from_str(key_to_insert).unwrap(), 1, 0)
             .is_ok());
 
         let expected_snap_ts = keys.len() as u64 + 1;
@@ -195,11 +196,11 @@ mod tests {
 
     #[test]
     fn snapshot_isolation() {
-        let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
-        let key_1 = VariableKey::from_str("key_1");
-        let key_2 = VariableKey::from_str("key_2");
-        let key_3_snap1 = VariableKey::from_str("key_3_snap1");
-        let key_3_snap2 = VariableKey::from_str("key_3_snap2");
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let key_1 = VariableSizeKey::from_str("key_1").unwrap();
+        let key_2 = VariableSizeKey::from_str("key_2").unwrap();
+        let key_3_snap1 = VariableSizeKey::from_str("key_3_snap1").unwrap();
+        let key_3_snap2 = VariableSizeKey::from_str("key_3_snap2").unwrap();
 
         assert!(tree.insert(&key_1, 1, 0, 0).is_ok());
 
@@ -241,11 +242,11 @@ mod tests {
 
     #[test]
     fn snapshot_readers() {
-        let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
-        let key_1 = VariableKey::from_str("key_1");
-        let key_2 = VariableKey::from_str("key_2");
-        let key_3 = VariableKey::from_str("key_3");
-        let key_4 = VariableKey::from_str("key_4");
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let key_1 = VariableSizeKey::from_str("key_1").unwrap();
+        let key_2 = VariableSizeKey::from_str("key_2").unwrap();
+        let key_3 = VariableSizeKey::from_str("key_3").unwrap();
+        let key_4 = VariableSizeKey::from_str("key_4").unwrap();
 
         assert!(tree.insert(&key_1, 1, 0, 0).is_ok());
         assert!(tree.insert(&key_2, 1, 0, 0).is_ok());
@@ -276,7 +277,7 @@ mod tests {
         assert!(snap.close().is_ok());
     }
 
-    fn count_items(reader: &IterationPointer<VariableKey, i32>) -> usize {
+    fn count_items(reader: &IterationPointer<VariableSizeKey, i32>) -> usize {
         let mut len = 0;
         for _ in reader.iter() {
             len += 1;

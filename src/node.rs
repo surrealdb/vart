@@ -1,7 +1,7 @@
 use std::mem::MaybeUninit;
 use std::sync::Arc;
 
-use crate::{KeyTrait, SparseVector};
+use crate::{BitArray, KeyTrait};
 
 /*
     Immutable nodes
@@ -379,8 +379,8 @@ impl<P: KeyTrait + Clone, N: Version, const WIDTH: usize> Drop for FlatNode<P, N
 pub struct Node48<P: KeyTrait + Clone, N: Version> {
     pub(crate) prefix: P,
     pub(crate) version: u64,
-    keys: SparseVector<u8, 256>,
-    children: SparseVector<Arc<N>, 48>,
+    keys: BitArray<u8, 256>,
+    children: BitArray<Arc<N>, 48>,
     num_children: u8,
 }
 
@@ -389,14 +389,14 @@ impl<P: KeyTrait + Clone, N: Version> Node48<P, N> {
         Self {
             prefix,
             version: 0,
-            keys: SparseVector::new(),
-            children: SparseVector::new(),
+            keys: BitArray::new(),
+            children: BitArray::new(),
             num_children: 0,
         }
     }
 
     pub fn insert_child(&mut self, key: u8, node: Arc<N>) {
-        let pos = self.children.first_free_pos();
+        let pos = self.children.first_free_pos().unwrap();
         assert!(pos < 48);
 
         self.keys.set(key as usize, pos as u8);
@@ -546,7 +546,7 @@ pub struct Node256<P: KeyTrait + Clone, N: Version> {
     pub(crate) prefix: P,    // Prefix associated with the node
     pub(crate) version: u64, // Version for node256
 
-    children: SparseVector<Arc<N>, 256>,
+    children: BitArray<Arc<N>, 256>,
     num_children: usize,
 }
 
@@ -555,7 +555,7 @@ impl<P: KeyTrait + Clone, N: Version> Node256<P, N> {
         Self {
             prefix,
             version: 0,
-            children: SparseVector::new(),
+            children: BitArray::new(),
             num_children: 0,
         }
     }
@@ -684,7 +684,7 @@ impl<P: KeyTrait + Clone, N: Version> Drop for Node256<P, N> {
 
 #[cfg(test)]
 mod tests {
-    use crate::FixedKey;
+    use crate::FixedSizeKey;
 
     use super::{FlatNode, Node256, Node48, NodeTrait, TwigNode, Version};
     use std::mem::MaybeUninit;
@@ -722,47 +722,47 @@ mod tests {
 
     #[test]
     fn flatnode() {
-        let dummy_prefix: FixedKey<8> = FixedKey::create_key("foo".as_bytes());
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
 
         node_test(
-            FlatNode::<FixedKey<8>, usize, 4>::new(dummy_prefix.clone()),
+            FlatNode::<FixedSizeKey<8>, usize, 4>::new(dummy_prefix.clone()),
             4,
         );
         node_test(
-            FlatNode::<FixedKey<8>, usize, 16>::new(dummy_prefix.clone()),
+            FlatNode::<FixedSizeKey<8>, usize, 16>::new(dummy_prefix.clone()),
             16,
         );
         node_test(
-            FlatNode::<FixedKey<8>, usize, 32>::new(dummy_prefix.clone()),
+            FlatNode::<FixedSizeKey<8>, usize, 32>::new(dummy_prefix.clone()),
             32,
         );
         node_test(
-            FlatNode::<FixedKey<8>, usize, 48>::new(dummy_prefix.clone()),
+            FlatNode::<FixedSizeKey<8>, usize, 48>::new(dummy_prefix.clone()),
             48,
         );
         node_test(
-            FlatNode::<FixedKey<8>, usize, 64>::new(dummy_prefix.clone()),
+            FlatNode::<FixedSizeKey<8>, usize, 64>::new(dummy_prefix.clone()),
             64,
         );
 
         // Resize from 16 to 4
-        let mut node = FlatNode::<FixedKey<8>, usize, 16>::new(dummy_prefix.clone());
+        let mut node = FlatNode::<FixedSizeKey<8>, usize, 16>::new(dummy_prefix.clone());
         for i in 0..4 {
             node = node.add_child(i as u8, i);
         }
 
-        let resized: FlatNode<FixedKey<8>, usize, 4> = node.resize();
+        let resized: FlatNode<FixedSizeKey<8>, usize, 4> = node.resize();
         assert_eq!(resized.num_children, 4);
         for i in 0..4 {
             assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i.into()));
         }
 
         // Resize from 4 to 16
-        let mut node = FlatNode::<FixedKey<8>, usize, 4>::new(dummy_prefix.clone());
+        let mut node = FlatNode::<FixedSizeKey<8>, usize, 4>::new(dummy_prefix.clone());
         for i in 0..4 {
             node = node.add_child(i as u8, i);
         }
-        let mut resized: FlatNode<FixedKey<8>, usize, 16> = node.resize();
+        let mut resized: FlatNode<FixedSizeKey<8>, usize, 16> = node.resize();
         assert_eq!(resized.num_children, 4);
         for i in 4..16 {
             resized = resized.add_child(i as u8, i);
@@ -773,7 +773,7 @@ mod tests {
         }
 
         // Resize from 16 to 48
-        let mut node = FlatNode::<FixedKey<8>, usize, 16>::new(dummy_prefix.clone());
+        let mut node = FlatNode::<FixedSizeKey<8>, usize, 16>::new(dummy_prefix.clone());
         for i in 0..16 {
             node = node.add_child(i as u8, i);
         }
@@ -785,7 +785,7 @@ mod tests {
         }
 
         // Additional test for adding and deleting children
-        let mut node = FlatNode::<FixedKey<8>, usize, 4>::new(dummy_prefix);
+        let mut node = FlatNode::<FixedSizeKey<8>, usize, 4>::new(dummy_prefix);
         node = node.add_child(1, 1);
         node = node.add_child(2, 2);
         node = node.add_child(3, 3);
@@ -806,10 +806,10 @@ mod tests {
 
     #[test]
     fn node48() {
-        let dummy_prefix: FixedKey<8> = FixedKey::create_key("foo".as_bytes());
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
 
         // Create and test Node48
-        let mut n48 = Node48::<FixedKey<8>, u8>::new(dummy_prefix.clone());
+        let mut n48 = Node48::<FixedSizeKey<8>, u8>::new(dummy_prefix.clone());
         for i in 0..48 {
             n48 = n48.add_child(i, i);
         }
@@ -824,7 +824,7 @@ mod tests {
         }
 
         // Resize from 48 to 16
-        let mut node = Node48::<FixedKey<8>, u8>::new(dummy_prefix.clone());
+        let mut node = Node48::<FixedSizeKey<8>, u8>::new(dummy_prefix.clone());
         for i in 0..18 {
             node = node.add_child(i, i);
         }
@@ -840,7 +840,7 @@ mod tests {
         }
 
         // Resize from 48 to 4
-        let mut node = Node48::<FixedKey<8>, u8>::new(dummy_prefix.clone());
+        let mut node = Node48::<FixedSizeKey<8>, u8>::new(dummy_prefix.clone());
         for i in 0..4 {
             node = node.add_child(i, i);
         }
@@ -851,7 +851,7 @@ mod tests {
         }
 
         // Resize from 48 to 256
-        let mut node = Node48::<FixedKey<8>, u8>::new(dummy_prefix);
+        let mut node = Node48::<FixedSizeKey<8>, u8>::new(dummy_prefix);
         for i in 0..48 {
             node = node.add_child(i, i);
         }
@@ -865,10 +865,10 @@ mod tests {
 
     #[test]
     fn node256() {
-        let dummy_prefix: FixedKey<8> = FixedKey::create_key("foo".as_bytes());
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
 
         node_test(
-            Node256::<FixedKey<8>, usize>::new(dummy_prefix.clone()),
+            Node256::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone()),
             255,
         );
 
@@ -896,16 +896,16 @@ mod tests {
     #[test]
     fn flatnode_update_version() {
         const WIDTH: usize = 4;
-        let dummy_prefix: FixedKey<8> = FixedKey::create_key("foo".as_bytes());
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
 
         // Prepare some child nodes
-        let mut child1 = FlatNode::<FixedKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
+        let mut child1 = FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
         child1.version = 5;
-        let mut child2 = FlatNode::<FixedKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
+        let mut child2 = FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
         child2.version = 10;
-        let mut child3 = FlatNode::<FixedKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
+        let mut child3 = FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
         child3.version = 3;
-        let mut child4 = FlatNode::<FixedKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
+        let mut child4 = FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
         child4.version = 7;
 
         let mut parent = FlatNode {
@@ -926,7 +926,7 @@ mod tests {
         assert_eq!(parent.version(), 10);
 
         // Add a new child with a larger version (15), parent's version should update to 15
-        let mut child5 = FlatNode::<FixedKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
+        let mut child5 = FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
         child5.version = 15;
         parent = parent.add_child(3, child5);
         assert_eq!(parent.version(), 15);
@@ -936,7 +936,7 @@ mod tests {
         assert_eq!(parent.version(), 10);
 
         // Update a child's version to be the largest (20), parent's version should update to 20
-        let mut child6 = FlatNode::<FixedKey<8>, usize, WIDTH>::new(dummy_prefix);
+        let mut child6 = FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix);
         child6.version = 20;
         parent.children[2] = MaybeUninit::new(Some(Arc::new(child6)));
         parent.update_version();
@@ -946,16 +946,17 @@ mod tests {
     #[test]
     fn flatnode_repeated_update_version() {
         const WIDTH: usize = 1;
-        let dummy_prefix: FixedKey<8> = FixedKey::create_key("foo".as_bytes());
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
 
-        let child = FlatNode::<FixedKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
-        let mut parent: FlatNode<FixedKey<8>, FlatNode<FixedKey<8>, usize, 1>, 1> = FlatNode {
-            prefix: dummy_prefix,
-            version: 6,
-            keys: [0; WIDTH],
-            children: Box::new([MaybeUninit::new(Some(Arc::new(child)))]),
-            num_children: 1,
-        };
+        let child = FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
+        let mut parent: FlatNode<FixedSizeKey<8>, FlatNode<FixedSizeKey<8>, usize, 1>, 1> =
+            FlatNode {
+                prefix: dummy_prefix,
+                version: 6,
+                keys: [0; WIDTH],
+                children: Box::new([MaybeUninit::new(Some(Arc::new(child)))]),
+                num_children: 1,
+            };
 
         // Calling update_version once should update the version.
         parent.update_version();
@@ -969,19 +970,20 @@ mod tests {
     #[test]
     fn node48_update_version() {
         const WIDTH: usize = 4;
-        let dummy_prefix: FixedKey<8> = FixedKey::create_key("foo".as_bytes());
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
 
         // Prepare some child nodes with varying versions
         let children: Vec<_> = (0..WIDTH)
             .map(|i| {
-                let mut child = FlatNode::<FixedKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
+                let mut child =
+                    FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
                 child.version = i as u64;
                 child
             })
             .collect();
 
-        let mut parent: Node48<FixedKey<8>, FlatNode<FixedKey<8>, usize, WIDTH>> =
-            Node48::<FixedKey<8>, FlatNode<FixedKey<8>, usize, WIDTH>>::new(dummy_prefix);
+        let mut parent: Node48<FixedSizeKey<8>, FlatNode<FixedSizeKey<8>, usize, WIDTH>> =
+            Node48::<FixedSizeKey<8>, FlatNode<FixedSizeKey<8>, usize, WIDTH>>::new(dummy_prefix);
 
         // Add children to parent
         for (i, child) in children.iter().enumerate() {
@@ -996,19 +998,20 @@ mod tests {
     #[test]
     fn node256_update_version() {
         const WIDTH: usize = 256;
-        let dummy_prefix: FixedKey<8> = FixedKey::create_key("foo".as_bytes());
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
 
         // Prepare some child nodes with varying versions
         let children: Vec<_> = (0..WIDTH)
             .map(|i| {
-                let mut child = FlatNode::<FixedKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
+                let mut child =
+                    FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
                 child.version = i as u64;
                 child
             })
             .collect();
 
-        let mut parent: Node256<FixedKey<8>, FlatNode<FixedKey<8>, usize, WIDTH>> =
-            Node256::<FixedKey<8>, FlatNode<FixedKey<8>, usize, WIDTH>>::new(dummy_prefix);
+        let mut parent: Node256<FixedSizeKey<8>, FlatNode<FixedSizeKey<8>, usize, WIDTH>> =
+            Node256::<FixedSizeKey<8>, FlatNode<FixedSizeKey<8>, usize, WIDTH>>::new(dummy_prefix);
 
         // Add children to parent
         for (i, child) in children.iter().enumerate() {
@@ -1025,20 +1028,20 @@ mod tests {
     #[test]
     fn twig_nodes() {
         const WIDTH: usize = 4;
-        let dummy_prefix: FixedKey<8> = FixedKey::create_key("foo".as_bytes());
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
 
         // Prepare some child nodes
         let mut twig1 =
-            TwigNode::<FixedKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+            TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
         twig1.version = 5;
         let mut twig2 =
-            TwigNode::<FixedKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+            TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
         twig2.version = 10;
         let mut twig3 =
-            TwigNode::<FixedKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+            TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
         twig3.version = 3;
         let mut twig4 =
-            TwigNode::<FixedKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+            TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
         twig4.version = 7;
 
         let mut parent = FlatNode {
@@ -1061,9 +1064,9 @@ mod tests {
 
     #[test]
     fn twig_insert() {
-        let dummy_prefix: FixedKey<8> = FixedKey::create_key("foo".as_bytes());
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
 
-        let node = TwigNode::<FixedKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
 
         let new_node = node.insert(42, 123, 0);
         assert_eq!(node.values.len(), 0);
@@ -1074,9 +1077,9 @@ mod tests {
 
     #[test]
     fn twig_insert_mut() {
-        let dummy_prefix: FixedKey<8> = FixedKey::create_key("foo".as_bytes());
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
 
-        let mut node = TwigNode::<FixedKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
 
         node.insert_mut(42, 123, 0);
         assert_eq!(node.values.len(), 1);
@@ -1086,8 +1089,8 @@ mod tests {
 
     #[test]
     fn twig_get_latest_leaf() {
-        let dummy_prefix: FixedKey<8> = FixedKey::create_key("foo".as_bytes());
-        let mut node = TwigNode::<FixedKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
         node.insert_mut(42, 123, 0);
         node.insert_mut(43, 124, 1);
         let latest_leaf = node.get_latest_leaf();
@@ -1096,8 +1099,8 @@ mod tests {
 
     #[test]
     fn twig_get_latest_value() {
-        let dummy_prefix: FixedKey<8> = FixedKey::create_key("foo".as_bytes());
-        let mut node = TwigNode::<FixedKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
         node.insert_mut(42, 123, 0);
         node.insert_mut(43, 124, 1);
         let latest_value = node.get_latest_value();
@@ -1106,8 +1109,8 @@ mod tests {
 
     #[test]
     fn twig_get_leaf_by_version() {
-        let dummy_prefix: FixedKey<8> = FixedKey::create_key("foo".as_bytes());
-        let mut node = TwigNode::<FixedKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
         node.insert_mut(42, 123, 0);
         node.insert_mut(43, 124, 1);
         let leaf_by_ts = node.get_leaf_by_version(123);
@@ -1118,8 +1121,8 @@ mod tests {
 
     #[test]
     fn twig_iter() {
-        let dummy_prefix: FixedKey<8> = FixedKey::create_key("foo".as_bytes());
-        let mut node = TwigNode::<FixedKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
         node.insert_mut(42, 123, 0);
         node.insert_mut(43, 124, 1);
         let mut iter = node.iter();
@@ -1130,10 +1133,10 @@ mod tests {
 
     #[test]
     fn memory_leak() {
-        let dummy_prefix: FixedKey<8> = FixedKey::create_key("foo".as_bytes());
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
 
         // Create and test flatnode
-        let mut node = FlatNode::<FixedKey<8>, usize, 4>::new(dummy_prefix.clone());
+        let mut node = FlatNode::<FixedSizeKey<8>, usize, 4>::new(dummy_prefix.clone());
         for i in 0..4 {
             node = node.add_child(i as u8, i);
         }
@@ -1143,7 +1146,7 @@ mod tests {
         }
 
         // Create and test Node48
-        let mut n48 = Node48::<FixedKey<8>, u8>::new(dummy_prefix.clone());
+        let mut n48 = Node48::<FixedSizeKey<8>, u8>::new(dummy_prefix.clone());
         for i in 0..48 {
             n48 = n48.add_child(i, i);
         }
@@ -1165,7 +1168,7 @@ mod tests {
 
     #[test]
     fn cache_line_size() {
-        assert!(std::mem::size_of::<FlatNode::<FixedKey<8>, usize, 4>>() <= 64);
-        assert!(std::mem::size_of::<FlatNode::<FixedKey<8>, usize, 16>>() <= 64);
+        assert!(std::mem::size_of::<FlatNode::<FixedSizeKey<8>, usize, 4>>() <= 64);
+        assert!(std::mem::size_of::<FlatNode::<FixedSizeKey<8>, usize, 16>>() <= 64);
     }
 }
