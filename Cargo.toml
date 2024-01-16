@@ -9,7 +9,7 @@ description = "An immutable versioned adaptive radix trie."
 repository = "https://github.com/surrealdb/vart"
 homepage = "https://github.com/surrealdb/vart"
 documentation = "https://docs.rs/vart/"
-keywords = ["radixtrie", "immutable trie", "snapshot isolation", "adaptive radix trie", "radix trie"]
+keywords = ["trie", "immutable-trie", "snapshot-isolation", "adaptive-radix-trie", "radix-trie"]
 categories = ["Data structures"]
 
 [dependencies]
