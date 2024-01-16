@@ -1,8 +1,6 @@
+use core::panic;
 use std::cmp::min;
-use std::error::Error;
-use std::fmt;
 use std::ops::RangeBounds;
-use std::panic;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -11,7 +9,7 @@ use hashbrown::HashSet;
 use crate::iter::{Iter, Range};
 use crate::node::{FlatNode, Node256, Node48, NodeTrait, TwigNode, Version};
 use crate::snapshot::Snapshot;
-use crate::KeyTrait;
+use crate::{KeyTrait, TrieError};
 
 // Minimum and maximum number of children for Node4
 const NODE4MIN: usize = 2;
@@ -30,43 +28,6 @@ const NODE256MIN: usize = NODE48MAX + 1;
 
 // Maximum number of active snapshots
 pub(crate) const DEFAULT_MAX_ACTIVE_SNAPSHOTS: u64 = 10000;
-
-// Define a custom error enum representing different error cases for the Trie
-#[derive(Clone, Debug)]
-pub enum TrieError {
-    IllegalArguments,
-    NotFound,
-    KeyNotFound,
-    SnapshotNotFound,
-    SnapshotEmpty,
-    SnapshotNotClosed,
-    SnapshotAlreadyClosed,
-    SnapshotReadersNotClosed,
-    TreeAlreadyClosed,
-    Other(String),
-}
-
-impl Error for TrieError {}
-
-// Implement the Display trait to define how the error should be formatted as a string
-impl fmt::Display for TrieError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            TrieError::IllegalArguments => write!(f, "Illegal arguments"),
-            TrieError::NotFound => write!(f, "Not found"),
-            TrieError::KeyNotFound => write!(f, "Key not found"),
-            TrieError::SnapshotNotFound => write!(f, "Snapshot not found"),
-            TrieError::SnapshotNotClosed => write!(f, "Snapshot not closed"),
-            TrieError::SnapshotAlreadyClosed => write!(f, "Snapshot already closed"),
-            TrieError::SnapshotReadersNotClosed => {
-                write!(f, "Readers in the snapshot are not closed")
-            }
-            TrieError::TreeAlreadyClosed => write!(f, "Tree already closed"),
-            TrieError::Other(ref message) => write!(f, "Other error: {}", message),
-            TrieError::SnapshotEmpty => write!(f, "Snapshot is empty"),
-        }
-    }
-}
 
 /// A struct representing a node in an Adaptive Radix Trie.
 ///
@@ -1308,7 +1269,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         }
 
         let root = self.root.as_ref();
-        return Range::new(root, range);
+        Range::new(root, range)
     }
 
     fn is_closed(&self) -> Result<(), TrieError> {
@@ -1343,6 +1304,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 mod tests {
     use super::{Tree, KV};
     use crate::{FixedKey, VariableKey};
+    use std::str::FromStr;
 
     use std::fs::File;
     use std::io::{self, BufRead, BufReader};
@@ -1362,20 +1324,20 @@ mod tests {
         if let Ok(words) = read_words_from_file(file_path) {
             // Insertion phase
             for word in &words {
-                let key = &VariableKey::from_str(word);
+                let key = &VariableKey::from_str(word).unwrap();
                 tree.insert(key, 1, 0, 0);
             }
 
             // Search phase
             for word in &words {
-                let key = VariableKey::from_str(word);
+                let key = VariableKey::from_str(word).unwrap();
                 let (_, val, _, _) = tree.get(&key, 0).unwrap();
                 assert_eq!(val, 1);
             }
 
             // Deletion phase
             for word in &words {
-                let key = VariableKey::from_str(word);
+                let key = VariableKey::from_str(word).unwrap();
                 assert!(tree.remove(&key).unwrap());
             }
         } else if let Err(err) = read_words_from_file(file_path) {
@@ -1395,12 +1357,12 @@ mod tests {
         ];
 
         for word in &insert_words {
-            tree.insert(&VariableKey::from_str(word), 1, 0, 0);
+            tree.insert(&VariableKey::from_str(word).unwrap(), 1, 0, 0);
         }
 
         // Deletion phase
         for word in &insert_words {
-            assert!(tree.remove(&VariableKey::from_str(word)).unwrap());
+            assert!(tree.remove(&VariableKey::from_str(word).unwrap()).unwrap());
         }
     }
 
@@ -1416,12 +1378,12 @@ mod tests {
         ];
 
         for (word, val) in &words_to_insert {
-            tree.insert(&VariableKey::from_str(word), *val, 0, 0);
+            tree.insert(&VariableKey::from_str(word).unwrap(), *val, 0, 0);
         }
 
         // Verification phase
         for (word, expected_val) in &words_to_insert {
-            let (_, val, _, _) = tree.get(&VariableKey::from_str(word), 0).unwrap();
+            let (_, val, _, _) = tree.get(&VariableKey::from_str(word).unwrap(), 0).unwrap();
             assert_eq!(val, *expected_val);
         }
     }
@@ -1431,7 +1393,7 @@ mod tests {
         let mut tree = Tree::<VariableKey, i32>::new();
 
         // Insertion phase
-        let key = VariableKey::from_str("abc");
+        let key = VariableKey::from_str("abc").unwrap();
         let value = 1;
         tree.insert(&key, value, 0, 0);
 
@@ -1445,7 +1407,7 @@ mod tests {
         let mut tree = Tree::<VariableKey, i32>::new();
 
         // First insertion
-        let key = VariableKey::from_str("abc");
+        let key = VariableKey::from_str("abc").unwrap();
         let value = 1;
         let result = tree.insert(&key, value, 0, 0).expect("Failed to insert");
         assert!(result.is_none());
@@ -1461,7 +1423,7 @@ mod tests {
         let mut tree = Tree::<VariableKey, i32>::new();
 
         // Insertion
-        let key = VariableKey::from_str("test");
+        let key = VariableKey::from_str("test").unwrap();
         let value = 1;
         tree.insert(&key, value, 0, 0);
 
@@ -1474,8 +1436,8 @@ mod tests {
 
     #[test]
     fn inserting_keys_with_common_prefix() {
-        let key1 = VariableKey::from_str("foo");
-        let key2 = VariableKey::from_str("foo2");
+        let key1 = VariableKey::from_str("foo").unwrap();
+        let key2 = VariableKey::from_str("foo2").unwrap();
 
         let mut tree = Tree::<VariableKey, i32>::new();
 
@@ -1498,8 +1460,8 @@ mod tests {
     // should result in a tree root of type twig
     #[test]
     fn insert2_and_remove1_and_root_should_be_node1() {
-        let key1 = VariableKey::from_str("test1");
-        let key2 = VariableKey::from_str("test2");
+        let key1 = VariableKey::from_str("test1").unwrap();
+        let key2 = VariableKey::from_str("test2").unwrap();
 
         let mut tree = Tree::<VariableKey, i32>::new();
 
@@ -1792,7 +1754,7 @@ mod tests {
     fn timed_insertion_update_same_key() {
         let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
 
-        let key1 = &VariableKey::from_str("key_1");
+        let key1 = &VariableKey::from_str("key_1").unwrap();
 
         // insert key1 with version 0
         assert!(tree.insert(key1, 1, 0, 1).is_ok());
@@ -1823,8 +1785,8 @@ mod tests {
     fn timed_insertion_update_non_increasing_version() {
         let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
 
-        let key1 = VariableKey::from_str("key_1");
-        let key2 = VariableKey::from_str("key_2");
+        let key1 = VariableKey::from_str("key_1").unwrap();
+        let key2 = VariableKey::from_str("key_2").unwrap();
 
         // Initial insertion
         assert!(tree.insert(&key1, 1, 10, 0).is_ok());
@@ -1856,8 +1818,8 @@ mod tests {
     fn timed_insertion_update_equal_to_root_version() {
         let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
 
-        let key1 = VariableKey::from_str("key_1");
-        let key2 = VariableKey::from_str("key_2");
+        let key1 = VariableKey::from_str("key_1").unwrap();
+        let key2 = VariableKey::from_str("key_2").unwrap();
 
         // Initial insertion
         assert!(tree.insert(&key1, 1, 10, 0).is_ok());
@@ -1870,19 +1832,17 @@ mod tests {
     #[test]
     fn timed_deletion_check_root_ts() {
         let mut tree: Tree<VariableKey, i32> = Tree::<VariableKey, i32>::new();
+        let key1 = VariableKey::from_str("key_1").unwrap();
+        let key2 = VariableKey::from_str("key_2").unwrap();
 
         // Initial insertions
-        assert!(tree
-            .insert(&VariableKey::from_str("key_1"), 1, 0, 0)
-            .is_ok());
-        assert!(tree
-            .insert(&VariableKey::from_str("key_2"), 1, 0, 0)
-            .is_ok());
+        assert!(tree.insert(&key1, 1, 0, 0).is_ok());
+        assert!(tree.insert(&key2, 1, 0, 0).is_ok());
         assert_eq!(tree.version(), 2);
 
         // Deletions
-        assert!(tree.remove(&VariableKey::from_str("key_1")).unwrap());
-        assert!(tree.remove(&VariableKey::from_str("key_2")).unwrap());
+        assert!(tree.remove(&key1).unwrap());
+        assert!(tree.remove(&key2).unwrap());
         assert_eq!(tree.version(), 0);
     }
 
@@ -2027,8 +1987,8 @@ mod tests {
         let mut tree = Tree::<VariableKey, i32>::new();
 
         // Insertions
-        let key1 = VariableKey::from_str("abc");
-        let key2 = VariableKey::from_str("efg");
+        let key1 = VariableKey::from_str("abc").unwrap();
+        let key2 = VariableKey::from_str("efg").unwrap();
         tree.insert(&key1, 1, 0, 0);
         tree.insert(&key1, 2, 10, 0);
         tree.insert(&key2, 3, 11, 0);
@@ -2057,37 +2017,37 @@ mod tests {
         // Create a vector of KV<P, V>
         let kv_pairs = vec![
             KV {
-                key: VariableKey::from_str("key_1"),
+                key: VariableKey::from_str("key_1").unwrap(),
                 value: 1,
                 version: 0,
                 ts: 0,
             },
             KV {
-                key: VariableKey::from_str("key_2"),
+                key: VariableKey::from_str("key_2").unwrap(),
                 value: 1,
                 version: 2,
                 ts: 0,
             },
             KV {
-                key: VariableKey::from_str("key_3"),
+                key: VariableKey::from_str("key_3").unwrap(),
                 value: 1,
                 version: curr_version + 1,
                 ts: 0,
             },
             KV {
-                key: VariableKey::from_str("key_4"),
+                key: VariableKey::from_str("key_4").unwrap(),
                 value: 1,
                 version: curr_version + 1,
                 ts: 0,
             },
             KV {
-                key: VariableKey::from_str("key_5"),
+                key: VariableKey::from_str("key_5").unwrap(),
                 value: 1,
                 version: curr_version + 2,
                 ts: 0,
             },
             KV {
-                key: VariableKey::from_str("key_6"),
+                key: VariableKey::from_str("key_6").unwrap(),
                 value: 1,
                 version: 0,
                 ts: 0,
@@ -2107,7 +2067,7 @@ mod tests {
             }
         }
         assert!(tree
-            .insert(&VariableKey::from_str("key_7"), 1, 0, 0)
+            .insert(&VariableKey::from_str("key_7").unwrap(), 1, 0, 0)
             .is_ok());
         assert!(tree.version() == curr_version + 3);
     }

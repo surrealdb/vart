@@ -41,7 +41,7 @@ impl<P: KeyTrait, V: Clone> IterationPointer<P, V> {
     where
         R: RangeBounds<P> + 'a,
     {
-        return Range::new(Some(&self.root), range);
+        Range::new(Some(&self.root), range)
     }
 }
 
@@ -89,16 +89,15 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iter<'a, P, V> {
     /// * `node` - An optional reference to the root node of the Trie.
     ///
     pub(crate) fn new(node: Option<&'a Arc<Node<P, V>>>) -> Self {
-        if let Some(node) = node {
-            Self {
+        match node {
+            Some(node) => Self {
                 inner: Box::new(IterState::new(node)),
                 _marker: Default::default(),
-            }
-        } else {
-            Self {
+            },
+            None => Self {
                 inner: Box::new(std::iter::empty()),
                 _marker: Default::default(),
-            }
+            },
         }
     }
 }
@@ -176,7 +175,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
             let e = node.next();
             match e {
                 None => {
-                    self.iters.pop().unwrap();
+                    self.iters.pop();
                 }
                 Some(other) => {
                     if let NodeType::Twig(twig) = &other.1.node_type {
@@ -263,7 +262,7 @@ impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K
                     }
                 }
                 None => {
-                    self.forward.iters.pop().unwrap();
+                    self.forward.iters.pop();
                 }
             }
         }
