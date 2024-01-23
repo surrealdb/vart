@@ -2,10 +2,15 @@ use std::time::Instant;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::prelude::SliceRandom;
-use rand::{thread_rng, Rng};
+use rand::SeedableRng;
+use rand::{rngs::StdRng, Rng};
 
 use vart::art::Tree;
 use vart::FixedSizeKey;
+
+fn seeded_rng(alter: u64) -> impl Rng {
+    StdRng::seed_from_u64(0xEA3C47920F94A980 ^ alter)
+}
 
 pub fn seq_insert(c: &mut Criterion) {
     let mut group = c.benchmark_group("seq_insert");
@@ -14,7 +19,7 @@ pub fn seq_insert(c: &mut Criterion) {
         let mut tree = Tree::<FixedSizeKey<16>, _>::new();
         let mut key = 0u64;
         b.iter(|| {
-            tree.insert(&key.into(), key, 0, 0);
+            let _ = tree.insert(&key.into(), key, 0, 0);
             key += 1;
         })
     });
@@ -30,10 +35,10 @@ pub fn rand_insert(c: &mut Criterion) {
 
     group.bench_function("art", |b| {
         let mut tree = Tree::<FixedSizeKey<16>, _>::new();
-        let mut rng = thread_rng();
+        let mut rng = seeded_rng(0xE080D1A42C207DAF);
         b.iter(|| {
             let key = &keys[rng.gen_range(0..keys.len())];
-            tree.insert(&key.into(), key.clone(), 0, 0);
+            let _ = tree.insert(&key.into(), key.clone(), 0, 0);
         })
     });
 
@@ -47,11 +52,11 @@ pub fn seq_delete(c: &mut Criterion) {
         let mut tree = Tree::<FixedSizeKey<16>, _>::new();
         b.iter_custom(|iters| {
             for i in 0..iters {
-                tree.insert(&i.into(), i, 0, 0);
+                let _ = tree.insert(&i.into(), i, 0, 0);
             }
             let start = Instant::now();
             for i in 0..iters {
-                tree.remove(&i.into());
+                let _ = tree.remove(&i.into());
             }
             start.elapsed()
         })
@@ -67,13 +72,13 @@ pub fn rand_delete(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1));
     group.bench_function("art", |b| {
         let mut tree = Tree::<FixedSizeKey<16>, _>::new();
-        let mut rng = thread_rng();
+        let mut rng = seeded_rng(0xE080D1A42C207DAF);
         for key in &keys {
-            tree.insert(&key.into(), key, 0, 0);
+            let _ = tree.insert(&key.into(), key, 0, 0);
         }
         b.iter(|| {
             let key = &keys[rng.gen_range(0..keys.len())];
-            criterion::black_box(tree.remove(&key.into()));
+            let _ = criterion::black_box(tree.remove(&key.into()));
         })
     });
 
@@ -87,14 +92,14 @@ pub fn rand_get(c: &mut Criterion) {
     {
         let size = 1_000_000;
         let mut tree = Tree::<FixedSizeKey<16>, _>::new();
-        for i in 0..size as u64 {
+        for i in 0..size {
             tree.insert(&i.into(), i, 0, 0).unwrap();
         }
         group.bench_with_input(BenchmarkId::new("art", size), &size, |b, size| {
-            let mut rng = thread_rng();
+            let mut rng = seeded_rng(0xE080D1A42C207DAF);
             b.iter(|| {
                 let key: u64 = rng.gen_range(0..*size);
-                criterion::black_box(tree.get(&key.into(), 0));
+                let _ = criterion::black_box(tree.get(&key.into(), 0));
             })
         });
     }
@@ -113,10 +118,10 @@ pub fn rand_get_str(c: &mut Criterion) {
             tree.insert(&key.into(), i, 0, 0).unwrap();
         }
         group.bench_with_input(BenchmarkId::new("art", size), &size, |b, _size| {
-            let mut rng = thread_rng();
+            let mut rng = seeded_rng(0xE080D1A42C207DAF);
             b.iter(|| {
                 let key = &keys[rng.gen_range(0..keys.len())];
-                criterion::black_box(tree.get(&key.into(), 0));
+                let _ = criterion::black_box(tree.get(&key.into(), 0));
             })
         });
     }
@@ -134,10 +139,10 @@ pub fn seq_get(c: &mut Criterion) {
         for i in 0..size as u64 {
             tree.insert(&i.into(), i, 0, 0).unwrap();
         }
-        group.bench_with_input(BenchmarkId::new("art", size), &size, |b, size| {
+        group.bench_with_input(BenchmarkId::new("art", size), &size, |b, _size| {
             let mut key = 0u64;
             b.iter(|| {
-                criterion::black_box(tree.get(&key.into(), 0));
+                let _ = criterion::black_box(tree.get(&key.into(), 0));
                 key += 1;
             })
         });
@@ -149,6 +154,7 @@ pub fn seq_get(c: &mut Criterion) {
 fn gen_keys(l1_prefix: usize, l2_prefix: usize, suffix: usize) -> Vec<String> {
     let mut keys = Vec::new();
     let chars: Vec<char> = ('a'..='z').collect();
+    let mut rng = seeded_rng(0x740A11E72FDC215D);
     for i in 0..chars.len() {
         let level1_prefix = chars[i].to_string().repeat(l1_prefix);
         for i in 0..chars.len() {
@@ -156,7 +162,7 @@ fn gen_keys(l1_prefix: usize, l2_prefix: usize, suffix: usize) -> Vec<String> {
             let key_prefix = level1_prefix.clone() + &level2_prefix;
             for _ in 0..=u8::MAX {
                 let suffix: String = (0..suffix)
-                    .map(|_| chars[thread_rng().gen_range(0..chars.len())])
+                    .map(|_| chars[rng.gen_range(0..chars.len())])
                     .collect();
                 let k = key_prefix.clone() + &suffix;
                 keys.push(k);
@@ -164,7 +170,7 @@ fn gen_keys(l1_prefix: usize, l2_prefix: usize, suffix: usize) -> Vec<String> {
         }
     }
 
-    keys.shuffle(&mut thread_rng());
+    keys.shuffle(&mut rng);
     keys
 }
 
