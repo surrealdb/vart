@@ -160,11 +160,11 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     #[inline]
     fn is_full(&self) -> bool {
         match &self.node_type {
-            NodeType::Node1(n) => self.num_children() >= n.size(),
-            NodeType::Node4(n) => self.num_children() >= n.size(),
-            NodeType::Node16(n) => self.num_children() >= n.size(),
-            NodeType::Node48(n) => self.num_children() >= n.size(),
-            NodeType::Node256(n) => self.num_children() > n.size(),
+            NodeType::Node1(n) => n.num_children() >= n.size(),
+            NodeType::Node4(n) => n.num_children() >= n.size(),
+            NodeType::Node16(n) => n.num_children() >= n.size(),
+            NodeType::Node48(n) => n.num_children() >= n.size(),
+            NodeType::Node256(n) => n.num_children() > n.size(),
             NodeType::Twig(_) => panic!("Unexpected Twig node encountered in is_full()"),
         }
     }
@@ -1629,7 +1629,7 @@ mod tests {
         // Insertion
         for i in 0..49u32 {
             let key = VariableSizeKey::from_slice(&i.to_be_bytes());
-            tree.insert(&key, 1, 0, 0);
+            tree.insert(&key, 1, 0, 0).unwrap();
         }
 
         // Removal

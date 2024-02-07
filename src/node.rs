@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{BitArray, KeyTrait};
+use crate::KeyTrait;
 
 /*
     Immutable nodes
@@ -211,7 +211,7 @@ impl<P: KeyTrait + Clone, N: Version, const WIDTH: usize> FlatNode<P, N, WIDTH> 
     fn insert_child(&mut self, idx: usize, key: u8, node: Arc<N>) {
         for i in (idx..self.num_children as usize).rev() {
             self.keys[i + 1] = self.keys[i];
-            self.children[i + 1] = std::mem::replace(&mut self.children[i], None);
+            self.children[i + 1] = self.children[i].take();
         }
         self.keys[idx] = key;
         self.children[idx] = Some(node);
@@ -258,13 +258,7 @@ impl<P: KeyTrait + Clone, N: Version, const WIDTH: usize> FlatNode<P, N, WIDTH> 
             .iter()
             .zip(self.children.iter())
             .take(self.num_children as usize)
-            .filter_map(|(&k, c)| {
-                if let Some(child) = c {
-                    Some((k, child))
-                } else {
-                    None
-                }
-            })
+            .filter_map(|(&k, c)| c.as_ref().map(|child| (k, child)))
     }
 }
 
@@ -347,15 +341,6 @@ impl<P: KeyTrait + Clone, N: Version, const WIDTH: usize> Version for FlatNode<P
     }
 }
 
-impl<P: KeyTrait + Clone, N: Version, const WIDTH: usize> Drop for FlatNode<P, N, WIDTH> {
-    fn drop(&mut self) {
-        for value in &mut self.children[..self.num_children as usize] {
-            value.take();
-        }
-        self.num_children = 0;
-    }
-}
-
 // Source: https://www.the-paper-trail.org/post/art-paper-notes/
 //
 // Node48: It can hold up to three times as many keys as a Node16. As the paper says,
@@ -369,9 +354,9 @@ impl<P: KeyTrait + Clone, N: Version, const WIDTH: usize> Drop for FlatNode<P, N
 pub struct Node48<P: KeyTrait + Clone, N: Version> {
     pub(crate) prefix: P,
     pub(crate) version: u64,
-    keys: BitArray<u8, 256>,
-    children: BitArray<Arc<N>, 48>,
-    num_children: u8,
+    keys: Box<[u8; 256]>,
+    children: Box<[Option<Arc<N>>; 48]>,
+    child_bitmap: u64,
 }
 
 impl<P: KeyTrait + Clone, N: Version> Node48<P, N> {
@@ -379,25 +364,30 @@ impl<P: KeyTrait + Clone, N: Version> Node48<P, N> {
         Self {
             prefix,
             version: 0,
-            keys: BitArray::new(),
-            children: BitArray::new(),
-            num_children: 0,
+            keys: Box::new([u8::MAX; 256]),
+            children: Box::new(std::array::from_fn(|_| None)),
+            child_bitmap: 0,
         }
     }
 
     pub fn insert_child(&mut self, key: u8, node: Arc<N>) {
-        let pos = self.children.first_free_pos().unwrap();
+        let pos = self.child_bitmap.trailing_ones();
         assert!(pos < 48);
 
-        self.keys.set(key as usize, pos as u8);
-        self.children.set(pos, node);
-        self.num_children += 1;
+        self.keys[key as usize] = pos as u8;
+        self.children[pos as usize] = Some(node);
+        self.child_bitmap |= 1 << pos;
     }
 
     pub fn shrink<const NEW_WIDTH: usize>(&self) -> FlatNode<P, N, NEW_WIDTH> {
         let mut fnode = FlatNode::new(self.prefix.clone());
-        for (key, pos) in self.keys.iter() {
-            let child = self.children.get(*pos as usize).unwrap().clone();
+        for (key, pos) in self
+            .keys
+            .iter()
+            .enumerate()
+            .filter(|(_, idx)| **idx != u8::MAX)
+        {
+            let child = self.children[*pos as usize].as_ref().unwrap().clone();
             let idx = fnode.find_pos(key as u8).expect("node is full");
             fnode.insert_child(idx, key as u8, child);
         }
@@ -407,8 +397,13 @@ impl<P: KeyTrait + Clone, N: Version> Node48<P, N> {
 
     pub fn grow(&self) -> Node256<P, N> {
         let mut n256 = Node256::new(self.prefix.clone());
-        for (key, pos) in self.keys.iter() {
-            let child = self.children.get(*pos as usize).unwrap().clone();
+        for (key, pos) in self
+            .keys
+            .iter()
+            .enumerate()
+            .filter(|(_, idx)| **idx != u8::MAX)
+        {
+            let child = self.children[*pos as usize].as_ref().unwrap().clone();
             n256.insert_child(key as u8, child);
         }
         n256.update_version();
@@ -419,7 +414,9 @@ impl<P: KeyTrait + Clone, N: Version> Node48<P, N> {
     fn max_child_version(&self) -> u64 {
         self.children
             .iter()
-            .fold(0, |acc, x| std::cmp::max(acc, x.1.version()))
+            .filter_map(|x| x.as_ref().map(|x| x.version()))
+            .max()
+            .unwrap_or(0)
     }
 
     #[inline]
@@ -448,7 +445,9 @@ impl<P: KeyTrait + Clone, N: Version> Node48<P, N> {
     pub fn iter(&self) -> impl Iterator<Item = (u8, &Arc<N>)> {
         self.keys
             .iter()
-            .map(move |(key, pos)| (key as u8, self.children.get(*pos as usize).unwrap()))
+            .enumerate()
+            .filter(|(_, x)| **x != u8::MAX)
+            .map(move |(key, pos)| (key as u8, self.children[*pos as usize].as_ref().unwrap()))
     }
 }
 
@@ -459,14 +458,15 @@ impl<P: KeyTrait + Clone, N: Version> NodeTrait<N> for Node48<P, N> {
             version: self.version,
             keys: self.keys.clone(),
             children: self.children.clone(),
-            num_children: self.num_children,
+            child_bitmap: self.child_bitmap,
         }
     }
 
     fn replace_child(&self, key: u8, node: Arc<N>) -> Self {
         let mut new_node = self.clone();
-        let idx = new_node.keys.get(key as usize).unwrap();
-        new_node.children.set(*idx as usize, node);
+        let idx = new_node.keys[key as usize];
+        assert!(idx != u8::MAX);
+        new_node.children[idx as usize] = Some(node);
         new_node.update_version_to_max_child_version();
 
         new_node
@@ -483,24 +483,27 @@ impl<P: KeyTrait + Clone, N: Version> NodeTrait<N> for Node48<P, N> {
     }
 
     fn delete_child(&self, key: u8) -> Self {
-        let pos = self.keys.get(key as usize).unwrap();
+        let pos = self.keys[key as usize];
+        assert!(pos != u8::MAX);
         let mut new_node = self.clone();
-        new_node.keys.erase(key as usize);
-        new_node.children.erase(*pos as usize);
-        new_node.num_children -= 1;
+        new_node.keys[key as usize] = u8::MAX;
+        new_node.children[pos as usize] = None;
+        new_node.child_bitmap &= !(1 << pos);
 
         new_node.update_version_to_max_child_version();
         new_node
     }
 
     fn find_child(&self, key: u8) -> Option<&Arc<N>> {
-        let idx = self.keys.get(key as usize)?;
-        let child = self.children.get(*idx as usize)?;
-        Some(child)
+        let idx = self.keys[key as usize];
+        if idx == u8::MAX {
+            return None;
+        }
+        Some(self.children[idx as usize].as_ref().unwrap())
     }
 
     fn num_children(&self) -> usize {
-        self.num_children as usize
+        self.child_bitmap.count_ones() as usize
     }
 
     #[inline(always)]
@@ -512,14 +515,6 @@ impl<P: KeyTrait + Clone, N: Version> NodeTrait<N> for Node48<P, N> {
 impl<P: KeyTrait + Clone, N: Version> Version for Node48<P, N> {
     fn version(&self) -> u64 {
         self.version
-    }
-}
-
-impl<P: KeyTrait + Clone, N: Version> Drop for Node48<P, N> {
-    fn drop(&mut self) {
-        self.num_children = 0;
-        self.keys.clear();
-        self.children.clear();
     }
 }
 
@@ -536,7 +531,7 @@ pub struct Node256<P: KeyTrait + Clone, N: Version> {
     pub(crate) prefix: P,    // Prefix associated with the node
     pub(crate) version: u64, // Version for node256
 
-    children: BitArray<Arc<N>, 256>,
+    children: Box<[Option<Arc<N>>; 256]>,
     num_children: usize,
 }
 
@@ -545,17 +540,21 @@ impl<P: KeyTrait + Clone, N: Version> Node256<P, N> {
         Self {
             prefix,
             version: 0,
-            children: BitArray::new(),
+            children: Box::new(std::array::from_fn(|_| None)),
             num_children: 0,
         }
     }
 
     pub fn shrink(&self) -> Node48<P, N> {
+        debug_assert!(self.num_children() < 49);
         let mut indexed = Node48::new(self.prefix.clone());
-        let keys: Vec<usize> = self.children.iter_keys().collect();
-        for key in keys {
-            let child = self.children.get(key).unwrap().clone();
-            indexed.insert_child(key as u8, child);
+        for (key, v) in self
+            .children
+            .iter()
+            .enumerate()
+            .filter_map(|m| m.1.clone().map(|x| (m.0, x)))
+        {
+            indexed.insert_child(key as u8, v);
         }
         indexed.update_version();
         indexed
@@ -563,15 +562,18 @@ impl<P: KeyTrait + Clone, N: Version> Node256<P, N> {
 
     #[inline]
     fn insert_child(&mut self, key: u8, node: Arc<N>) {
-        self.children.set(key as usize, node);
-        self.num_children += 1;
+        let new_insert = self.children[key as usize].is_none();
+        self.children[key as usize] = Some(node);
+        self.num_children += new_insert as usize;
     }
 
     #[inline]
     fn max_child_version(&self) -> u64 {
         self.children
             .iter()
-            .fold(0, |acc, x| std::cmp::max(acc, x.1.version()))
+            .filter_map(|x| x.as_ref().map(|x| x.version()))
+            .max()
+            .unwrap_or(0)
     }
 
     #[inline]
@@ -598,7 +600,10 @@ impl<P: KeyTrait + Clone, N: Version> Node256<P, N> {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (u8, &Arc<N>)> {
-        self.children.iter().map(|(key, node)| (key as u8, node))
+        self.children
+            .iter()
+            .enumerate()
+            .filter_map(|(key, node)| node.as_ref().map(|x| (key as u8, x)))
     }
 }
 
@@ -613,9 +618,10 @@ impl<P: KeyTrait + Clone, N: Version> NodeTrait<N> for Node256<P, N> {
     }
 
     fn replace_child(&self, key: u8, node: Arc<N>) -> Self {
+        debug_assert!(self.children[key as usize].is_some());
         let mut new_node = self.clone();
 
-        new_node.children.set(key as usize, node);
+        new_node.children[key as usize] = Some(node);
         new_node.update_version_to_max_child_version();
         new_node
     }
@@ -633,17 +639,14 @@ impl<P: KeyTrait + Clone, N: Version> NodeTrait<N> for Node256<P, N> {
 
     #[inline]
     fn find_child(&self, key: u8) -> Option<&Arc<N>> {
-        let child = self.children.get(key as usize)?;
-        Some(child)
+        self.children[key as usize].as_ref()
     }
 
     #[inline]
     fn delete_child(&self, key: u8) -> Self {
         let mut new_node = self.clone();
-        let removed = new_node.children.erase(key as usize);
-        if removed.is_some() {
-            new_node.num_children -= 1;
-        }
+        let removed = new_node.children[key as usize].take().is_some();
+        new_node.num_children -= removed as usize;
         new_node.update_version_to_max_child_version();
         new_node
     }
@@ -662,13 +665,6 @@ impl<P: KeyTrait + Clone, N: Version> NodeTrait<N> for Node256<P, N> {
 impl<P: KeyTrait + Clone, N: Version> Version for Node256<P, N> {
     fn version(&self) -> u64 {
         self.version
-    }
-}
-
-impl<P: KeyTrait + Clone, N: Version> Drop for Node256<P, N> {
-    fn drop(&mut self) {
-        self.num_children = 0;
-        self.children.clear();
     }
 }
 
@@ -768,7 +764,7 @@ mod tests {
         }
 
         let resized = node.grow();
-        assert_eq!(resized.num_children, 16);
+        assert_eq!(resized.num_children(), 16);
         for i in 0..16 {
             assert!(matches!(resized.find_child(i as u8), Some(v) if *v == i.into()));
         }
@@ -817,10 +813,10 @@ mod tests {
         for i in 0..18 {
             node = node.add_child(i, i);
         }
-        assert_eq!(node.num_children, 18);
+        assert_eq!(node.num_children(), 18);
         node = node.delete_child(0);
         node = node.delete_child(1);
-        assert_eq!(node.num_children, 16);
+        assert_eq!(node.num_children(), 16);
 
         let resized = node.shrink::<16>();
         assert_eq!(resized.num_children, 16);
@@ -876,7 +872,7 @@ mod tests {
         }
 
         let resized = node.shrink();
-        assert_eq!(resized.num_children, 48);
+        assert_eq!(resized.num_children(), 48);
         for i in 0..48 {
             assert!(matches!(resized.find_child(i), Some(v) if *v == i.into()));
         }
