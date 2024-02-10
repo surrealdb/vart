@@ -160,6 +160,14 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         self.root = new_root;
         Ok(is_deleted)
     }
+
+    pub fn ts(&self) -> u64 {
+        self.ts
+    }
+
+    pub fn id(&self) -> u64 {
+        self.id
+    }
 }
 
 #[cfg(test)]

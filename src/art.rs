@@ -27,7 +27,7 @@ const NODE48MAX: usize = 48;
 const NODE256MIN: usize = NODE48MAX + 1;
 
 // Maximum number of active snapshots
-pub(crate) const DEFAULT_MAX_ACTIVE_SNAPSHOTS: u64 = 10000;
+pub const DEFAULT_MAX_ACTIVE_SNAPSHOTS: u64 = 10000;
 
 /// A struct representing a node in an Adaptive Radix Trie.
 ///
@@ -1204,7 +1204,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// Returns `Ok(())` if the snapshot is successfully closed and removed. Returns an `Err`
     /// with `TrieError::SnapshotNotFound` if the snapshot with the given ID is not found.
     ///
-    pub(crate) fn close_snapshot(&mut self, snapshot_id: u64) -> Result<(), TrieError> {
+    pub fn close_snapshot(&mut self, snapshot_id: u64) -> Result<(), TrieError> {
         // Check if the tree is already closed
         self.is_closed()?;
 

@@ -8,7 +8,6 @@ use std::cmp::{Ord, Ordering, PartialOrd};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
-use std::mem::MaybeUninit;
 use std::str::FromStr;
 
 // "Partial" in the Adaptive Radix Tree paper refers to "partial keys", a technique employed
