@@ -27,7 +27,7 @@ const NODE48MAX: usize = 48;
 const NODE256MIN: usize = NODE48MAX + 1;
 
 // Maximum number of active snapshots
-pub(crate) const DEFAULT_MAX_ACTIVE_SNAPSHOTS: u64 = 10000;
+pub const DEFAULT_MAX_ACTIVE_SNAPSHOTS: u64 = 10000;
 
 /// A struct representing a node in an Adaptive Radix Trie.
 ///
@@ -470,7 +470,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     ///
     /// Returns `true` if the node type is an inner node, otherwise returns `false`.
     ///
-    #[inline]
+    #[allow(dead_code)]
     pub(crate) fn is_inner(&self) -> bool {
         !self.is_twig()
     }
@@ -652,7 +652,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
         commit_version: u64,
         ts: u64,
         depth: usize,
-    ) -> Result<(Arc<Node<P, V>>, Option<V>), TrieError> {
+    ) -> Result<(NodeArc<P, V>, Option<V>), TrieError> {
         // Obtain the current node's prefix and its length.
         let cur_node_prefix = cur_node.prefix().clone();
         let cur_node_prefix_len = cur_node.prefix().len();
@@ -911,6 +911,9 @@ pub struct KV<P, V> {
     pub version: u64,
     pub ts: u64,
 }
+
+// A type alias for a node reference.
+type NodeArc<P, V> = Arc<Node<P, V>>;
 
 impl<P: KeyTrait, V: Clone> KV<P, V> {
     pub fn new(key: P, value: V, version: u64, timestamp: u64) -> Self {
@@ -1204,7 +1207,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// Returns `Ok(())` if the snapshot is successfully closed and removed. Returns an `Err`
     /// with `TrieError::SnapshotNotFound` if the snapshot with the given ID is not found.
     ///
-    pub(crate) fn close_snapshot(&mut self, snapshot_id: u64) -> Result<(), TrieError> {
+    pub fn close_snapshot(&mut self, snapshot_id: u64) -> Result<(), TrieError> {
         // Check if the tree is already closed
         self.is_closed()?;
 
@@ -1312,7 +1315,7 @@ mod tests {
     fn read_words_from_file(file_path: &str) -> io::Result<Vec<String>> {
         let file = File::open(file_path)?;
         let reader = BufReader::new(file);
-        let words: Vec<String> = reader.lines().filter_map(|line| line.ok()).collect();
+        let words: Vec<String> = reader.lines().map_while(Result::ok).collect();
         Ok(words)
     }
 
@@ -1325,7 +1328,7 @@ mod tests {
             // Insertion phase
             for word in &words {
                 let key = &VariableSizeKey::from_str(word).unwrap();
-                tree.insert(key, 1, 0, 0);
+                let _ = tree.insert(key, 1, 0, 0);
             }
 
             // Search phase
@@ -1357,7 +1360,7 @@ mod tests {
         ];
 
         for word in &insert_words {
-            tree.insert(&VariableSizeKey::from_str(word).unwrap(), 1, 0, 0);
+            let _ = tree.insert(&VariableSizeKey::from_str(word).unwrap(), 1, 0, 0);
         }
 
         // Deletion phase
@@ -1380,7 +1383,7 @@ mod tests {
         ];
 
         for (word, val) in &words_to_insert {
-            tree.insert(&VariableSizeKey::from_str(word).unwrap(), *val, 0, 0);
+            let _ = tree.insert(&VariableSizeKey::from_str(word).unwrap(), *val, 0, 0);
         }
 
         // Verification phase
@@ -1399,7 +1402,7 @@ mod tests {
         // Insertion phase
         let key = VariableSizeKey::from_str("abc").unwrap();
         let value = 1;
-        tree.insert(&key, value, 0, 0);
+        let _ = tree.insert(&key, value, 0, 0);
 
         // Verification phase
         let (_, val, _ts, _) = tree.get(&key, 0).unwrap();
@@ -1429,7 +1432,7 @@ mod tests {
         // Insertion
         let key = VariableSizeKey::from_str("test").unwrap();
         let value = 1;
-        tree.insert(&key, value, 0, 0);
+        let _ = tree.insert(&key, value, 0, 0);
 
         // Removal
         assert!(tree.remove(&key).unwrap());
@@ -1446,8 +1449,8 @@ mod tests {
         let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // Insertion
-        tree.insert(&key1, 1, 0, 0);
-        tree.insert(&key2, 1, 0, 0);
+        tree.insert(&key1, 1, 0, 0).unwrap();
+        tree.insert(&key2, 1, 0, 0).unwrap();
 
         // Removal
         assert!(tree.remove(&key1).unwrap());
@@ -1470,8 +1473,8 @@ mod tests {
         let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // Insertion
-        tree.insert(&key1, 1, 0, 0);
-        tree.insert(&key2, 1, 0, 0);
+        tree.insert(&key1, 1, 0, 0).unwrap();
+        tree.insert(&key2, 1, 0, 0).unwrap();
 
         // Removal
         assert!(tree.remove(&key1).unwrap());
@@ -1514,7 +1517,7 @@ mod tests {
         // Insertion
         for i in 0..5u32 {
             let key = VariableSizeKey::from_slice(&i.to_be_bytes());
-            tree.insert(&key, 1, 0, 0);
+            tree.insert(&key, 1, 0, 0).unwrap();
         }
 
         // Removal
@@ -1562,7 +1565,7 @@ mod tests {
         // Insertion
         for i in 0..17u32 {
             let key = VariableSizeKey::from_slice(&i.to_be_bytes());
-            tree.insert(&key, 1, 0, 0);
+            tree.insert(&key, 1, 0, 0).unwrap();
         }
 
         // Removal
@@ -1585,7 +1588,7 @@ mod tests {
         // Insertion
         for i in 0..17u32 {
             let key = VariableSizeKey::from_slice(&i.to_be_bytes());
-            tree.insert(&key, 1, 0, 0);
+            tree.insert(&key, 1, 0, 0).unwrap();
         }
 
         // Root verification
@@ -1652,7 +1655,7 @@ mod tests {
         // Insertion
         for i in 0..49u32 {
             let key = VariableSizeKey::from_slice(&i.to_be_bytes());
-            tree.insert(&key, 1, 0, 0);
+            tree.insert(&key, 1, 0, 0).unwrap();
         }
 
         // Root verification
@@ -1686,7 +1689,7 @@ mod tests {
     //     // }
 
     #[derive(Debug, Clone, PartialEq)]
-    struct KVT {
+    struct Kvt {
         k: Vec<u8>,   // Key
         version: u64, // version
     }
@@ -1696,27 +1699,27 @@ mod tests {
         let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
 
         let kvts = vec![
-            KVT {
+            Kvt {
                 k: b"key1_0".to_vec(),
                 version: 0,
             },
-            KVT {
+            Kvt {
                 k: b"key2_0".to_vec(),
                 version: 0,
             },
-            KVT {
+            Kvt {
                 k: b"key3_0".to_vec(),
                 version: 0,
             },
-            KVT {
+            Kvt {
                 k: b"key4_0".to_vec(),
                 version: 0,
             },
-            KVT {
+            Kvt {
                 k: b"key5_0".to_vec(),
                 version: 0,
             },
-            KVT {
+            Kvt {
                 k: b"key6_0".to_vec(),
                 version: 0,
             },
@@ -1870,7 +1873,7 @@ mod tests {
         // Insertion
         for i in 0..u16::MAX {
             let key: FixedSizeKey<16> = i.into();
-            tree.insert(&key, i, 0, i as u64);
+            tree.insert(&key, i, 0, i as u64).unwrap();
         }
 
         // Iteration and verification
@@ -1898,7 +1901,7 @@ mod tests {
         // Insertion
         for i in 0..u8::MAX {
             let key: FixedSizeKey<32> = i.into();
-            tree.insert(&key, i, 0, 0);
+            tree.insert(&key, i, 0, 0).unwrap();
         }
 
         // Iteration and verification
@@ -1925,7 +1928,7 @@ mod tests {
         // Insertion
         for i in 0..=max {
             let key: FixedSizeKey<8> = i.into();
-            tree.insert(&key, i, 0, 0);
+            tree.insert(&key, i, 0, 0).unwrap();
         }
 
         // Test inclusive range
@@ -1973,7 +1976,7 @@ mod tests {
         // Insertion
         for i in 0..=max {
             let key: FixedSizeKey<16> = i.into();
-            tree.insert(&key, i, 0, 0);
+            tree.insert(&key, i, 0, 0).unwrap();
         }
 
         let mut len = 0usize;
@@ -1993,9 +1996,9 @@ mod tests {
         // Insertions
         let key1 = VariableSizeKey::from_str("abc").unwrap();
         let key2 = VariableSizeKey::from_str("efg").unwrap();
-        tree.insert(&key1, 1, 0, 0);
-        tree.insert(&key1, 2, 10, 0);
-        tree.insert(&key2, 3, 11, 0);
+        tree.insert(&key1, 1, 0, 0).unwrap();
+        tree.insert(&key1, 2, 10, 0).unwrap();
+        tree.insert(&key2, 3, 11, 0).unwrap();
 
         // Versioned retrievals and assertions
         let (_, val, _, _) = tree.get(&key1, 1).unwrap();

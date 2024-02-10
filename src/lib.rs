@@ -8,7 +8,6 @@ use std::cmp::{Ord, Ordering, PartialOrd};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
-use std::mem::MaybeUninit;
 use std::str::FromStr;
 
 // "Partial" in the Adaptive Radix Tree paper refers to "partial keys", a technique employed
@@ -23,6 +22,9 @@ pub trait Key {
     fn prefix_after(&self, start: usize) -> Self;
     fn longest_common_prefix(&self, slice: &[u8]) -> usize;
     fn as_slice(&self) -> &[u8];
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 pub trait KeyTrait:
@@ -317,6 +319,12 @@ impl Key for VariableSizeKey {
 #[derive(Clone)]
 pub struct BitSet<const SIZE: usize> {
     bits: [bool; SIZE],
+}
+
+impl<const SIZE: usize> Default for BitSet<SIZE> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<const SIZE: usize> BitSet<SIZE> {
