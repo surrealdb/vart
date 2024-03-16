@@ -1,10 +1,7 @@
 use core::panic;
 use std::cmp::min;
 use std::ops::RangeBounds;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-
-use hashbrown::HashSet;
 
 use crate::iter::{Iter, Range};
 use crate::node::{FlatNode, Node256, Node48, NodeTrait, TwigNode, Version};
@@ -25,9 +22,6 @@ const NODE48MAX: usize = 48;
 
 // Minimum and maximum number of children for Node256
 const NODE256MIN: usize = NODE48MAX + 1;
-
-// Maximum number of active snapshots
-pub const DEFAULT_MAX_ACTIVE_SNAPSHOTS: u64 = 10000;
 
 /// A struct representing a node in an Adaptive Radix Trie.
 ///
@@ -877,8 +871,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
 /// A struct representing an Adaptive Radix Trie.
 ///
 /// The `Tree` struct encompasses the entire adaptive radix trie data structure.
-/// It manages the root node of the tree, maintains snapshots of the tree's state,
-/// and keeps track of various properties related to snapshot management.
+/// It manages the root node of the tree.
 ///
 /// # Type Parameters
 ///
@@ -888,19 +881,10 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
 /// # Fields
 ///
 /// - `root`: An optional shared reference (using `Rc`) to the root node of the tree.
-/// - `snapshots`: A `HashSet` storing snapshots of the tree's state, mapped by snapshot IDs.
-/// - `max_snapshot_id`: An `AtomicU64` representing the maximum snapshot ID assigned.
-/// - `max_active_snapshots`: The maximum number of active snapshots allowed.
 ///
 pub struct Tree<P: KeyTrait, V: Clone> {
     /// An optional shared reference to the root node of the tree.
     pub(crate) root: Option<Arc<Node<P, V>>>,
-    /// A mapping of snapshot IDs to their corresponding snapshots.
-    pub(crate) snapshots: HashSet<u64>,
-    /// An atomic value indicating the maximum snapshot ID assigned.
-    pub(crate) max_snapshot_id: AtomicU64,
-    /// The maximum number of active snapshots allowed.
-    pub(crate) max_active_snapshots: u64,
     /// A flag indicating whether the tree is closed.
     pub(crate) closed: bool,
 }
@@ -951,15 +935,8 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     pub fn new() -> Self {
         Tree {
             root: None,
-            max_snapshot_id: AtomicU64::new(0),
-            snapshots: HashSet::new(),
-            max_active_snapshots: DEFAULT_MAX_ACTIVE_SNAPSHOTS,
             closed: false,
         }
-    }
-
-    pub fn set_max_active_snapshots(&mut self, max_active_snapshots: u64) {
-        self.max_active_snapshots = max_active_snapshots;
     }
 
     /// Inserts a new key-value pair with the specified version into the Trie.
@@ -1171,64 +1148,15 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// Returns a `Result` containing the `Snapshot` if the snapshot is created successfully,
     /// or an `Err` with an appropriate error message if creation fails.
     ///
-    pub fn create_snapshot(&mut self) -> Result<Snapshot<P, V>, TrieError> {
+    pub fn create_snapshot(&self) -> Result<Snapshot<P, V>, TrieError> {
         // Check if the tree is already closed
         self.is_closed()?;
-
-        if self.snapshots.len() >= self.max_active_snapshots as usize {
-            return Err(TrieError::Other(
-                "max number of snapshots reached".to_string(),
-            ));
-        }
-
-        // Increment the snapshot ID atomically
-        let new_snapshot_id = self.max_snapshot_id.fetch_add(1, Ordering::SeqCst);
-        self.snapshots.insert(new_snapshot_id);
 
         let root = self.root.as_ref().cloned();
         let version = self.root.as_ref().map_or(1, |root| root.version() + 1);
-        let new_snapshot = Snapshot::new(new_snapshot_id, root, version);
+        let new_snapshot = Snapshot::new(root, version);
 
         Ok(new_snapshot)
-    }
-
-    /// Closes a snapshot and removes it from the list of active snapshots.
-    ///
-    /// This function takes a `snapshot_id` as an argument and closes the corresponding snapshot.
-    /// If the snapshot exists, it is removed from the active snapshots list. If the snapshot is not
-    /// found, an `Err` is returned with a `TrieError::SnapshotNotFound` variant.
-    ///
-    /// # Arguments
-    ///
-    /// * `snapshot_id` - The ID of the snapshot to be closed and removed.
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(())` if the snapshot is successfully closed and removed. Returns an `Err`
-    /// with `TrieError::SnapshotNotFound` if the snapshot with the given ID is not found.
-    ///
-    pub fn close_snapshot(&mut self, snapshot_id: u64) -> Result<(), TrieError> {
-        // Check if the tree is already closed
-        self.is_closed()?;
-
-        if self.snapshots.remove(&snapshot_id) {
-            Ok(())
-        } else {
-            Err(TrieError::SnapshotNotFound)
-        }
-    }
-
-    /// Returns the count of active snapshots.
-    ///
-    /// This function returns the number of currently active snapshots in the Trie.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` containing the count of active snapshots if successful, or an `Err`
-    /// if there is an issue retrieving the snapshot count.
-    ///
-    pub fn snapshot_count(&self) -> usize {
-        self.snapshots.len()
     }
 
     /// Creates an iterator over the Trie's key-value pairs.
@@ -1277,7 +1205,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 
     fn is_closed(&self) -> Result<(), TrieError> {
         if self.closed {
-            return Err(TrieError::SnapshotAlreadyClosed);
+            return Err(TrieError::TreeAlreadyClosed);
         }
         Ok(())
     }
@@ -1287,12 +1215,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         // Check if the tree is already closed
         self.is_closed()?;
 
-        // Check if there are any active readers for the snapshot
-        if self.snapshot_count() > 0 {
-            return Err(TrieError::SnapshotNotClosed);
-        }
-
-        // Mark the snapshot as closed
         self.closed = true;
 
         Ok(())

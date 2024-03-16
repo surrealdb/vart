@@ -1,9 +1,5 @@
 //! This module defines the Snapshot struct for managing snapshots within a Trie structure.
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
-
-use hashbrown::HashSet;
 
 use crate::art::Node;
 use crate::iter::IterationPointer;
@@ -12,23 +8,17 @@ use crate::{KeyTrait, TrieError};
 
 /// Represents a snapshot of the data within the Trie.
 pub struct Snapshot<P: KeyTrait, V: Clone> {
-    pub(crate) id: u64,
     pub(crate) ts: u64,
     pub(crate) root: Option<Arc<Node<P, V>>>,
-    pub(crate) readers: HashSet<u64>,
-    pub(crate) max_active_readers: AtomicU64,
     pub(crate) closed: bool,
 }
 
 impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
     /// Creates a new Snapshot instance with the provided snapshot_id and root node.
-    pub(crate) fn new(id: u64, root: Option<Arc<Node<P, V>>>, ts: u64) -> Self {
+    pub(crate) fn new(root: Option<Arc<Node<P, V>>>, ts: u64) -> Self {
         Snapshot {
-            id,
             ts,
             root,
-            readers: HashSet::new(),
-            max_active_readers: AtomicU64::new(0),
             closed: false,
         }
     }
@@ -95,10 +85,6 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         // Check if the snapshot is already closed
         self.is_closed()?;
 
-        // Check if there are any active readers for the snapshot
-        if self.max_active_readers.load(Ordering::SeqCst) > 0 {
-            return Err(TrieError::SnapshotReadersNotClosed);
-        }
         // Mark the snapshot as closed
         self.closed = true;
 
@@ -113,28 +99,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
             return Err(TrieError::SnapshotEmpty);
         }
 
-        let reader_id = self.max_active_readers.fetch_add(1, Ordering::SeqCst) + 1;
-        self.readers.insert(reader_id);
-        Ok(IterationPointer::new(
-            self.root.as_ref().unwrap().clone(),
-            reader_id,
-        ))
-    }
-
-    pub fn active_readers(&self) -> Result<u64, TrieError> {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
-
-        Ok(self.max_active_readers.load(Ordering::SeqCst))
-    }
-
-    pub fn close_reader(&mut self, reader_id: u64) -> Result<(), TrieError> {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
-
-        self.readers.remove(&reader_id);
-        let _readers = self.max_active_readers.fetch_sub(1, Ordering::SeqCst);
-        Ok(())
+        Ok(IterationPointer::new(self.root.as_ref().unwrap().clone()))
     }
 
     pub fn remove(&mut self, key: &P) -> Result<bool, TrieError> {
@@ -164,10 +129,6 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
     pub fn ts(&self) -> u64 {
         self.ts
     }
-
-    pub fn id(&self) -> u64 {
-        self.id
-    }
 }
 
 #[cfg(test)]
@@ -196,7 +157,6 @@ mod tests {
 
         let expected_snap_ts = keys.len() as u64 + 1;
         assert_eq!(snap1.version(), expected_snap_ts);
-        assert_eq!(tree.snapshot_count(), 1);
 
         let expected_tree_ts = keys.len() as u64;
         assert_eq!(tree.version(), expected_tree_ts);
@@ -214,14 +174,10 @@ mod tests {
 
         // Keys inserted before snapshot creation should be visible
         let mut snap1 = tree.create_snapshot().unwrap();
-        assert_eq!(snap1.id, 0);
         assert_eq!(snap1.get(&key_1).unwrap(), (1, 1, 0));
 
         let mut snap2 = tree.create_snapshot().unwrap();
-        assert_eq!(snap2.id, 1);
         assert_eq!(snap2.get(&key_1).unwrap(), (1, 1, 0));
-
-        assert_eq!(tree.snapshot_count(), 2);
 
         // Keys inserted after snapshot creation should not be visible to other snapshots
         assert!(tree.insert(&key_2, 1, 0, 0).is_ok());
@@ -241,11 +197,6 @@ mod tests {
 
         assert!(snap1.close().is_ok());
         assert!(snap2.close().is_ok());
-
-        assert!(tree.close_snapshot(snap1.id).is_ok());
-        assert!(tree.close_snapshot(snap2.id).is_ok());
-
-        assert_eq!(tree.snapshot_count(), 0);
     }
 
     #[test]
@@ -265,23 +216,13 @@ mod tests {
 
         // Reader 1
         let reader1 = snap.new_reader().unwrap();
-        let reader1_id = reader1.id;
         assert_eq!(count_items(&reader1), 4);
-        assert_eq!(reader1_id, 1);
 
         // Reader 2
         let reader2 = snap.new_reader().unwrap();
-        let reader2_id = reader2.id;
         assert_eq!(count_items(&reader2), 4);
-        assert_eq!(reader2_id, 2);
 
-        // Active readers
-        assert_eq!(snap.active_readers().unwrap(), 2);
-        assert!(snap.close().is_err());
-
-        // Close readers
-        assert!(snap.close_reader(reader1_id).is_ok());
-        assert!(snap.close_reader(reader2_id).is_ok());
+        // Close snapshot
         assert!(snap.close().is_ok());
     }
 

@@ -8,8 +8,6 @@ use crate::KeyTrait;
 // TODO: need to add more tests for snapshot readers
 /// A structure representing a pointer for iterating over the Trie's key-value pairs.
 pub struct IterationPointer<P: KeyTrait, V: Clone> {
-    #[allow(dead_code)]
-    pub(crate) id: u64,
     root: Arc<Node<P, V>>,
 }
 
@@ -19,10 +17,9 @@ impl<P: KeyTrait, V: Clone> IterationPointer<P, V> {
     /// # Arguments
     ///
     /// * `root` - The root node of the Trie.
-    /// * `id` - The ID of the snapshot.
     ///
-    pub fn new(root: Arc<Node<P, V>>, id: u64) -> IterationPointer<P, V> {
-        IterationPointer { id, root }
+    pub fn new(root: Arc<Node<P, V>>) -> IterationPointer<P, V> {
+        IterationPointer { root }
     }
 
     /// Returns an iterator over the key-value pairs within the Trie.
