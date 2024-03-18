@@ -968,7 +968,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         ts: u64,
     ) -> Result<Option<V>, TrieError> {
         // Check if the tree is already closed
-        self.is_closed()?;
+        self.check_if_closed()?;
 
         let (new_root, old_node) = match &self.root {
             None => {
@@ -1014,7 +1014,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 
     pub fn bulk_insert(&mut self, kv_pairs: &[KV<P, V>]) -> Result<(), TrieError> {
         // Check if the tree is already closed
-        self.is_closed()?;
+        self.check_if_closed()?;
 
         let curr_version = self.version();
         let mut new_version = 0;
@@ -1083,7 +1083,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 
     pub fn remove(&mut self, key: &P) -> Result<bool, TrieError> {
         // Check if the tree is already closed
-        self.is_closed()?;
+        self.check_if_closed()?;
 
         let (new_root, is_deleted) = match &self.root {
             None => (None, false),
@@ -1107,7 +1107,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 
     pub fn get(&self, key: &P, version: u64) -> Result<(P, V, u64, u64), TrieError> {
         // Check if the tree is already closed
-        self.is_closed()?;
+        self.check_if_closed()?;
 
         if self.root.is_none() {
             return Err(TrieError::Other("cannot read from empty tree".to_string()));
@@ -1150,7 +1150,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     ///
     pub fn create_snapshot(&self) -> Result<Snapshot<P, V>, TrieError> {
         // Check if the tree is already closed
-        self.is_closed()?;
+        self.check_if_closed()?;
 
         let root = self.root.as_ref().cloned();
         let version = self.root.as_ref().map_or(1, |root| root.version() + 1);
@@ -1203,7 +1203,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Range::new(root, range)
     }
 
-    fn is_closed(&self) -> Result<(), TrieError> {
+    fn check_if_closed(&self) -> Result<(), TrieError> {
         if self.closed {
             return Err(TrieError::TreeAlreadyClosed);
         }
@@ -1213,7 +1213,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// Closes the tree, preventing further modifications, and releases associated resources.
     pub fn close(&mut self) -> Result<(), TrieError> {
         // Check if the tree is already closed
-        self.is_closed()?;
+        self.check_if_closed()?;
 
         self.closed = true;
 
