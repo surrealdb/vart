@@ -387,11 +387,9 @@ pub enum TrieError {
     IllegalArguments,
     NotFound,
     KeyNotFound,
-    SnapshotNotFound,
     SnapshotEmpty,
     SnapshotNotClosed,
     SnapshotAlreadyClosed,
-    SnapshotReadersNotClosed,
     TreeAlreadyClosed,
     FixedSizeKeyLengthExceeded,
     Other(String),
@@ -406,12 +404,8 @@ impl fmt::Display for TrieError {
             TrieError::IllegalArguments => write!(f, "Illegal arguments"),
             TrieError::NotFound => write!(f, "Not found"),
             TrieError::KeyNotFound => write!(f, "Key not found"),
-            TrieError::SnapshotNotFound => write!(f, "Snapshot not found"),
             TrieError::SnapshotNotClosed => write!(f, "Snapshot not closed"),
             TrieError::SnapshotAlreadyClosed => write!(f, "Snapshot already closed"),
-            TrieError::SnapshotReadersNotClosed => {
-                write!(f, "Readers in the snapshot are not closed")
-            }
             TrieError::TreeAlreadyClosed => write!(f, "Tree already closed"),
             TrieError::Other(ref message) => write!(f, "Other error: {}", message),
             TrieError::SnapshotEmpty => write!(f, "Snapshot is empty"),
