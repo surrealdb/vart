@@ -171,9 +171,7 @@ impl<P: KeyTrait + Clone, N: Version, const WIDTH: usize> FlatNode<P, N, WIDTH> 
     }
 
     fn find_pos(&self, key: u8) -> Option<usize> {
-        let idx = (0..self.num_children as usize)
-            .rev()
-            .find(|&i| key < self.keys[i]);
+        let idx = (0..self.num_children as usize).find(|&i| key < self.keys[i]);
         idx.or(Some(self.num_children as usize))
     }
 
@@ -673,6 +671,7 @@ mod tests {
     use crate::FixedSizeKey;
 
     use super::{FlatNode, Node256, Node48, NodeTrait, TwigNode, Version};
+    use rand::prelude::SliceRandom;
     use std::sync::Arc;
 
     macro_rules! impl_timestamp {
@@ -1155,5 +1154,30 @@ mod tests {
     fn cache_line_size() {
         assert!(std::mem::size_of::<FlatNode::<FixedSizeKey<8>, usize, 4>>() <= 64);
         assert!(std::mem::size_of::<FlatNode::<FixedSizeKey<8>, usize, 16>>() <= 64);
+    }
+
+    #[test]
+    fn verify_node_insert_order() {
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
+
+        let mut node4 = FlatNode::<FixedSizeKey<8>, usize, 4>::new(dummy_prefix.clone());
+        node4 = node4.add_child(4, 1);
+        node4 = node4.add_child(2, 1);
+        node4 = node4.add_child(1, 1);
+        node4 = node4.add_child(0, 1);
+
+        // verify the order of keys as [0, 1, 2, 4]
+        assert_eq!(node4.keys, [0, 1, 2, 4]);
+
+        let mut node16 = FlatNode::<FixedSizeKey<8>, usize, 16>::new(dummy_prefix.clone());
+        // Insert children into node16 in random order
+        let mut rng = rand::thread_rng();
+        let mut values: Vec<u8> = (0..16).collect();
+        values.shuffle(&mut rng);
+        for value in values {
+            node16 = node16.add_child(value, 1);
+        }
+        // Verify the keys have been inserted in order
+        assert_eq!(node16.keys, *(0..16).collect::<Vec<u8>>());
     }
 }

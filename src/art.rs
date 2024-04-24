@@ -588,9 +588,7 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
         };
 
         // Get the value from the TwigNode instance by the specified version.
-        let Some(val) = twig.get_leaf_by_version(version) else {
-            return None;
-        };
+        let val = twig.get_leaf_by_version(version)?;
 
         // Return the retrieved key, value, and version as a tuple.
         // TODO: should return copy of value or reference?
