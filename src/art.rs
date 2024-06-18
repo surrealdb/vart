@@ -1263,7 +1263,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 #[cfg(test)]
 mod tests {
     use super::{Tree, KV};
-    use crate::{FixedSizeKey, Key, VariableSizeKey};
+    use crate::{FixedSizeKey, VariableSizeKey};
     use rand::{thread_rng, Rng};
     use std::str::FromStr;
 
@@ -2302,7 +2302,7 @@ mod tests {
 
         // Remove all keys
         for key in &keys {
-            let is_removed = tree.remove(&key).unwrap();
+            let is_removed = tree.remove(key).unwrap();
             assert!(is_removed);
         }
     }
@@ -2343,10 +2343,9 @@ mod tests {
         // HashMap to store key-version mapping
         let mut key_version_map = HashMap::new();
 
-        for i in 0..num_keys {
+        for (i, &version) in versions.iter().enumerate().take(num_keys) {
             let id = format!("key{}", i + 1);
             let key = VariableSizeKey::from_str(&id).unwrap();
-            let version = versions[i];
             if tree
                 .insert_without_version_increment_check(&key, rng.gen::<i32>(), version as u64, 0)
                 .is_ok()
@@ -2358,7 +2357,7 @@ mod tests {
 
         // Verification
         for (key, version) in key_version_map.iter() {
-            let key = VariableSizeKey::from_str(&key).unwrap();
+            let key = VariableSizeKey::from_str(key).unwrap();
             assert!(
                 tree.get(&key, *version as u64).is_ok(),
                 "The key {:?} at version {} should be present in the tree.",

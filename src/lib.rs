@@ -327,7 +327,7 @@ impl Key for VariableSizeKey {
         let mut data = Vec::with_capacity(self.data.len() + other.data.len());
         data.extend_from_slice(&self.data);
         data.extend_from_slice(&other.data);
-        Self { data: data }
+        Self { data }
     }
 }
 
