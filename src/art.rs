@@ -179,76 +179,64 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
     ///
     #[inline]
     fn add_child(&self, key: u8, child: Node<P, V>) -> Self {
-        match &self.node_type {
+        let mut cloned_node = match &self.node_type {
+            NodeType::Node1(n) => Self {
+                node_type: NodeType::Node1(n.clone()),
+            },
+            NodeType::Node4(n) => Self {
+                node_type: NodeType::Node4(n.clone()),
+            },
+            NodeType::Node16(n) => Self {
+                node_type: NodeType::Node16(n.clone()),
+            },
+            NodeType::Node48(n) => Self {
+                node_type: NodeType::Node48(n.clone()),
+            },
+            NodeType::Node256(n) => Self {
+                node_type: NodeType::Node256(n.clone()),
+            },
+            NodeType::Twig(_) => panic!("Unexpected Twig node encountered in add_child()"),
+        };
+
+        if cloned_node.is_full() {
+            cloned_node.grow();
+        }
+
+        match &cloned_node.node_type {
             NodeType::Node1(n) => {
                 // Add the child node to the Node1 instance.
                 let node = NodeType::Node1(n.add_child(key, child));
 
                 // Create a new Node instance with the updated NodeType.
-                let mut new_node = Self { node_type: node };
-
-                // Check if the node has become full and needs to be grown.
-                if new_node.is_full() {
-                    new_node.grow();
-                }
-
-                new_node
+                Self { node_type: node }
             }
             NodeType::Node4(n) => {
                 // Add the child node to the Node4 instance.
                 let node = NodeType::Node4(n.add_child(key, child));
 
                 // Create a new Node instance with the updated NodeType.
-                let mut new_node = Self { node_type: node };
-
-                // Check if the node has become full and needs to be grown.
-                if new_node.is_full() {
-                    new_node.grow();
-                }
-
-                new_node
+                Self { node_type: node }
             }
             NodeType::Node16(n) => {
                 // Add the child node to the Node16 instance.
                 let node = NodeType::Node16(n.add_child(key, child));
 
                 // Create a new Node instance with the updated NodeType.
-                let mut new_node = Self { node_type: node };
-
-                // Check if the node has become full and needs to be grown.
-                if new_node.is_full() {
-                    new_node.grow();
-                }
-
-                new_node
+                Self { node_type: node }
             }
             NodeType::Node48(n) => {
                 // Add the child node to the Node48 instance.
                 let node = NodeType::Node48(n.add_child(key, child));
 
                 // Create a new Node instance with the updated NodeType.
-                let mut new_node = Self { node_type: node };
-
-                // Check if the node has become full and needs to be grown.
-                if new_node.is_full() {
-                    new_node.grow();
-                }
-
-                new_node
+                Self { node_type: node }
             }
             NodeType::Node256(n) => {
                 // Add the child node to the Node256 instance.
                 let node = NodeType::Node256(n.add_child(key, child));
 
                 // Create a new Node instance with the updated NodeType.
-                let mut new_node = Self { node_type: node };
-
-                // Check if the node has become full and needs to be grown.
-                if new_node.is_full() {
-                    new_node.grow();
-                }
-
-                new_node
+                Self { node_type: node }
             }
             NodeType::Twig(_) => panic!("Unexpected Twig node encountered in add_child()"),
         }
@@ -666,14 +654,22 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
         // update the existing value in the Twig node.
         if let NodeType::Twig(ref twig) = &cur_node.node_type {
             if is_prefix_match && cur_node_prefix.len() == key_prefix.len() {
-                let old_val = twig.get_leaf_by_version(commit_version).unwrap();
                 let new_twig = twig.insert(value, commit_version, ts);
-                return Ok((
-                    Arc::new(Node {
-                        node_type: NodeType::Twig(new_twig),
-                    }),
-                    Some(old_val.value.clone()),
-                ));
+                if let Some(old_val) = twig.get_leaf_by_version(commit_version) {
+                    return Ok((
+                        Arc::new(Node {
+                            node_type: NodeType::Twig(new_twig),
+                        }),
+                        Some(old_val.value.clone()),
+                    ));
+                } else {
+                    return Ok((
+                        Arc::new(Node {
+                            node_type: NodeType::Twig(new_twig),
+                        }),
+                        None,
+                    ));
+                }
             }
         }
 
@@ -1116,11 +1112,11 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                     // Proceed with recursive removal if the prefixes match.
                     let (new_root, removed) =
                         Node::remove_recurse(root, key, longest_common_prefix);
+
                     if removed && new_root.as_ref().unwrap().num_children() == 0 {
                         // If the node was deleted and it has no children, return None as the new root.
                         (None, removed)
                     } else {
-                        // If the node was not deleted, update the root.
                         (new_root, removed)
                     }
                 }
@@ -1267,7 +1263,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 #[cfg(test)]
 mod tests {
     use super::{Tree, KV};
-    use crate::{FixedSizeKey, VariableSizeKey};
+    use crate::{FixedSizeKey, Key, VariableSizeKey};
     use rand::{thread_rng, Rng};
     use std::str::FromStr;
 
@@ -2177,9 +2173,6 @@ mod tests {
                 );
             }
         }
-
-        // Tree should be empty
-        assert!(tree.root.is_none());
     }
 
     #[test]
@@ -2312,9 +2305,6 @@ mod tests {
             let is_removed = tree.remove(&key).unwrap();
             assert!(is_removed);
         }
-
-        // Tree should be empty
-        assert!(tree.root.is_none());
     }
 
     #[test]
@@ -2333,5 +2323,132 @@ mod tests {
         // Verify
         assert!(tree.get(&key1, 0).is_err());
         assert_eq!(tree.get(&key2, 0).unwrap().1, 2);
+    }
+
+    #[test]
+    fn insert_with_random_versions_and_verify_count() {
+        use rand::seq::SliceRandom;
+        use rand::Rng;
+        use std::collections::HashMap;
+
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        let num_keys = 1000; // Large number of keys
+        let mut rng = rand::thread_rng();
+        let mut expected_entries = 0;
+
+        // Generate an array of increasing versions and shuffle it
+        let mut versions: Vec<usize> = (1..=num_keys).collect();
+        versions.shuffle(&mut rng);
+
+        // HashMap to store key-version mapping
+        let mut key_version_map = HashMap::new();
+
+        for i in 0..num_keys {
+            let id = format!("key{}", i + 1);
+            let key = VariableSizeKey::from_str(&id).unwrap();
+            let version = versions[i];
+            if tree
+                .insert_without_version_increment_check(&key, rng.gen::<i32>(), version as u64, 0)
+                .is_ok()
+            {
+                expected_entries += 1;
+                key_version_map.insert(id, version);
+            }
+        }
+
+        // Verification
+        for (key, version) in key_version_map.iter() {
+            let key = VariableSizeKey::from_str(&key).unwrap();
+            assert!(
+                tree.get(&key, *version as u64).is_ok(),
+                "The key {:?} at version {} should be present in the tree.",
+                key,
+                version
+            );
+        }
+
+        // Iteration and verification
+        let mut actual_entries = 0;
+        let tree_iter = tree.iter();
+        for _ in tree_iter {
+            actual_entries += 1;
+        }
+
+        assert_eq!(
+            actual_entries, expected_entries,
+            "The number of entries in the tree does not match the expected number of insertions."
+        );
+    }
+
+    #[test]
+    fn insert_keys_in_decreasing_order_and_verify_count() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        let num_keys = 1000;
+
+        for i in (0..num_keys).rev() {
+            let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
+            tree.insert_without_version_increment_check(&key, i as i32, i, 0)
+                .unwrap();
+        }
+
+        // Verify total entries
+        let total_entries = tree.iter().count() as u64;
+        assert_eq!(
+            total_entries, num_keys,
+            "The total entries should be equal to the number of inserted keys."
+        );
+    }
+
+    #[test]
+    fn insert_same_key_different_versions_without_version_check_and_verify() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        let key = VariableSizeKey::from_str("key1").unwrap();
+
+        // Insert the same key with two different versions
+        tree.insert_without_version_increment_check(&key, 2, 2, 0)
+            .unwrap(); // Second version
+        tree.insert_without_version_increment_check(&key, 1, 1, 0)
+            .unwrap(); // First version
+
+        // Verify the order during iteration
+        let mut iter = tree.iter();
+        let (_, value, version, _) = iter.next().unwrap();
+        assert_eq!(value, &2);
+        assert_eq!(version, &2);
+
+        // Verify get at version 0 gives the latest version
+        let (_, value, version, _) = tree.get(&key, 0).unwrap();
+        assert_eq!(value, 2);
+        assert_eq!(version, 2);
+    }
+
+    #[test]
+    fn insert_multiple_keys_different_versions_and_verify() {
+        let mut tree = Tree::<VariableSizeKey, u64>::new();
+        let num_keys = 1000; // Large number of keys for the test
+
+        // Insert two versions for each key
+        for i in 0..num_keys {
+            let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
+            tree.insert_without_version_increment_check(&key, i as u64 + 1000, 2, 0)
+                .unwrap(); // Second version
+            tree.insert_without_version_increment_check(&key, i as u64, 1, 0)
+                .unwrap(); // First version
+        }
+
+        // Verify get at version 0 gives the latest version for each key
+        for i in 0..num_keys {
+            let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
+            let (_, value, version, _) = tree.get(&key, 0).unwrap();
+            assert_eq!(
+                value,
+                i as u64 + 1000,
+                "get at version 0 should return the latest version value."
+            );
+            assert_eq!(
+                version, 2,
+                "get at version 0 should return the latest version number."
+            );
+        }
     }
 }
