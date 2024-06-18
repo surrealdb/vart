@@ -749,35 +749,39 @@ impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
         key: &P,
         depth: usize,
     ) -> (Option<Arc<Node<P, V>>>, bool) {
-        // Obtain the prefix of the current node.
-        let prefix = cur_node.prefix().clone();
-
-        // Determine the prefix of the key after the current depth.
-        let key_prefix = key.prefix_after(depth);
-        let key_prefix = key_prefix.as_slice();
-        // Find the longest common prefix between the current node's prefix and the key's prefix.
-        let longest_common_prefix = prefix.longest_common_prefix(key_prefix);
-        // Determine whether the current node's prefix and the key's prefix match up to the common prefix.
-        let is_prefix_match = min(prefix.len(), key_prefix.len()) == longest_common_prefix;
-
-        // If the current node's prefix and the key's prefix match up to the end of both prefixes,
-        // the key has been found and should be removed.
-        if is_prefix_match && prefix.len() == key_prefix.len() {
-            return (None, true);
-        }
-
-        // Determine the character at the common prefix position.
-        let k = key_prefix[longest_common_prefix];
+        let k = key.at(depth);
 
         // Search for a child node corresponding to the key's character.
         let child = cur_node.find_child(k);
         if let Some(child_node) = child {
+            let prefix = child_node.prefix().clone();
+
+            // Determine the prefix of the key after the current depth.
+            let key_prefix = key.prefix_after(depth);
+            let key_prefix = key_prefix.as_slice();
+
+            // Find the longest common prefix between the current node's prefix and the key's prefix.
+            let longest_common_prefix = prefix.longest_common_prefix(key_prefix);
+            if longest_common_prefix != prefix.len() {
+                return (None, false);
+            }
+
+            if child_node.is_twig() {
+                let prefix_len = key.len() - depth;
+                if child_node.prefix().len() != prefix_len {
+                    return (None, false);
+                }
+
+                let new_node = cur_node.delete_child(k);
+                return (Some(Arc::new(new_node)), true);
+            }
+
             // Recursively attempt to remove the key from the child node.
-            let (_new_child, removed) =
+            let (new_child, removed) =
                 Node::remove_recurse(child_node, key, depth + longest_common_prefix);
             if removed {
                 // If the key was successfully removed from the child node, update the current node's child pointer.
-                let new_node = cur_node.delete_child(k);
+                let new_node = cur_node.replace_child(k, new_child.unwrap());
                 return (Some(Arc::new(new_node)), true);
             }
         }
@@ -937,6 +941,48 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         }
     }
 
+    fn insert_common(
+        &mut self,
+        key: &P,
+        value: V,
+        version: u64,
+        ts: u64,
+        check_version: bool,
+    ) -> Result<Option<V>, TrieError> {
+        self.check_if_closed()?;
+
+        let (new_root, old_node) = match &self.root {
+            None => {
+                let commit_version = if version == 0 { 1 } else { version };
+                (
+                    Arc::new(Node::new_twig(
+                        key.as_slice().into(),
+                        key.as_slice().into(),
+                        value,
+                        commit_version,
+                        ts,
+                    )),
+                    None,
+                )
+            }
+            Some(root) => {
+                let curr_version = root.version();
+                let mut commit_version = version;
+                if version == 0 {
+                    commit_version = curr_version + 1;
+                } else if check_version && curr_version >= version {
+                    return Err(TrieError::Other(
+                        "given version is older than root's current version".to_string(),
+                    ));
+                }
+                Node::insert_recurse(root, key, value, commit_version, ts, 0)?
+            }
+        };
+
+        self.root = Some(new_root);
+        Ok(old_node)
+    }
+
     /// Inserts a new key-value pair with the specified version into the Trie.
     ///
     /// This function inserts a new key-value pair into the Trie. If the key already exists,
@@ -965,52 +1011,24 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         version: u64,
         ts: u64,
     ) -> Result<Option<V>, TrieError> {
-        // Check if the tree is already closed
-        self.check_if_closed()?;
-
-        let (new_root, old_node) = match &self.root {
-            None => {
-                let mut commit_version = version;
-                if version == 0 {
-                    commit_version += 1;
-                }
-                (
-                    Arc::new(Node::new_twig(
-                        key.as_slice().into(),
-                        key.as_slice().into(),
-                        value,
-                        commit_version,
-                        ts,
-                    )),
-                    None,
-                )
-            }
-            Some(root) => {
-                // Check if the given version is older than the root's current version.
-                // If so, return an error and do not insert the new node.
-                let curr_version = root.version();
-                let mut commit_version = version;
-                if version == 0 {
-                    commit_version = curr_version + 1;
-                } else if curr_version >= version {
-                    return Err(TrieError::Other(
-                        "given version is older than root's current version".to_string(),
-                    ));
-                }
-                match Node::insert_recurse(root, key, value, commit_version, ts, 0) {
-                    Ok((new_node, old_node)) => (new_node, old_node),
-                    Err(err) => {
-                        return Err(err);
-                    }
-                }
-            }
-        };
-
-        self.root = Some(new_root);
-        Ok(old_node)
+        self.insert_common(key, value, version, ts, true)
     }
 
-    pub fn bulk_insert(&mut self, kv_pairs: &[KV<P, V>]) -> Result<(), TrieError> {
+    pub fn insert_without_version_increment_check(
+        &mut self,
+        key: &P,
+        value: V,
+        version: u64,
+        ts: u64,
+    ) -> Result<Option<V>, TrieError> {
+        self.insert_common(key, value, version, ts, false)
+    }
+
+    pub fn bulk_insert(
+        &mut self,
+        kv_pairs: &[KV<P, V>],
+        check_version: bool,
+    ) -> Result<(), TrieError> {
         // Check if the tree is already closed
         self.check_if_closed()?;
 
@@ -1025,7 +1043,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
             if t == 0 {
                 // Zero-valued timestamps are associated with current time plus one
                 t = curr_version + 1;
-            } else if kv.version < curr_version {
+            } else if check_version && (curr_version >= kv.version) {
                 return Err(TrieError::Other(
                     "given version is older than root's current version".to_string(),
                 ));
@@ -1079,26 +1097,49 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Ok(())
     }
 
+    pub(crate) fn remove_from_node(
+        node: Option<&Arc<Node<P, V>>>,
+        key: &P,
+    ) -> (Option<Arc<Node<P, V>>>, bool) {
+        // Directly match on the root to simplify logic
+        let (new_root, is_deleted) = match &node {
+            Some(root) if !root.is_twig() => {
+                // Determine the prefix of the key after the current depth.
+                let prefix_after = key.prefix_after(0);
+                let key_prefix = prefix_after.as_slice(); // Find the longest common prefix between the current node's prefix and the key's prefix.
+                let longest_common_prefix = root.prefix().longest_common_prefix(key_prefix);
+
+                if longest_common_prefix != root.prefix().len() {
+                    // If the longest common prefix doesn't match the root's prefix length, no deletion occurs.
+                    (Some(Arc::clone(root)), false)
+                } else {
+                    // Proceed with recursive removal if the prefixes match.
+                    let (new_root, removed) =
+                        Node::remove_recurse(root, key, longest_common_prefix);
+                    if removed && new_root.as_ref().unwrap().num_children() == 0 {
+                        // If the node was deleted and it has no children, return None as the new root.
+                        (None, removed)
+                    } else {
+                        // If the node was not deleted, update the root.
+                        (new_root, removed)
+                    }
+                }
+            }
+            Some(_) => (None, true), // case where the root is a twig.
+            None => (None, false),   // case where there is no root.
+        };
+
+        (new_root, is_deleted)
+    }
+
     pub fn remove(&mut self, key: &P) -> Result<bool, TrieError> {
         // Check if the tree is already closed
         self.check_if_closed()?;
 
-        let (new_root, is_deleted) = match &self.root {
-            None => (None, false),
-            Some(root) => {
-                if root.is_twig() {
-                    (None, true)
-                } else {
-                    let (new_root, removed) = Node::remove_recurse(root, key, 0);
-                    if removed {
-                        (new_root, true)
-                    } else {
-                        (self.root.clone(), true)
-                    }
-                }
-            }
-        };
+        // Directly match on the root to simplify logic
+        let (new_root, is_deleted) = Tree::remove_from_node(self.root.as_ref(), key);
 
+        // Update the root and return the deletion status.
         self.root = new_root;
         Ok(is_deleted)
     }
@@ -1227,6 +1268,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 mod tests {
     use super::{Tree, KV};
     use crate::{FixedSizeKey, VariableSizeKey};
+    use rand::{thread_rng, Rng};
     use std::str::FromStr;
 
     use std::fs::File;
@@ -1346,7 +1388,7 @@ mod tests {
 
     // Inserting a single value into the tree and removing it should result in a nil tree root.
     #[test]
-    fn insert_and_remove() {
+    fn insert_and_remove_single_key() {
         let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // Insertion
@@ -1981,7 +2023,7 @@ mod tests {
             },
         ];
 
-        assert!(tree.bulk_insert(&kv_pairs).is_ok());
+        assert!(tree.bulk_insert(&kv_pairs, true).is_ok());
         assert!(tree.version() == curr_version + 2);
 
         for kv in kv_pairs {
@@ -1997,5 +2039,299 @@ mod tests {
             .insert(&VariableSizeKey::from_str("key_7").unwrap(), 1, 0, 0)
             .is_ok());
         assert!(tree.version() == curr_version + 3);
+    }
+
+    #[test]
+    fn insert_and_remove() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        let version = 0;
+
+        // Keys to set
+        let set_keys = vec![
+            [107, 101, 121, 48, 48, 0],
+            [107, 101, 121, 48, 49, 0],
+            [107, 101, 121, 48, 50, 0],
+            [107, 101, 121, 48, 51, 0],
+            [107, 101, 121, 48, 52, 0],
+            [107, 101, 121, 48, 53, 0],
+            [107, 101, 121, 48, 54, 0],
+            [107, 101, 121, 48, 55, 0],
+            [107, 101, 121, 48, 56, 0],
+            [107, 101, 121, 48, 57, 0],
+            [107, 101, 121, 49, 48, 0],
+            [107, 101, 121, 49, 49, 0],
+            [107, 101, 121, 49, 50, 0],
+            [107, 101, 121, 49, 51, 0],
+            [107, 101, 121, 49, 52, 0],
+            [107, 101, 121, 49, 53, 0],
+            [107, 101, 121, 49, 54, 0],
+            [107, 101, 121, 49, 55, 0],
+            [107, 101, 121, 49, 56, 0],
+            [107, 101, 121, 49, 57, 0],
+            [107, 101, 121, 50, 48, 0],
+            [107, 101, 121, 50, 49, 0],
+            [107, 101, 121, 50, 50, 0],
+            [107, 101, 121, 50, 51, 0],
+            [107, 101, 121, 50, 52, 0],
+            [107, 101, 121, 50, 53, 0],
+        ];
+
+        // Insert keys
+        for key_data in &set_keys {
+            let key = VariableSizeKey {
+                data: key_data.to_vec(),
+            };
+            tree.insert(&key, 1, version, 0).unwrap();
+        }
+
+        // Delete one key at a time and check remaining keys
+        for (index, key_data_to_delete) in set_keys.iter().enumerate() {
+            let key_to_delete = VariableSizeKey {
+                data: key_data_to_delete.to_vec(),
+            };
+            tree.remove(&key_to_delete).unwrap();
+
+            // Check remaining keys are still present
+            for (remaining_index, remaining_key_data) in set_keys.iter().enumerate() {
+                if remaining_index <= index {
+                    // Check that the deleted key is no longer present
+                    assert!(
+                        tree.get(&key_to_delete, version).is_err(),
+                        "Key {:?} should not exist after deletion",
+                        key_data_to_delete
+                    );
+                    // This key has been deleted; skip
+                    continue;
+                }
+                let remaining_key = VariableSizeKey {
+                    data: remaining_key_data.to_vec(),
+                };
+                assert!(
+                    tree.get(&remaining_key, version).is_ok(),
+                    "Key {:?} should exist",
+                    remaining_key_data
+                );
+            }
+        }
+    }
+
+    fn generate_sequential_keys(count: usize) -> Vec<Vec<u8>> {
+        (0..count)
+            .map(|i| {
+                let mut key = i.to_le_bytes().to_vec();
+                key.push(0); // Ensure each key ends with 0
+                key
+            })
+            .collect()
+    }
+
+    fn generate_random_keys(count: usize) -> Vec<Vec<u8>> {
+        let mut rng = thread_rng();
+        (0..count)
+            .map(|_| {
+                let mut key: Vec<u8> = (0..5).map(|_| rng.gen()).collect(); // Generate a key of 5 random bytes
+                key.push(0); // Ensure each key ends with 0
+                key
+            })
+            .collect()
+    }
+
+    fn insert_remove_and_verify_keys(set_keys: Vec<Vec<u8>>) {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        let version = 0;
+
+        // Insert keys
+        for key_data in &set_keys {
+            let key = VariableSizeKey {
+                data: key_data.to_vec(),
+            };
+            tree.insert(&key, 1, version, 0).unwrap();
+        }
+
+        // Delete one key at a time and check remaining keys
+        for (index, key_data_to_delete) in set_keys.iter().enumerate() {
+            let key_to_delete = VariableSizeKey {
+                data: key_data_to_delete.to_vec(),
+            };
+            tree.remove(&key_to_delete).unwrap();
+
+            // Check remaining keys are still present
+            for (remaining_index, remaining_key_data) in set_keys.iter().enumerate() {
+                if remaining_index <= index {
+                    // Check that the deleted key is no longer present
+                    assert!(
+                        tree.get(&key_to_delete, version).is_err(),
+                        "Key {:?} should not exist after deletion",
+                        key_data_to_delete
+                    );
+                    // This key has been deleted; skip
+                    continue;
+                }
+                let remaining_key = VariableSizeKey {
+                    data: remaining_key_data.to_vec(),
+                };
+                assert!(
+                    tree.get(&remaining_key, version).is_ok(),
+                    "Key {:?} should exist",
+                    remaining_key_data
+                );
+            }
+        }
+
+        // Tree should be empty
+        assert!(tree.root.is_none());
+    }
+
+    #[test]
+    fn test_insert_remove_and_verify_keys_large_sequential() {
+        insert_remove_and_verify_keys(generate_sequential_keys(1000)); // Generate 1000 sequential keys
+    }
+
+    #[test]
+    fn test_insert_remove_and_verify_keys_large_random() {
+        insert_remove_and_verify_keys(generate_random_keys(1000)); // Generate 1000 random keys
+    }
+
+    #[test]
+    fn test_bulk_insert_with_mixed_versions() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        let curr_version = tree.version();
+        let kv_pairs = vec![
+            KV::new(VariableSizeKey::from_str("key_1").unwrap(), 1, 0, 0), // Version 0, should adopt curr_version + 1
+            KV::new(
+                VariableSizeKey::from_str("key_2").unwrap(),
+                2,
+                curr_version + 1,
+                0,
+            ), // Explicit version
+            KV::new(VariableSizeKey::from_str("key_3").unwrap(), 3, 0, 0), // Version 0, should adopt curr_version + 1
+        ];
+
+        assert!(tree.bulk_insert(&kv_pairs, true).is_ok());
+        assert_eq!(tree.version(), curr_version + 1);
+
+        // Verify each key's version and value
+        for kv in kv_pairs {
+            let (_, val, version, _) = tree.get(&kv.key, 0).unwrap();
+            assert_eq!(val, kv.value);
+            assert_eq!(version, curr_version + 1);
+        }
+    }
+
+    #[test]
+    fn test_bulk_insert_version_conflict() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        let curr_version = tree.version();
+        // Insert a key with a future version
+        assert!(tree
+            .insert(
+                &VariableSizeKey::from_str("key_0").unwrap(),
+                0,
+                curr_version + 2,
+                0
+            )
+            .is_ok());
+        let curr_version = tree.version();
+
+        let kv_pairs = vec![
+            KV::new(
+                VariableSizeKey::from_str("key_1").unwrap(),
+                1,
+                curr_version,
+                0,
+            ), // Version conflict, older than current
+            KV::new(
+                VariableSizeKey::from_str("key_2").unwrap(),
+                2,
+                curr_version + 1,
+                0,
+            ), // Correct version
+        ];
+
+        // Expecting an error due to version conflict
+        assert!(tree.bulk_insert(&kv_pairs, true).is_err());
+        // Verify tree version hasn't changed due to failed insert
+        assert_eq!(tree.version(), curr_version);
+    }
+
+    #[test]
+    fn remove_non_existent_key() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        let key = VariableSizeKey::from_str("nonexistent").unwrap();
+        let is_removed = tree.remove(&key).unwrap();
+        assert!(!is_removed);
+    }
+
+    #[test]
+    fn remove_key_from_empty_tree() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        let key = VariableSizeKey::from_str("test").unwrap();
+        let is_removed = tree.remove(&key).unwrap();
+        assert!(!is_removed);
+    }
+
+    #[test]
+    fn sequential_removals() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        let keys = vec!["first", "second", "third"]
+            .into_iter()
+            .map(|k| VariableSizeKey::from_str(k).unwrap())
+            .collect::<Vec<_>>();
+
+        // Insert keys
+        for key in &keys {
+            let _ = tree.insert(key, 1, 0, 0);
+        }
+
+        // Remove keys sequentially
+        for key in &keys {
+            assert!(tree.remove(key).unwrap());
+        }
+
+        // Verify all keys are removed
+        for key in keys {
+            assert!(tree.get(&key, 0).is_err());
+        }
+    }
+
+    #[test]
+    fn remove_until_empty() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        let keys = vec!["key1", "key2", "key3"]
+            .into_iter()
+            .map(|k| VariableSizeKey::from_str(k).unwrap())
+            .collect::<Vec<_>>();
+
+        // Insert keys
+        for key in &keys {
+            let _ = tree.insert(key, 1, 0, 0);
+        }
+
+        // Remove all keys
+        for key in &keys {
+            let is_removed = tree.remove(&key).unwrap();
+            assert!(is_removed);
+        }
+
+        // Tree should be empty
+        assert!(tree.root.is_none());
+    }
+
+    #[test]
+    fn remove_with_subsequent_inserts() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        let key1 = VariableSizeKey::from_str("key1").unwrap();
+        let key2 = VariableSizeKey::from_str("key2").unwrap();
+
+        // Initial insert
+        let _ = tree.insert(&key1, 1, 0, 0);
+        // Remove
+        assert!(tree.remove(&key1).unwrap());
+        // Insert another key
+        let _ = tree.insert(&key2, 2, 0, 0);
+
+        // Verify
+        assert!(tree.get(&key1, 0).is_err());
+        assert_eq!(tree.get(&key2, 0).unwrap().1, 2);
     }
 }

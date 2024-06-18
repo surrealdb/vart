@@ -1,7 +1,7 @@
 //! This module defines the Snapshot struct for managing snapshots within a Trie structure.
 use std::sync::Arc;
 
-use crate::art::Node;
+use crate::art::{Node, Tree};
 use crate::iter::IterationPointer;
 use crate::node::Version;
 use crate::{KeyTrait, TrieError};
@@ -106,21 +106,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         // Check if the tree is already closed
         self.is_closed()?;
 
-        let (new_root, is_deleted) = match &self.root {
-            None => (None, false),
-            Some(root) => {
-                if root.is_twig() {
-                    (None, true)
-                } else {
-                    let (new_root, removed) = Node::remove_recurse(root, key, 0);
-                    if removed {
-                        (new_root, true)
-                    } else {
-                        (self.root.clone(), true)
-                    }
-                }
-            }
-        };
+        let (new_root, is_deleted) = Tree::remove_from_node(self.root.as_ref(), key);
 
         self.root = new_root;
         Ok(is_deleted)
@@ -232,5 +218,81 @@ mod tests {
             len += 1;
         }
         len
+    }
+
+    #[test]
+    fn test_insert_and_remove() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        let version = 0;
+
+        // Keys to set
+        let set_keys = vec![
+            [107, 101, 121, 48, 48, 0],
+            [107, 101, 121, 48, 49, 0],
+            [107, 101, 121, 48, 50, 0],
+            [107, 101, 121, 48, 51, 0],
+            [107, 101, 121, 48, 52, 0],
+            [107, 101, 121, 48, 53, 0],
+            [107, 101, 121, 48, 54, 0],
+            [107, 101, 121, 48, 55, 0],
+            [107, 101, 121, 48, 56, 0],
+            [107, 101, 121, 48, 57, 0],
+            [107, 101, 121, 49, 48, 0],
+            [107, 101, 121, 49, 49, 0],
+            [107, 101, 121, 49, 50, 0],
+            [107, 101, 121, 49, 51, 0],
+            [107, 101, 121, 49, 52, 0],
+            [107, 101, 121, 49, 53, 0],
+            [107, 101, 121, 49, 54, 0],
+            [107, 101, 121, 49, 55, 0],
+            [107, 101, 121, 49, 56, 0],
+            [107, 101, 121, 49, 57, 0],
+            [107, 101, 121, 50, 48, 0],
+            [107, 101, 121, 50, 49, 0],
+            [107, 101, 121, 50, 50, 0],
+            [107, 101, 121, 50, 51, 0],
+            [107, 101, 121, 50, 52, 0],
+            [107, 101, 121, 50, 53, 0],
+        ];
+
+        // Insert keys
+        for key_data in &set_keys {
+            let key = VariableSizeKey {
+                data: key_data.to_vec(),
+            };
+            tree.insert(&key, 1, version, 0).unwrap();
+        }
+
+        let mut snap = tree.create_snapshot().unwrap();
+
+        // Delete one key at a time and check remaining keys
+        for (index, key_data_to_delete) in set_keys.iter().enumerate() {
+            let key_to_delete = VariableSizeKey {
+                data: key_data_to_delete.to_vec(),
+            };
+            snap.remove(&key_to_delete).unwrap();
+
+            // Check remaining keys are still present
+            for (remaining_index, remaining_key_data) in set_keys.iter().enumerate() {
+                if remaining_index <= index {
+                    // This key has been deleted; skip
+                    // Check that the deleted key is no longer present
+                    assert!(
+                        snap.get(&key_to_delete).is_err(),
+                        "Key {:?} should not exist after deletion",
+                        key_data_to_delete
+                    );
+                    continue;
+                }
+                let remaining_key = VariableSizeKey {
+                    data: remaining_key_data.to_vec(),
+                };
+                assert!(
+                    snap.get(&remaining_key).is_ok(),
+                    "Key {:?} should exist",
+                    remaining_key_data
+                );
+            }
+        }
     }
 }

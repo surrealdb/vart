@@ -22,6 +22,7 @@ pub trait Key {
     fn prefix_after(&self, start: usize) -> Self;
     fn longest_common_prefix(&self, slice: &[u8]) -> usize;
     fn as_slice(&self) -> &[u8];
+    fn extend(&self, other: &Self) -> Self;
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -148,6 +149,17 @@ impl<const SIZE: usize> Key for FixedSizeKey<SIZE> {
             .zip(key)
             .take_while(|&(a, &b)| *a == b)
             .count()
+    }
+
+    fn extend(&self, other: &Self) -> Self {
+        assert!(self.len + other.len < SIZE);
+        let mut content = [0; SIZE];
+        content[..self.len].copy_from_slice(&self.content[..self.len]);
+        content[self.len..self.len + other.len].copy_from_slice(&other.content[..other.len]);
+        Self {
+            content,
+            len: self.len + other.len,
+        }
     }
 }
 
@@ -309,6 +321,13 @@ impl Key for VariableSizeKey {
 
     fn as_slice(&self) -> &[u8] {
         &self.data[..self.data.len()]
+    }
+
+    fn extend(&self, other: &Self) -> Self {
+        let mut data = Vec::with_capacity(self.data.len() + other.data.len());
+        data.extend_from_slice(&self.data);
+        data.extend_from_slice(&other.data);
+        Self { data: data }
     }
 }
 
