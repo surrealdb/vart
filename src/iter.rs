@@ -37,6 +37,7 @@ impl<P: KeyTrait, V: Clone> IterationPointer<P, V> {
         VersionedIter::new(Some(&self.root))
     }
 
+    /// Returns a range query iterator over the Trie.
     pub fn range<'a, R>(
         &'a self,
         range: R,
@@ -45,6 +46,17 @@ impl<P: KeyTrait, V: Clone> IterationPointer<P, V> {
         R: RangeBounds<P> + 'a,
     {
         Range::new(Some(&self.root), range)
+    }
+
+    /// Returns a versioned range query iterator over the Trie.
+    pub fn versioned_range<'a, R>(
+        &'a self,
+        range: R,
+    ) -> impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>
+    where
+        R: RangeBounds<P> + 'a,
+    {
+        Range::new_versioned(Some(&self.root), range)
     }
 }
 
@@ -224,6 +236,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
 pub struct Range<'a, K: KeyTrait, V: Clone, R> {
     forward: IterState<'a, K, V>,
     range: R,
+    is_versioned: bool,
 }
 
 impl<'a, K: KeyTrait, V: Clone, R> Range<'a, K, V, R>
@@ -235,6 +248,7 @@ where
         Self {
             forward: IterState::empty(),
             range,
+            is_versioned: false,
         }
     }
 
@@ -246,11 +260,32 @@ where
             Self {
                 forward: IterState::forward_scan(node, &range, false),
                 range,
+                is_versioned: false,
             }
         } else {
             Self {
                 forward: IterState::empty(),
                 range,
+                is_versioned: false,
+            }
+        }
+    }
+
+    pub(crate) fn new_versioned(node: Option<&'a Arc<Node<K, V>>>, range: R) -> Self
+    where
+        R: RangeBounds<K>,
+    {
+        if let Some(node) = node {
+            Self {
+                forward: IterState::forward_scan(node, &range, false),
+                range,
+                is_versioned: true,
+            }
+        } else {
+            Self {
+                forward: IterState::empty(),
+                range,
+                is_versioned: true,
             }
         }
     }
@@ -266,8 +301,16 @@ impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K
                 Some(other) => {
                     if let NodeType::Twig(twig) = &other.1.node_type {
                         if self.range.contains(&twig.key) {
-                            let val = twig.get_latest_leaf();
-                            if let Some(v) = val {
+                            if self.is_versioned {
+                                for leaf in twig.iter() {
+                                    self.forward.leafs.push_back((
+                                        &twig.key,
+                                        &leaf.value,
+                                        &leaf.version,
+                                        &leaf.ts,
+                                    ));
+                                }
+                            } else if let Some(v) = twig.get_latest_leaf() {
                                 self.forward
                                     .leafs
                                     .push_back((&twig.key, &v.value, &v.version, &v.ts));
@@ -330,7 +373,7 @@ mod tests {
     use hashbrown::HashMap;
 
     use crate::art::Tree;
-    use crate::FixedSizeKey;
+    use crate::{FixedSizeKey, Key};
 
     fn from_be_bytes_key(k: &[u8]) -> u64 {
         let padded_k = if k.len() < 8 {
@@ -453,6 +496,96 @@ mod tests {
 
         // Verify that the total count matches the expected number of entries
         let expected_count = num_keys as u64 * versions_per_key;
+        assert_eq!(
+            versions_map
+                .iter()
+                .map(|(_key, versions)| versions.len())
+                .sum::<usize>(),
+            expected_count as usize,
+            "Total count of versions does not match the expected count"
+        );
+    }
+
+    #[test]
+    fn range_query_iterator_verifies_keys_and_versions_within_range() {
+        let mut tree = Tree::<FixedSizeKey<16>, u16>::new();
+
+        // Define the range for the query
+        let query_range_start: FixedSizeKey<16> = 3u16.into();
+        let query_range_end: FixedSizeKey<16> = 7u16.into(); // Exclusive
+        let versions_per_key = 5;
+
+        // Insert multiple versions for multiple keys, some of which fall within the query range
+        let num_keys: u16 = 10;
+        for i in 0..num_keys {
+            let key: FixedSizeKey<16> = i.into();
+            for version in 1..=versions_per_key {
+                tree.insert_without_version_increment_check(&key, i, version, 0_u64)
+                    .unwrap();
+            }
+        }
+
+        // Use the range query iterator to iterate through the tree for keys within the specified range
+
+        let range_query_iter =
+            tree.versioned_range(query_range_start.clone()..=query_range_end.clone());
+        let mut versions_map = HashMap::new();
+
+        let query_range_start = from_be_bytes_key(query_range_start.as_slice());
+        let query_range_end = from_be_bytes_key(query_range_end.as_slice());
+
+        for (key, _value, version, _timestamp) in range_query_iter {
+            let key_num = from_be_bytes_key(&key);
+            assert!(
+                key_num >= query_range_start && key_num <= query_range_end,
+                "Key {:?} is outside the query range",
+                key_num
+            );
+
+            versions_map
+                .entry(key_num)
+                .or_insert_with(Vec::new)
+                .push(*version);
+        }
+
+        // Verify that each key within the range has the correct number of versions and they are sequential
+        for key in query_range_start..=query_range_end {
+            if let Some(versions) = versions_map.get(&key) {
+                assert_eq!(
+                    versions.len(),
+                    versions_per_key as usize,
+                    "Incorrect number of versions for key {}",
+                    key
+                );
+
+                // Check if versions are sequential, assuming they start from 1
+                let mut expected_version = 1;
+                for version in versions {
+                    assert_eq!(
+                        *version, expected_version,
+                        "Version sequence mismatch for key {}",
+                        key
+                    );
+                    expected_version += 1;
+                }
+            } else {
+                panic!(
+                    "Key {} within the query range was not found in the results",
+                    key
+                );
+            }
+        }
+
+        // Optionally, verify that no keys outside the range are present in the results
+        assert!(
+            versions_map
+                .keys()
+                .all(|&k| k >= query_range_start && k <= query_range_end),
+            "Found keys outside the query range"
+        );
+
+        // Verify that the total count matches the expected number of entries
+        let expected_count = 25;
         assert_eq!(
             versions_map
                 .iter()
