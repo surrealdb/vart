@@ -3,7 +3,7 @@ use std::cmp::min;
 use std::ops::RangeBounds;
 use std::sync::Arc;
 
-use crate::iter::{Iter, Range};
+use crate::iter::{Iter, Range, VersionedIter};
 use crate::node::{FlatNode, Node256, Node48, NodeTrait, TwigNode, Version};
 use crate::snapshot::Snapshot;
 use crate::{KeyTrait, TrieError};
@@ -1054,7 +1054,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
             };
 
             // Insert the new KV instance using the insert function
-            // self.insert(&new_kv.key, new_kv.value, new_kv.version, new_kv.ts)?;
             match &self.root {
                 None => {
                     self.root = Some(Arc::new(Node::new_twig(
@@ -1205,6 +1204,19 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     ///
     pub fn iter(&self) -> Iter<P, V> {
         Iter::new(self.root.as_ref())
+    }
+
+    /// Creates a versioned iterator over the Trie's key-value pairs.
+    ///
+    /// This function creates and returns an iterator that can be used to traverse all the versions
+    /// for all the key-value pairs stored in the Trie. The iterator starts from the root of the Trie.
+    ///
+    /// # Returns
+    ///
+    /// Returns an `Iter` instance that iterates over the key-value pairs in the Trie.
+    ///
+    pub fn versioned_iter(&self) -> VersionedIter<P, V> {
+        VersionedIter::new(self.root.as_ref())
     }
 
     /// Returns an iterator over a range of key-value pairs within the Trie.
