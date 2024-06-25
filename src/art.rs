@@ -1120,8 +1120,20 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                     }
                 }
             }
-            Some(_) => (None, true), // case where the root is a twig.
-            None => (None, false),   // case where there is no root.
+            Some(root) => {
+                // case where the root is a twig.
+                // Determine the prefix of the key after the current depth.
+                let prefix_after = key.prefix_after(0);
+                let key_prefix = prefix_after.as_slice(); // Find the longest common prefix between the current node's prefix and the key's prefix.
+                let longest_common_prefix = root.prefix().longest_common_prefix(key_prefix);
+
+                if longest_common_prefix != root.prefix().len() {
+                    (None, false)
+                } else {
+                    (None, true)
+                }
+            }
+            None => (None, false), // case where there is no root.
         };
 
         (new_root, is_deleted)
@@ -1135,7 +1147,9 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         let (new_root, is_deleted) = Tree::remove_from_node(self.root.as_ref(), key);
 
         // Update the root and return the deletion status.
-        self.root = new_root;
+        if is_deleted {
+            self.root = new_root;
+        }
         Ok(is_deleted)
     }
 
@@ -2511,5 +2525,69 @@ mod tests {
             let result_str_trimmed = &result_str[..result_str.len() - 1];
             assert_eq!(result_str_trimmed, expected_order[i]);
         }
+    }
+
+    #[test]
+    fn test_add_keys_and_then_delete_keys_which_dont_exist() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+
+        // Insert 75 keys
+        for i in 1..=75 {
+            let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
+            // Assuming version is incremented with each insert, and starting version is 0
+            let _ = tree.insert(&key, i, i as u64, 0); // Here, `i as u64` is used as the version for simplicity
+        }
+
+        // Attempt to delete 25 keys (76 to 100), which do not exist
+        for i in 76..=100 {
+            let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
+            // Since these keys do not exist, remove should return an Err or false depending on implementation
+            assert!(tree.remove(&key).is_err() || !tree.remove(&key).unwrap());
+        }
+
+        // Verify versions of a few keys
+        // For example, check the version of key1 and key75
+        let key1 = VariableSizeKey::from_str("key1").unwrap();
+        let key75 = VariableSizeKey::from_str("key75").unwrap();
+
+        // Assuming `get` returns a Result<(Value, Version), Error>
+        assert_eq!(tree.get(&key1, 0).unwrap().1, 1); // Check version of key1
+        assert_eq!(tree.get(&key75, 0).unwrap().1, 75); // Check version of key75
+    }
+
+    #[test]
+    fn test_nonexistent_key_removal_does_not_empty_tree() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+
+        for i in 1..=1 {
+            let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
+            // Assuming version is incremented with each insert, and starting version is 0
+            let _ = tree.insert(&key, i, i as u64, 0); // Here, `i as u64` is used as the version for simplicity
+        }
+
+        for i in 2..=2 {
+            let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
+            // Since these keys do not exist, remove should return an Err or false depending on implementation
+            assert!(tree.remove(&key).is_err() || !tree.remove(&key).unwrap());
+        }
+
+        let key1 = VariableSizeKey::from_str("key1").unwrap();
+
+        assert_eq!(tree.get(&key1, 0).unwrap().1, 1); // Check version of key1
+    }
+
+    #[test]
+    fn test_tree_empty_after_removing_single_key() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+
+        // Insert a single key
+        let key = VariableSizeKey::from_str("key1").unwrap();
+        tree.insert(&key, 1, 1, 0).unwrap();
+
+        // Remove the inserted key
+        tree.remove(&key).unwrap();
+
+        // Verify the tree is empty
+        assert!(tree.root.is_none());
     }
 }

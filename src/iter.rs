@@ -146,8 +146,11 @@ impl<'a, P: KeyTrait + 'a, V: Clone> IterState<'a, P, V> {
         let mut leafs = VecDeque::new();
 
         if let NodeType::Twig(twig) = &node.node_type {
-            let val = twig.get_latest_leaf();
-            if let Some(v) = val {
+            if is_versioned {
+                for leaf in twig.iter() {
+                    leafs.push_back((&twig.key, &leaf.value, &leaf.version, &leaf.ts));
+                }
+            } else if let Some(v) = twig.get_latest_leaf() {
                 leafs.push_back((&twig.key, &v.value, &v.version, &v.ts));
             }
         } else {
@@ -177,8 +180,11 @@ impl<'a, P: KeyTrait + 'a, V: Clone> IterState<'a, P, V> {
         let mut iters = Vec::new();
         if let NodeType::Twig(twig) = &node.node_type {
             if range.contains(&twig.key) {
-                let val = twig.get_latest_leaf();
-                if let Some(v) = val {
+                if is_versioned {
+                    for leaf in twig.iter() {
+                        leafs.push_back((&twig.key, &leaf.value, &leaf.version, &leaf.ts));
+                    }
+                } else if let Some(v) = twig.get_latest_leaf() {
                     leafs.push_back((&twig.key, &v.value, &v.version, &v.ts));
                 }
             }
@@ -277,7 +283,7 @@ where
     {
         if let Some(node) = node {
             Self {
-                forward: IterState::forward_scan(node, &range, false),
+                forward: IterState::forward_scan(node, &range, true),
                 range,
                 is_versioned: true,
             }
@@ -398,7 +404,6 @@ mod tests {
         for i in 0..num_keys {
             let key: FixedSizeKey<16> = i.into();
             for version in 1..versions_per_key + 1 {
-                // println!("Inserting with version {}", version);
                 tree.insert_without_version_increment_check(&key, i, version, 0_u64)
                     .unwrap();
             }
@@ -408,7 +413,6 @@ mod tests {
         let versioned_iter = tree.versioned_iter();
         let mut versions_map = HashMap::new();
         for (key, value, version, _timestamp) in versioned_iter {
-            println!("Key: {:?}, Value: {:?}, Version: {:?}", key, value, version);
             let key_num = from_be_bytes_key(&key);
             // Check if the key is correct (matches the value)
             assert_eq!(
@@ -594,5 +598,97 @@ mod tests {
             expected_count as usize,
             "Total count of versions does not match the expected count"
         );
+    }
+
+    #[test]
+    fn test_versioned_iter_with_two_versions_of_same_key() {
+        // This tests verifies when the root is twig node, if versioned iter works correctly
+        let mut tree = Tree::<FixedSizeKey<16>, u16>::new();
+
+        // Insert two versions for the same key
+        let key: FixedSizeKey<16> = 1u16.into();
+        let versions = [1, 2];
+        for &version in &versions {
+            tree.insert_without_version_increment_check(&key, 1, version, 0_u64)
+                .unwrap();
+        }
+
+        // Use iterator to iterate through the tree
+        let iter = tree.versioned_iter();
+        let mut found_versions = Vec::new();
+        for (iter_key, iter_value, iter_version, _timestamp) in iter {
+            // Check if the key and value are as expected
+            assert_eq!(
+                from_be_bytes_key(&iter_key),
+                1,
+                "Key does not match the expected value"
+            );
+            assert_eq!(*iter_value, 1, "Value does not match the expected value");
+
+            // Collect found versions
+            found_versions.push(*iter_version);
+        }
+
+        // Verify that both versions of the key are found
+        assert_eq!(
+            found_versions.len(),
+            2,
+            "Did not find both versions of the key"
+        );
+        for &version in &versions {
+            assert!(
+                found_versions.contains(&version),
+                "Missing version {}",
+                version
+            );
+        }
+    }
+
+    #[test]
+    fn test_versioned_range_query_with_two_versions_of_same_key() {
+        // This tests verifies when the root is twig node, if versioned iter works correctly
+        let mut tree = Tree::<FixedSizeKey<16>, u16>::new();
+
+        // Insert two versions for the same key
+        let key: FixedSizeKey<16> = 1u16.into();
+        let versions = [1, 2];
+        for &version in &versions {
+            tree.insert_without_version_increment_check(&key, 1, version, 0_u64)
+                .unwrap();
+        }
+
+        // Define start and end keys for the range query
+        let start_key: FixedSizeKey<16> = 0u16.into(); // Start from a key before the inserted key
+        let end_key: FixedSizeKey<16> = 2u16.into(); // End at a key after the inserted key
+
+        // Use range query to iterate through the tree
+        let range_iter = tree.versioned_range(start_key..=end_key);
+        let mut found_versions = Vec::new();
+        for (iter_key, iter_value, iter_version, _timestamp) in range_iter {
+            // Check if the key and value are as expected
+            assert_eq!(
+                from_be_bytes_key(&iter_key),
+                1,
+                "Key does not match the expected value"
+            );
+            assert_eq!(*iter_value, 1, "Value does not match the expected value");
+
+            // Collect found versions
+            found_versions.push(*iter_version);
+        }
+
+        // Verify that both versions of the key are found in the range query
+        assert_eq!(
+            found_versions.len(),
+            2,
+            "Did not find both versions of the key in the range query"
+        );
+        for &version in &versions {
+            assert!(
+                found_versions.contains(&version),
+                "Missing version {} in range query",
+                version
+            );
+        }
     }
 }
