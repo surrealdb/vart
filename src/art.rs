@@ -1224,7 +1224,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     ///
     /// This function creates and returns an iterator that can be used to traverse all the versions
     /// for all the key-value pairs stored in the Trie. The iterator starts from the root of the Trie.
-    pub fn versioned_iter(&self) -> VersionedIter<P, V> {
+    pub fn iter_with_versions(&self) -> VersionedIter<P, V> {
         VersionedIter::new(self.root.as_ref())
     }
 
@@ -1259,7 +1259,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Range::new(root, range)
     }
 
-    pub fn versioned_range<'a, R>(
+    pub fn range_with_versions<'a, R>(
         &'a self,
         range: R,
     ) -> impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>

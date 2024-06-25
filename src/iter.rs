@@ -33,7 +33,7 @@ impl<P: KeyTrait, V: Clone> IterationPointer<P, V> {
     }
 
     /// Returns an iterator over all
-    pub fn versioned_iter(&self) -> VersionedIter<P, V> {
+    pub fn iter_with_versions(&self) -> VersionedIter<P, V> {
         VersionedIter::new(Some(&self.root))
     }
 
@@ -49,7 +49,7 @@ impl<P: KeyTrait, V: Clone> IterationPointer<P, V> {
     }
 
     /// Returns a versioned range query iterator over the Trie.
-    pub fn versioned_range<'a, R>(
+    pub fn range_with_versions<'a, R>(
         &'a self,
         range: R,
     ) -> impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>
@@ -395,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn versioned_iter_reads_all_versions() {
+    fn iter_with_versions_reads_all_versions() {
         let mut tree = Tree::<FixedSizeKey<16>, u16>::new();
 
         // Insert multiple versions for a few keys
@@ -410,9 +410,9 @@ mod tests {
         }
 
         // Use the versioned iterator to iterate through the tree
-        let versioned_iter = tree.versioned_iter();
+        let iter_with_versions = tree.iter_with_versions();
         let mut versions_map = HashMap::new();
-        for (key, value, version, _timestamp) in versioned_iter {
+        for (key, value, version, _timestamp) in iter_with_versions {
             let key_num = from_be_bytes_key(&key);
             // Check if the key is correct (matches the value)
             assert_eq!(
@@ -451,7 +451,7 @@ mod tests {
     }
 
     #[test]
-    fn versioned_iter_reads_versions_in_decreasing_order() {
+    fn iter_with_versions_reads_versions_in_decreasing_order() {
         let mut tree = Tree::<FixedSizeKey<16>, u16>::new();
 
         // Insert multiple versions for a few keys in decreasing order
@@ -466,9 +466,9 @@ mod tests {
         }
 
         // Use the versioned iterator to iterate through the tree
-        let versioned_iter = tree.versioned_iter();
+        let iter_with_versions = tree.iter_with_versions();
         let mut versions_map = HashMap::new();
-        for (key, value, version, _timestamp) in versioned_iter {
+        for (key, value, version, _timestamp) in iter_with_versions {
             let key_num = from_be_bytes_key(&key);
             // Check if the key is correct (matches the value)
             assert_eq!(
@@ -532,7 +532,7 @@ mod tests {
         // Use the range query iterator to iterate through the tree for keys within the specified range
 
         let range_query_iter =
-            tree.versioned_range(query_range_start.clone()..=query_range_end.clone());
+            tree.range_with_versions(query_range_start.clone()..=query_range_end.clone());
         let mut versions_map = HashMap::new();
 
         let query_range_start = from_be_bytes_key(query_range_start.as_slice());
@@ -601,7 +601,7 @@ mod tests {
     }
 
     #[test]
-    fn test_versioned_iter_with_two_versions_of_same_key() {
+    fn test_iter_with_versions_with_two_versions_of_same_key() {
         // This tests verifies when the root is twig node, if versioned iter works correctly
         let mut tree = Tree::<FixedSizeKey<16>, u16>::new();
 
@@ -614,7 +614,7 @@ mod tests {
         }
 
         // Use iterator to iterate through the tree
-        let iter = tree.versioned_iter();
+        let iter = tree.iter_with_versions();
         let mut found_versions = Vec::new();
         for (iter_key, iter_value, iter_version, _timestamp) in iter {
             // Check if the key and value are as expected
@@ -645,7 +645,7 @@ mod tests {
     }
 
     #[test]
-    fn test_versioned_range_query_with_two_versions_of_same_key() {
+    fn test_range_with_versions_query_with_two_versions_of_same_key() {
         // This tests verifies when the root is twig node, if versioned iter works correctly
         let mut tree = Tree::<FixedSizeKey<16>, u16>::new();
 
@@ -662,7 +662,7 @@ mod tests {
         let end_key: FixedSizeKey<16> = 2u16.into(); // End at a key after the inserted key
 
         // Use range query to iterate through the tree
-        let range_iter = tree.versioned_range(start_key..=end_key);
+        let range_iter = tree.range_with_versions(start_key..=end_key);
         let mut found_versions = Vec::new();
         for (iter_key, iter_value, iter_version, _timestamp) in range_iter {
             // Check if the key and value are as expected
