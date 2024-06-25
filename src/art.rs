@@ -3,7 +3,7 @@ use std::cmp::min;
 use std::ops::RangeBounds;
 use std::sync::Arc;
 
-use crate::iter::{Iter, Range};
+use crate::iter::{Iter, Range, VersionedIter};
 use crate::node::{FlatNode, Node256, Node48, NodeTrait, TwigNode, Version};
 use crate::snapshot::Snapshot;
 use crate::{KeyTrait, TrieError};
@@ -1054,7 +1054,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
             };
 
             // Insert the new KV instance using the insert function
-            // self.insert(&new_kv.key, new_kv.value, new_kv.version, new_kv.ts)?;
             match &self.root {
                 None => {
                     self.root = Some(Arc::new(Node::new_twig(
@@ -1121,8 +1120,20 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                     }
                 }
             }
-            Some(_) => (None, true), // case where the root is a twig.
-            None => (None, false),   // case where there is no root.
+            Some(root) => {
+                // case where the root is a twig.
+                // Determine the prefix of the key after the current depth.
+                let prefix_after = key.prefix_after(0);
+                let key_prefix = prefix_after.as_slice(); // Find the longest common prefix between the current node's prefix and the key's prefix.
+                let longest_common_prefix = root.prefix().longest_common_prefix(key_prefix);
+
+                if longest_common_prefix != root.prefix().len() {
+                    (None, false)
+                } else {
+                    (None, true)
+                }
+            }
+            None => (None, false), // case where there is no root.
         };
 
         (new_root, is_deleted)
@@ -1136,7 +1147,9 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         let (new_root, is_deleted) = Tree::remove_from_node(self.root.as_ref(), key);
 
         // Update the root and return the deletion status.
-        self.root = new_root;
+        if is_deleted {
+            self.root = new_root;
+        }
         Ok(is_deleted)
     }
 
@@ -1207,6 +1220,14 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Iter::new(self.root.as_ref())
     }
 
+    /// Creates a versioned iterator over the Trie's key-value pairs.
+    ///
+    /// This function creates and returns an iterator that can be used to traverse all the versions
+    /// for all the key-value pairs stored in the Trie. The iterator starts from the root of the Trie.
+    pub fn iter_with_versions(&self) -> VersionedIter<P, V> {
+        VersionedIter::new(self.root.as_ref())
+    }
+
     /// Returns an iterator over a range of key-value pairs within the Trie.
     ///
     /// This function creates and returns an iterator that iterates over key-value pairs in the Trie,
@@ -1236,6 +1257,22 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 
         let root = self.root.as_ref();
         Range::new(root, range)
+    }
+
+    pub fn range_with_versions<'a, R>(
+        &'a self,
+        range: R,
+    ) -> impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>
+    where
+        R: RangeBounds<P> + 'a,
+    {
+        // If the Trie is empty, return an empty Range iterator
+        if self.root.is_none() {
+            return Range::empty(range);
+        }
+
+        let root = self.root.as_ref();
+        Range::new_versioned(root, range)
     }
 
     fn check_if_closed(&self) -> Result<(), TrieError> {
@@ -2449,5 +2486,108 @@ mod tests {
                 "get at version 0 should return the latest version number."
             );
         }
+    }
+
+    #[test]
+    fn test_range_scan_order_with_random_keys() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+
+        // Define keys in random order
+        let insert_words = ["test3", "test1", "test5", "test4", "test2"];
+
+        // Insert keys into the tree
+        let entries: Vec<KV<VariableSizeKey, i32>> = insert_words
+            .iter()
+            .map(|word| KV {
+                key: VariableSizeKey::from_str(word).unwrap(),
+                value: 1,
+                version: 1,
+                ts: 1,
+            })
+            .collect();
+
+        tree.bulk_insert(&entries, false).unwrap();
+
+        // Define a range that encompasses all keys
+        let range = VariableSizeKey::from("test1".as_bytes().to_vec())
+            ..=VariableSizeKey::from("test5".as_bytes().to_vec());
+
+        // Collect results of the range scan
+        let results: Vec<_> = tree.range(range).collect();
+
+        // Expected order
+        let expected_order = ["test1", "test2", "test3", "test4", "test5"];
+
+        // Assert that results are in expected order
+        for (i, result) in results.iter().enumerate() {
+            let result_str = std::str::from_utf8(result.0.as_slice()).expect("Invalid UTF-8");
+            // The variable size key has a trailing null byte, so we need to trim it
+            let result_str_trimmed = &result_str[..result_str.len() - 1];
+            assert_eq!(result_str_trimmed, expected_order[i]);
+        }
+    }
+
+    #[test]
+    fn test_add_keys_and_then_delete_keys_which_dont_exist() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+
+        // Insert 75 keys
+        for i in 1..=75 {
+            let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
+            // Assuming version is incremented with each insert, and starting version is 0
+            let _ = tree.insert(&key, i, i as u64, 0); // Here, `i as u64` is used as the version for simplicity
+        }
+
+        // Attempt to delete 25 keys (76 to 100), which do not exist
+        for i in 76..=100 {
+            let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
+            // Since these keys do not exist, remove should return an Err or false depending on implementation
+            assert!(tree.remove(&key).is_err() || !tree.remove(&key).unwrap());
+        }
+
+        // Verify versions of a few keys
+        // For example, check the version of key1 and key75
+        let key1 = VariableSizeKey::from_str("key1").unwrap();
+        let key75 = VariableSizeKey::from_str("key75").unwrap();
+
+        // Assuming `get` returns a Result<(Value, Version), Error>
+        assert_eq!(tree.get(&key1, 0).unwrap().1, 1); // Check version of key1
+        assert_eq!(tree.get(&key75, 0).unwrap().1, 75); // Check version of key75
+    }
+
+    #[test]
+    fn test_nonexistent_key_removal_does_not_empty_tree() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+
+        for i in 1..=1 {
+            let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
+            // Assuming version is incremented with each insert, and starting version is 0
+            let _ = tree.insert(&key, i, i as u64, 0); // Here, `i as u64` is used as the version for simplicity
+        }
+
+        for i in 2..=2 {
+            let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
+            // Since these keys do not exist, remove should return an Err or false depending on implementation
+            assert!(tree.remove(&key).is_err() || !tree.remove(&key).unwrap());
+        }
+
+        let key1 = VariableSizeKey::from_str("key1").unwrap();
+
+        assert_eq!(tree.get(&key1, 0).unwrap().1, 1); // Check version of key1
+    }
+
+    #[test]
+    fn test_tree_empty_after_removing_single_key() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+
+        // Insert a single key
+        let key = VariableSizeKey::from_str("key1").unwrap();
+        tree.insert(&key, 1, 1, 0).unwrap();
+
+        // Remove the inserted key
+        tree.remove(&key).unwrap();
+
+        // Verify the tree is empty
+        assert!(tree.root.is_none());
     }
 }
