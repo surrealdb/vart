@@ -2473,4 +2473,43 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_range_scan_order_with_random_keys() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+
+        // Define keys in random order
+        let insert_words = ["test3", "test1", "test5", "test4", "test2"];
+
+        // Insert keys into the tree
+        let entries: Vec<KV<VariableSizeKey, i32>> = insert_words
+            .iter()
+            .map(|word| KV {
+                key: VariableSizeKey::from_str(word).unwrap(),
+                value: 1,
+                version: 1,
+                ts: 1,
+            })
+            .collect();
+
+        tree.bulk_insert(&entries, false).unwrap();
+
+        // Define a range that encompasses all keys
+        let range = VariableSizeKey::from("test1".as_bytes().to_vec())
+            ..=VariableSizeKey::from("test5".as_bytes().to_vec());
+
+        // Collect results of the range scan
+        let results: Vec<_> = tree.range(range).collect();
+
+        // Expected order
+        let expected_order = ["test1", "test2", "test3", "test4", "test5"];
+
+        // Assert that results are in expected order
+        for (i, result) in results.iter().enumerate() {
+            let result_str = std::str::from_utf8(result.0.as_slice()).expect("Invalid UTF-8");
+            // The variable size key has a trailing null byte, so we need to trim it
+            let result_str_trimmed = &result_str[..result_str.len() - 1];
+            assert_eq!(result_str_trimmed, expected_order[i]);
+        }
+    }
 }
