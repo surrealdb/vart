@@ -583,6 +583,35 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         Some((twig.key.clone(), val.value.clone(), val.version, val.ts))
     }
 
+    #[inline]
+    pub fn get_value_by_ts(&self, ts: u64) -> Option<(P, V, u64, u64)> {
+        // Unwrap the NodeType::Twig to access the TwigNode instance.
+        let NodeType::Twig(twig) = &self.node_type else {
+            return None;
+        };
+
+        // Get the value from the TwigNode instance by the specified version.
+        let val = twig.get_leaf_by_ts(ts)?;
+
+        // Return the retrieved key, value, and version as a tuple.
+        // TODO: should return copy of value or reference?
+        Some((twig.key.clone(), val.value.clone(), val.version, val.ts))
+    }
+
+    #[inline]
+    pub fn get_all_versions(&self) -> Option<Vec<(V, u64, u64)>> {
+        // Unwrap the NodeType::Twig to access the TwigNode instance.
+        let NodeType::Twig(twig) = &self.node_type else {
+            return None;
+        };
+
+        // Get the value from the TwigNode instance by the specified version.
+        let val = twig.get_all_versions();
+
+        // Return the retrieved key, value, and version as a tuple.
+        Some(val)
+    }
+
     pub fn node_type_name(&self) -> String {
         match &self.node_type {
             NodeType::Node1(_) => "Node1".to_string(),
@@ -794,7 +823,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     ///
     /// - `cur_node`: A reference to the current node.
     /// - `key`: The key to be searched for.
-    /// - `ts`: The version for which to retrieve the value.
+    /// - `version`: The version for which to retrieve the value.
     ///
     /// # Returns
     ///
@@ -805,38 +834,81 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         key: &P,
         version: u64,
     ) -> Result<(P, V, u64, u64), TrieError> {
-        // Initialize the traversal variables.
+        Self::get_recurse_common(cur_node, key, version, Node::get_value_by_version)
+    }
+
+    /// Recursively searches for a key at a specific timestamp
+    pub fn get_recurse_at_ts(
+        cur_node: &Node<P, V>,
+        key: &P,
+        ts: u64,
+    ) -> Result<(P, V, u64, u64), TrieError> {
+        Self::get_recurse_common(cur_node, key, ts, Node::get_value_by_ts)
+    }
+
+    // Common function with a closure for value retrieval
+    fn get_recurse_common<F>(
+        cur_node: &Node<P, V>,
+        key: &P,
+        criteria: u64,
+        value_retriever: F,
+    ) -> Result<(P, V, u64, u64), TrieError>
+    where
+        F: Fn(&Node<P, V>, u64) -> Option<(P, V, u64, u64)>,
+    {
         let mut cur_node = cur_node;
         let mut depth = 0;
 
-        // Start a loop to navigate through the tree.
         loop {
-            // Determine the prefix of the key after the current depth.
             let key_prefix = key.prefix_after(depth);
             let key_prefix = key_prefix.as_slice();
-            // Obtain the prefix of the current node.
             let prefix = cur_node.prefix();
-            // Find the longest common prefix between the node's prefix and the key's prefix.
             let lcp = prefix.longest_common_prefix(key_prefix);
 
-            // If the longest common prefix does not match the entire node's prefix, the key is not present.
             if lcp != prefix.len() {
                 return Err(TrieError::KeyNotFound);
             }
 
-            // If the current node's prefix length matches the key's prefix length, retrieve the value.
             if prefix.len() == key_prefix.len() {
-                let Some(val) = cur_node.get_value_by_version(version) else {
-                    return Err(TrieError::KeyNotFound);
-                };
-                return Ok((val.0, val.1, val.2, val.3));
+                let val = value_retriever(cur_node, criteria).ok_or(TrieError::KeyNotFound)?;
+                return Ok(val);
             }
 
-            // Determine the character at the next position after the prefix in the key.
             let k = key.at(depth + prefix.len());
-            // Increment the depth by the prefix length.
             depth += prefix.len();
-            // Find the child node corresponding to the character and update the current node for further traversal.
+
+            match cur_node.find_child(k) {
+                Some(child) => cur_node = child,
+                None => return Err(TrieError::KeyNotFound),
+            }
+        }
+    }
+
+    pub fn get_version_history(
+        cur_node: &Node<P, V>,
+        key: &P,
+    ) -> Result<Vec<(V, u64, u64)>, TrieError> {
+        let mut cur_node = cur_node;
+        let mut depth = 0;
+
+        loop {
+            let key_prefix = key.prefix_after(depth);
+            let key_prefix = key_prefix.as_slice();
+            let prefix = cur_node.prefix();
+            let lcp = prefix.longest_common_prefix(key_prefix);
+
+            if lcp != prefix.len() {
+                return Err(TrieError::KeyNotFound);
+            }
+
+            if prefix.len() == key_prefix.len() {
+                let val = cur_node.get_all_versions().ok_or(TrieError::KeyNotFound)?;
+                return Ok(val);
+            }
+
+            let k = key.at(depth + prefix.len());
+            depth += prefix.len();
+
             match cur_node.find_child(k) {
                 Some(child) => cur_node = child,
                 None => return Err(TrieError::KeyNotFound),

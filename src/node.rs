@@ -21,7 +21,7 @@ pub trait Version {
 }
 
 #[derive(Clone)]
-pub struct TwigNode<K: KeyTrait, V> {
+pub struct TwigNode<K: KeyTrait, V: Clone> {
     pub(crate) prefix: K,
     pub(crate) key: K,
     pub(crate) values: Vec<Arc<LeafValue<V>>>,
@@ -29,19 +29,19 @@ pub struct TwigNode<K: KeyTrait, V> {
 }
 
 #[derive(Copy, Clone)]
-pub struct LeafValue<V> {
+pub struct LeafValue<V: Clone> {
     pub(crate) value: V,
     pub(crate) version: u64,
     pub(crate) ts: u64,
 }
 
-impl<V> LeafValue<V> {
+impl<V: Clone> LeafValue<V> {
     pub fn new(value: V, version: u64, ts: u64) -> Self {
         LeafValue { value, version, ts }
     }
 }
 
-impl<K: KeyTrait, V> TwigNode<K, V> {
+impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
     pub fn new(prefix: K, key: K) -> Self {
         TwigNode {
             prefix,
@@ -64,13 +64,22 @@ impl<K: KeyTrait, V> TwigNode<K, V> {
 
         let new_leaf_value = LeafValue::new(value, version, ts);
 
-        // Insert new LeafValue in sorted order
-        let insertion_index =
-            match new_values.binary_search_by(|v| v.version.cmp(&new_leaf_value.version)) {
-                Ok(index) => index,
-                Err(index) => index,
-            };
-        new_values.insert(insertion_index, Arc::new(new_leaf_value));
+        // Check if a LeafValue with the same version exists and update or insert accordingly
+        match new_values.binary_search_by(|v| v.version.cmp(&new_leaf_value.version)) {
+            Ok(index) => {
+                // If an entry with the same version and timestamp exists, just put the same value
+                if self.values[index].ts == ts {
+                    new_values[index] = Arc::new(new_leaf_value);
+                } else {
+                    // If an entry with the same version and different timestamp exists, add a new entry
+                    new_values.insert(index, Arc::new(new_leaf_value));
+                }
+            }
+            Err(index) => {
+                // If no entry with the same version exists, insert the new value at the correct position
+                new_values.insert(index, Arc::new(new_leaf_value));
+            }
+        };
 
         let new_version = new_values
             .iter()
@@ -94,7 +103,15 @@ impl<K: KeyTrait, V> TwigNode<K, V> {
             .values
             .binary_search_by(|v| v.version.cmp(&new_leaf_value.version))
         {
-            Ok(index) => index,
+            Ok(index) => {
+                // If found, check if the timestamp also matches
+                if self.values[index].ts == ts {
+                    // If version and ts match, do not insert and return early
+                    return;
+                }
+
+                index
+            }
             Err(index) => index,
         };
         self.values
@@ -122,12 +139,27 @@ impl<K: KeyTrait, V> TwigNode<K, V> {
             .cloned()
     }
 
+    pub fn get_leaf_by_ts(&self, ts: u64) -> Option<Arc<LeafValue<V>>> {
+        self.values
+            .iter()
+            .filter(|value| value.ts <= ts)
+            .max_by_key(|value| value.ts)
+            .cloned()
+    }
+
+    pub fn get_all_versions(&self) -> Vec<(V, u64, u64)> {
+        self.values
+            .iter()
+            .map(|value| (value.value.clone(), value.version, value.ts))
+            .collect()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &Arc<LeafValue<V>>> {
         self.values.iter()
     }
 }
 
-impl<K: KeyTrait, V> Version for TwigNode<K, V> {
+impl<K: KeyTrait, V: Clone> Version for TwigNode<K, V> {
     fn version(&self) -> u64 {
         self.version
     }
@@ -1097,10 +1129,10 @@ mod tests {
         let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
         node.insert_mut(42, 123, 0);
         node.insert_mut(43, 124, 1);
-        let leaf_by_ts = node.get_leaf_by_version(123);
-        assert_eq!(leaf_by_ts.unwrap().value, 42);
-        let leaf_by_ts = node.get_leaf_by_version(124);
-        assert_eq!(leaf_by_ts.unwrap().value, 43);
+        let leaf = node.get_leaf_by_version(123);
+        assert_eq!(leaf.unwrap().value, 42);
+        let leaf = node.get_leaf_by_version(124);
+        assert_eq!(leaf.unwrap().value, 43);
     }
 
     #[test]
@@ -1179,5 +1211,26 @@ mod tests {
         }
         // Verify the keys have been inserted in order
         assert_eq!(node16.keys, *(0..16).collect::<Vec<u8>>());
+    }
+
+    #[test]
+    fn twig_get_leaf_by_ts() {
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        // Inserting leaves with different timestamps
+        node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
+        node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
+
+        // Test case 1: Retrieve leaf by exact timestamp
+        let leaf_by_ts = node.get_leaf_by_ts(10);
+        assert_eq!(leaf_by_ts.unwrap().value, 50);
+
+        // Test case 2: Retrieve leaf by another exact timestamp
+        let leaf_by_ts = node.get_leaf_by_ts(20);
+        assert_eq!(leaf_by_ts.unwrap().value, 51);
+
+        // Test case 3: Attempt to retrieve leaf by a non-existent timestamp
+        let leaf_by_ts = node.get_leaf_by_ts(30);
+        assert_eq!(leaf_by_ts.unwrap().value, 51);
     }
 }

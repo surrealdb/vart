@@ -55,7 +55,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         Ok(())
     }
 
-    /// Retrieves the value and timestamp associated with the given key from the snapshot.
+    /// Retrieves the value, version and timestamp associated with the given key from the snapshot.
     pub fn get(&self, key: &P) -> Result<(V, u64, u64), TrieError> {
         // Check if the snapshot is already closed
         self.is_closed()?;
@@ -64,6 +64,31 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         match self.root.as_ref() {
             Some(root) => Node::get_recurse(root, key, root.version())
                 .map(|(_, value, version, ts)| (value, version, ts)),
+            None => Err(TrieError::KeyNotFound),
+        }
+    }
+
+    /// Retrieves the value, version associated with the given key from the snapshot at the specified timestamp.
+    pub fn get_at_ts(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
+        // Check if the snapshot is already closed
+        self.is_closed()?;
+
+        match self.root.as_ref() {
+            Some(root) => Node::get_recurse_at_ts(root, key, ts)
+                .map(|(_, value, version, _)| (value, version)),
+            None => Err(TrieError::KeyNotFound),
+        }
+    }
+
+    pub fn get_version_history(&self, key: &P) -> Result<Vec<(V, u64, u64)>, TrieError> {
+        // Check if the snapshot is already closed
+        self.is_closed()?;
+
+        match self.root.as_ref() {
+            Some(root) => {
+                // Directly return the Result from Node::get_all_versions
+                Node::get_version_history(root, key)
+            }
             None => Err(TrieError::KeyNotFound),
         }
     }
@@ -121,6 +146,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
 mod tests {
     use crate::art::Tree;
     use crate::iter::IterationPointer;
+    use crate::TrieError;
     use crate::VariableSizeKey;
     use std::str::FromStr;
 
@@ -294,5 +320,146 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_get_at_ts_successful_retrieval() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        let value = 10;
+        let ts = 100;
+        snapshot.insert(&key, value, ts).unwrap();
+
+        let (retrieved_value, retrieved_version) = snapshot.get_at_ts(&key, ts).unwrap();
+        assert_eq!(retrieved_value, value);
+        assert_eq!(retrieved_version, 1);
+    }
+
+    #[test]
+    fn test_get_at_ts_key_not_found() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("nonexistent_key").unwrap();
+        let result = snapshot.get_at_ts(&key, 100);
+        assert!(matches!(result, Err(TrieError::KeyNotFound)));
+    }
+
+    #[test]
+    fn test_get_at_ts_closed_snapshot() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        snapshot.closed = true;
+        let key = VariableSizeKey::from_str("any_key").unwrap();
+        let result = snapshot.get_at_ts(&key, 100);
+        assert!(matches!(result, Err(TrieError::SnapshotAlreadyClosed)));
+    }
+
+    #[test]
+    fn test_get_at_ts_timestamp_before_insertion() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        let value = 10;
+        let ts = 100;
+        snapshot.insert(&key, value, ts).unwrap();
+
+        let result = snapshot.get_at_ts(&key, ts - 1);
+        assert!(matches!(result, Err(TrieError::KeyNotFound)));
+    }
+
+    #[test]
+    fn test_get_at_ts_multiple_versions() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        let value1 = 10;
+        let value2 = 11;
+        let ts1 = 100;
+        let ts2 = 200;
+        snapshot.insert(&key, value1, ts1).unwrap();
+        snapshot.insert(&key, value2, ts2).unwrap();
+
+        let (retrieved_value, _) = snapshot.get_at_ts(&key, ts2).unwrap();
+        assert_eq!(retrieved_value, value2);
+    }
+
+    #[test]
+    fn test_retrieving_value_at_timestamp_between_two_inserts() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        let value1 = 10;
+        let value2 = 20;
+        let ts1 = 100;
+        let ts2 = 200;
+        let ts_query = 150;
+        snapshot.insert(&key, value1, ts1).unwrap();
+        snapshot.insert(&key, value2, ts2).unwrap();
+
+        let (retrieved_value, _) = snapshot.get_at_ts(&key, ts_query).unwrap();
+        assert_eq!(retrieved_value, value1);
+    }
+
+    #[test]
+    fn test_inserting_and_retrieving_with_same_timestamp() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        let value1 = 10;
+        let value2 = 20;
+        let ts = 100;
+        snapshot.insert(&key, value1, ts).unwrap();
+        snapshot.insert(&key, value2, ts).unwrap();
+
+        let (retrieved_value, _) = snapshot.get_at_ts(&key, ts).unwrap();
+        assert_eq!(retrieved_value, value2);
+    }
+
+    #[test]
+    fn test_retrieving_value_at_future_timestamp() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        let value = 10;
+        let ts_insert = 100;
+        let ts_future = 200;
+        snapshot.insert(&key, value, ts_insert).unwrap();
+
+        let (retrieved_value, _) = snapshot.get_at_ts(&key, ts_future).unwrap();
+        assert_eq!(retrieved_value, value);
+    }
+
+    #[test]
+    fn test_inserting_values_with_decreasing_timestamps() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        let value1 = 10;
+        let value2 = 20;
+        let ts1 = 200;
+        let ts2 = 100;
+        snapshot.insert(&key, value1, ts1).unwrap();
+        snapshot.insert(&key, value2, ts2).unwrap();
+
+        let (retrieved_value_early, _) = snapshot.get_at_ts(&key, ts2).unwrap();
+        let (retrieved_value_late, _) = snapshot.get_at_ts(&key, ts1).unwrap();
+        assert_eq!(retrieved_value_early, value2);
+        assert_eq!(retrieved_value_late, value1);
+    }
+
+    #[test]
+    fn test_retrieving_value_after_deleting_it() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        let value = 10;
+        let ts_insert = 100;
+        let ts_query = 150;
+        snapshot.insert(&key, value, ts_insert).unwrap();
+        snapshot.remove(&key).unwrap();
+
+        let result = snapshot.get_at_ts(&key, ts_query);
+        assert!(result.is_err());
     }
 }
