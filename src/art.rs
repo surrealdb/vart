@@ -2509,8 +2509,7 @@ mod tests {
 
         for i in (0..num_keys).rev() {
             let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
-            tree.insert_unchecked(&key, i as i32, i, 0)
-                .unwrap();
+            tree.insert_unchecked(&key, i as i32, i, 0).unwrap();
         }
 
         // Verify total entries
@@ -2527,10 +2526,8 @@ mod tests {
         let key = VariableSizeKey::from_str("key1").unwrap();
 
         // Insert the same key with two different versions
-        tree.insert_unchecked(&key, 2, 2, 0)
-            .unwrap(); // Second version
-        tree.insert_unchecked(&key, 1, 1, 0)
-            .unwrap(); // First version
+        tree.insert_unchecked(&key, 2, 2, 0).unwrap(); // Second version
+        tree.insert_unchecked(&key, 1, 1, 0).unwrap(); // First version
 
         // Verify the order during iteration
         let mut iter = tree.iter();
@@ -2552,10 +2549,8 @@ mod tests {
         // Insert two versions for each key
         for i in 0..num_keys {
             let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
-            tree.insert_unchecked(&key, i as u64 + 1000, 2, 0)
-                .unwrap(); // Second version
-            tree.insert_unchecked(&key, i as u64, 1, 0)
-                .unwrap(); // First version
+            tree.insert_unchecked(&key, i as u64 + 1000, 2, 0).unwrap(); // Second version
+            tree.insert_unchecked(&key, i as u64, 1, 0).unwrap(); // First version
         }
 
         // Verify get at version 0 gives the latest version for each key
@@ -2715,8 +2710,8 @@ mod tests {
         let value1_2 = 20;
         let ts1_1 = 100;
         let ts1_2 = 200;
-        tree.insert(&key1,  value1_1, 0, ts1_1).unwrap();
-        tree.insert(&key1, value1_2,0, ts1_2).unwrap();
+        tree.insert(&key1, value1_1, 0, ts1_1).unwrap();
+        tree.insert(&key1, value1_2, 0, ts1_2).unwrap();
 
         let history1 = tree.get_version_history(&key1).unwrap();
         assert_eq!(history1.len(), 2);
@@ -2748,6 +2743,37 @@ mod tests {
         // Scenario 3: Ensure no history for a non-existent key
         let key3 = VariableSizeKey::from_str("non_existent_key").unwrap();
         assert!(tree.get_version_history(&key3).is_err());
+    }
+
+    #[test]
+    fn test_retrieving_value_at_future_timestamp() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        let value = 10;
+        let ts_insert = 100;
+        let ts_future = 200;
+        tree.insert(&key, value, 0, ts_insert).unwrap();
+
+        let (retrieved_value, version, ts) = tree.get_at_ts(&key, ts_future).unwrap();
+        assert_eq!(retrieved_value, value);
+        assert_eq!(version, 1);
+        assert_eq!(ts, ts_insert);
+    }
+
+    #[test]
+    fn test_inserting_and_retrieving_with_same_timestamp() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        let value1 = 10;
+        let value2 = 20;
+        let ts = 100;
+        tree.insert_unchecked(&key, value1, 1, ts).unwrap();
+        tree.insert_unchecked(&key, value2, 1, ts).unwrap();
+
+        let (retrieved_value, version, t) = tree.get_at_ts(&key, ts).unwrap();
+        assert_eq!(retrieved_value, value2);
+        assert_eq!(version, 1);
+        assert_eq!(t, ts);
     }
 
 
