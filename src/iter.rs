@@ -7,6 +7,7 @@ use crate::KeyTrait;
 
 // TODO: need to add more tests for snapshot readers
 /// A structure representing a pointer for iterating over the Trie's key-value pairs.
+/// The purpose of this structure is to keep track of the total number of readers in a snapshot.
 pub struct IterationPointer<P: KeyTrait, V: Clone> {
     root: Arc<Node<P, V>>,
 }
@@ -32,7 +33,7 @@ impl<P: KeyTrait, V: Clone> IterationPointer<P, V> {
         Iter::new(Some(&self.root))
     }
 
-    /// Returns an iterator over all
+    /// Returns an iterator over all versions of the key-value pairs within the Trie.
     pub fn iter_with_versions(&self) -> VersionedIter<P, V> {
         VersionedIter::new(Some(&self.root))
     }
