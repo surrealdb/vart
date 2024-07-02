@@ -569,7 +569,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     /// If no matching value is found, returns `None`.
     ///
     #[inline]
-    pub fn get_value_by_version(&self, version: u64) -> Option<(P, V, u64, u64)> {
+    pub fn get_value_by_version(&self, version: u64) -> Option<(V, u64, u64)> {
         // Unwrap the NodeType::Twig to access the TwigNode instance.
         let NodeType::Twig(twig) = &self.node_type else {
             return None;
@@ -580,11 +580,11 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
         // Return the retrieved key, value, and version as a tuple.
         // TODO: should return copy of value or reference?
-        Some((twig.key.clone(), val.value.clone(), val.version, val.ts))
+        Some((val.value.clone(), val.version, val.ts))
     }
 
     #[inline]
-    pub fn get_value_by_ts(&self, ts: u64) -> Option<(P, V, u64, u64)> {
+    pub fn get_value_by_ts(&self, ts: u64) -> Option<(V, u64, u64)> {
         // Unwrap the NodeType::Twig to access the TwigNode instance.
         let NodeType::Twig(twig) = &self.node_type else {
             return None;
@@ -595,7 +595,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
         // Return the retrieved key, value, and version as a tuple.
         // TODO: should return copy of value or reference?
-        Some((twig.key.clone(), val.value.clone(), val.version, val.ts))
+        Some((val.value.clone(), val.version, val.ts))
     }
 
     #[inline]
@@ -833,7 +833,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         cur_node: &Node<P, V>,
         key: &P,
         version: u64,
-    ) -> Result<(P, V, u64, u64), TrieError> {
+    ) -> Result<(V, u64, u64), TrieError> {
         Self::get_recurse_common(cur_node, key, version, Node::get_value_by_version)
     }
 
@@ -842,8 +842,39 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         cur_node: &Node<P, V>,
         key: &P,
         ts: u64,
-    ) -> Result<(P, V, u64, u64), TrieError> {
+    ) -> Result<(V, u64, u64), TrieError> {
         Self::get_recurse_common(cur_node, key, ts, Node::get_value_by_ts)
+    }
+
+    fn navigate_to_node<'a>(
+        cur_node: &'a Node<P, V>,
+        key: &P,
+    ) -> Result<&'a Node<P, V>, TrieError> {
+        let mut cur_node = cur_node;
+        let mut depth = 0;
+
+        loop {
+            let key_prefix = key.prefix_after(depth);
+            let key_prefix = key_prefix.as_slice();
+            let prefix = cur_node.prefix();
+            let lcp = prefix.longest_common_prefix(key_prefix);
+
+            if lcp != prefix.len() {
+                return Err(TrieError::KeyNotFound);
+            }
+
+            if prefix.len() == key_prefix.len() {
+                return Ok(cur_node);
+            }
+
+            let k = key.at(depth + prefix.len());
+            depth += prefix.len();
+
+            match cur_node.find_child(k) {
+                Some(child) => cur_node = child,
+                None => return Err(TrieError::KeyNotFound),
+            }
+        }
     }
 
     // Common function with a closure for value retrieval
@@ -852,68 +883,20 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         key: &P,
         criteria: u64,
         value_retriever: F,
-    ) -> Result<(P, V, u64, u64), TrieError>
+    ) -> Result<(V, u64, u64), TrieError>
     where
-        F: Fn(&Node<P, V>, u64) -> Option<(P, V, u64, u64)>,
+        F: Fn(&Node<P, V>, u64) -> Option<(V, u64, u64)>,
     {
-        let mut cur_node = cur_node;
-        let mut depth = 0;
-
-        loop {
-            let key_prefix = key.prefix_after(depth);
-            let key_prefix = key_prefix.as_slice();
-            let prefix = cur_node.prefix();
-            let lcp = prefix.longest_common_prefix(key_prefix);
-
-            if lcp != prefix.len() {
-                return Err(TrieError::KeyNotFound);
-            }
-
-            if prefix.len() == key_prefix.len() {
-                let val = value_retriever(cur_node, criteria).ok_or(TrieError::KeyNotFound)?;
-                return Ok(val);
-            }
-
-            let k = key.at(depth + prefix.len());
-            depth += prefix.len();
-
-            match cur_node.find_child(k) {
-                Some(child) => cur_node = child,
-                None => return Err(TrieError::KeyNotFound),
-            }
-        }
+        let cur_node = Self::navigate_to_node(cur_node, key)?;
+        value_retriever(cur_node, criteria).ok_or(TrieError::KeyNotFound)
     }
 
     pub fn get_version_history(
         cur_node: &Node<P, V>,
         key: &P,
     ) -> Result<Vec<(V, u64, u64)>, TrieError> {
-        let mut cur_node = cur_node;
-        let mut depth = 0;
-
-        loop {
-            let key_prefix = key.prefix_after(depth);
-            let key_prefix = key_prefix.as_slice();
-            let prefix = cur_node.prefix();
-            let lcp = prefix.longest_common_prefix(key_prefix);
-
-            if lcp != prefix.len() {
-                return Err(TrieError::KeyNotFound);
-            }
-
-            if prefix.len() == key_prefix.len() {
-                let val = cur_node.get_all_versions().ok_or(TrieError::KeyNotFound)?;
-                return Ok(val);
-            }
-
-            let k = key.at(depth + prefix.len());
-            depth += prefix.len();
-
-            match cur_node.find_child(k) {
-                Some(child) => cur_node = child,
-                None => return Err(TrieError::KeyNotFound),
-            }
-        }
+        let cur_node = Self::navigate_to_node(cur_node, key)?;
+        cur_node.get_all_versions().ok_or(TrieError::KeyNotFound)
     }
 
     /// Returns an iterator that iterates over child nodes of the current node.
@@ -1225,7 +1208,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Ok(is_deleted)
     }
 
-    pub fn get(&self, key: &P, version: u64) -> Result<(P, V, u64, u64), TrieError> {
+    pub fn get(&self, key: &P, version: u64) -> Result<(V, u64, u64), TrieError> {
         // Check if the tree is already closed
         self.check_if_closed()?;
 
@@ -1363,6 +1346,36 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 
         Ok(())
     }
+
+    pub fn get_at_ts(&self, key: &P, ts: u64) -> Result<(V, u64, u64), TrieError> {
+        // Check if the tree is already closed
+        self.check_if_closed()?;
+
+        if self.root.is_none() {
+            return Err(TrieError::Other("cannot read from empty tree".to_string()));
+        }
+
+        let root = self.root.as_ref().unwrap();
+
+        Node::get_recurse_at_ts(root, key, ts)
+    }
+
+    pub fn get_version_history(&self, key: &P) -> Result<Vec<(V, u64, u64)>, TrieError> {
+        // Check if the tree is already closed
+        self.check_if_closed()?;
+
+        if self.root.is_none() {
+            return Err(TrieError::Other("cannot read from empty tree".to_string()));
+        }
+
+        match self.root.as_ref() {
+            Some(root) => {
+                // Directly return the Result from Node::get_all_versions
+                Node::get_version_history(root, key)
+            }
+            None => Err(TrieError::KeyNotFound),
+        }
+    }
 }
 
 /*
@@ -1376,6 +1389,7 @@ mod tests {
     use rand::{thread_rng, Rng};
     use std::str::FromStr;
 
+    use rand::distributions::Alphanumeric;
     use std::fs::File;
     use std::io::{self, BufRead, BufReader};
 
@@ -1401,7 +1415,7 @@ mod tests {
             // Search phase
             for word in &words {
                 let key = VariableSizeKey::from_str(word).unwrap();
-                let (_, val, _, _) = tree.get(&key, 0).unwrap();
+                let (val, _, _) = tree.get(&key, 0).unwrap();
                 assert_eq!(val, 1);
             }
 
@@ -1455,7 +1469,7 @@ mod tests {
 
         // Verification phase
         for (word, expected_val) in &words_to_insert {
-            let (_, val, _, _) = tree
+            let (val, _, _) = tree
                 .get(&VariableSizeKey::from_str(word).unwrap(), 0)
                 .unwrap();
             assert_eq!(val, *expected_val);
@@ -1472,7 +1486,7 @@ mod tests {
         let _ = tree.insert(&key, value, 0, 0);
 
         // Verification phase
-        let (_, val, _ts, _) = tree.get(&key, 0).unwrap();
+        let (val, _ts, _) = tree.get(&key, 0).unwrap();
         assert_eq!(val, value);
     }
 
@@ -1808,7 +1822,7 @@ mod tests {
         let mut curr_version = 1;
         for kvt in &kvts {
             let key = VariableSizeKey::from(kvt.k.clone());
-            let (_, val, version, _ts) = tree.get(&key, 0).unwrap();
+            let (val, version, _ts) = tree.get(&key, 0).unwrap();
             assert_eq!(val, 1);
 
             if kvt.version == 0 {
@@ -1836,7 +1850,7 @@ mod tests {
         assert!(tree.insert(key1, 1, 0, 3).is_ok());
 
         // get key1 should return version 2 as the same key was inserted and updated
-        let (_, val, version, ts) = tree.get(key1, 0).unwrap();
+        let (val, version, ts) = tree.get(key1, 0).unwrap();
         assert_eq!(val, 1);
         assert_eq!(version, 2);
         assert_eq!(ts, 3);
@@ -1847,7 +1861,7 @@ mod tests {
 
         // update key1 with newer version should pass
         assert!(tree.insert(key1, 1, 8, 5).is_ok());
-        let (_, val, version, ts) = tree.get(key1, 0).unwrap();
+        let (val, version, ts) = tree.get(key1, 0).unwrap();
         assert_eq!(val, 1);
         assert_eq!(version, 8);
         assert_eq!(ts, 5);
@@ -1869,7 +1883,7 @@ mod tests {
         // Attempt update with non-increasing version
         assert!(tree.insert(&key1, 1, 2, 0).is_err());
         assert_eq!(initial_version_key1, tree.version());
-        let (_, val, version, _) = tree.get(&key1, 0).unwrap();
+        let (val, version, _) = tree.get(&key1, 0).unwrap();
         assert_eq!(val, 1);
         assert_eq!(version, 10);
 
@@ -1880,7 +1894,7 @@ mod tests {
         // Attempt update with non-increasing version for the second key
         assert!(tree.insert(&key2, 1, 11, 0).is_err());
         assert_eq!(initial_version_key2, tree.version());
-        let (_, val, version, _ts) = tree.get(&key2, 0).unwrap();
+        let (val, version, _ts) = tree.get(&key2, 0).unwrap();
         assert_eq!(val, 1);
         assert_eq!(version, 15);
 
@@ -2068,11 +2082,11 @@ mod tests {
         tree.insert(&key2, 3, 11, 0).unwrap();
 
         // Versioned retrievals and assertions
-        let (_, val, _, _) = tree.get(&key1, 1).unwrap();
+        let (val, _, _) = tree.get(&key1, 1).unwrap();
         assert_eq!(val, 1);
-        let (_, val, _, _) = tree.get(&key1, 10).unwrap();
+        let (val, _, _) = tree.get(&key1, 10).unwrap();
         assert_eq!(val, 2);
-        let (_, val, _, _) = tree.get(&key2, 11).unwrap();
+        let (val, _, _) = tree.get(&key2, 11).unwrap();
         assert_eq!(val, 3);
 
         // Iteration and verification
@@ -2132,7 +2146,7 @@ mod tests {
         assert!(tree.version() == curr_version + 2);
 
         for kv in kv_pairs {
-            let (_, val, version, _) = tree.get(&kv.key, 0).unwrap();
+            let (val, version, _) = tree.get(&kv.key, 0).unwrap();
             assert_eq!(val, kv.value);
             if kv.version == 0 {
                 assert_eq!(version, curr_version + 1);
@@ -2314,7 +2328,7 @@ mod tests {
 
         // Verify each key's version and value
         for kv in kv_pairs {
-            let (_, val, version, _) = tree.get(&kv.key, 0).unwrap();
+            let (val, version, _) = tree.get(&kv.key, 0).unwrap();
             assert_eq!(val, kv.value);
             assert_eq!(version, curr_version + 1);
         }
@@ -2431,7 +2445,7 @@ mod tests {
 
         // Verify
         assert!(tree.get(&key1, 0).is_err());
-        assert_eq!(tree.get(&key2, 0).unwrap().1, 2);
+        assert_eq!(tree.get(&key2, 0).unwrap().0, 2);
     }
 
     #[test]
@@ -2525,7 +2539,7 @@ mod tests {
         assert_eq!(version, &2);
 
         // Verify get at version 0 gives the latest version
-        let (_, value, version, _) = tree.get(&key, 0).unwrap();
+        let (value, version, _) = tree.get(&key, 0).unwrap();
         assert_eq!(value, 2);
         assert_eq!(version, 2);
     }
@@ -2547,7 +2561,7 @@ mod tests {
         // Verify get at version 0 gives the latest version for each key
         for i in 0..num_keys {
             let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
-            let (_, value, version, _) = tree.get(&key, 0).unwrap();
+            let (value, version, _) = tree.get(&key, 0).unwrap();
             assert_eq!(
                 value,
                 i as u64 + 1000,
@@ -2662,4 +2676,79 @@ mod tests {
         // Verify the tree is empty
         assert!(tree.root.is_none());
     }
+
+    #[test]
+    fn verify_iter() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        let mut rng = rand::thread_rng();
+        let mut inserted_data = Vec::new();
+
+        // Generate and insert random keys with versions
+        for version in 1u64..=100 {
+            let random_key: String = (0..10).map(|_| rng.sample(Alphanumeric) as char).collect();
+            let key = VariableSizeKey::from_str(&random_key).unwrap();
+            let value = rng.gen_range(1..100);
+            let ts = rng.gen_range(1..100);
+            tree.insert(&key, value, version, ts).unwrap();
+            inserted_data.push((key.to_slice().to_vec(), value, version, ts));
+        }
+
+        // Iteration and verification
+        let mut count = 0;
+        let tree_iter = tree.iter();
+        for (key, value, version, ts) in tree_iter {
+            assert!(inserted_data.contains(&(key, *value, *version, *ts)));
+            count += 1;
+        }
+
+        // Ensure all inserted items are iterated over
+        assert_eq!(inserted_data.len(), count);
+    }
+
+    #[test]
+    fn test_get_all_versions() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
+
+        // Scenario 1: Insert multiple values for the same key with different timestamps
+        let key1 = VariableSizeKey::from_str("test_key1").unwrap();
+        let value1_1 = 10;
+        let value1_2 = 20;
+        let ts1_1 = 100;
+        let ts1_2 = 200;
+        tree.insert(&key1,  value1_1, 0, ts1_1).unwrap();
+        tree.insert(&key1, value1_2,0, ts1_2).unwrap();
+
+        let history1 = tree.get_version_history(&key1).unwrap();
+        assert_eq!(history1.len(), 2);
+
+        let (retrieved_value1_1, v1_1, t1_1) = history1[0];
+        assert_eq!(retrieved_value1_1, value1_1);
+        assert_eq!(v1_1, 1);
+        assert_eq!(t1_1, ts1_1);
+
+        let (retrieved_value1_2, v1_2, t1_2) = history1[1];
+        assert_eq!(retrieved_value1_2, value1_2);
+        assert_eq!(v1_2, 2);
+        assert_eq!(t1_2, ts1_2);
+
+        // Scenario 2: Insert values for different keys
+        let key2 = VariableSizeKey::from_str("test_key2").unwrap();
+        let value2 = 30;
+        let ts2 = 300;
+        tree.insert(&key2, value2, 0, ts2).unwrap();
+
+        let history2 = tree.get_version_history(&key2).unwrap();
+        assert_eq!(history2.len(), 1);
+
+        let (retrieved_value2, v2, t2) = history2[0];
+        assert_eq!(retrieved_value2, value2);
+        assert_eq!(v2, 3);
+        assert_eq!(t2, ts2);
+
+        // Scenario 3: Ensure no history for a non-existent key
+        let key3 = VariableSizeKey::from_str("non_existent_key").unwrap();
+        assert!(tree.get_version_history(&key3).is_err());
+    }
+
+
 }

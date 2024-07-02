@@ -72,7 +72,23 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
                     new_values[index] = Arc::new(new_leaf_value);
                 } else {
                     // If an entry with the same version and different timestamp exists, add a new entry
-                    new_values.insert(index, Arc::new(new_leaf_value));
+                    // Determine the direction to scan based on the comparison of timestamps
+                    let mut insert_position = index;
+                    if new_values[index].ts < ts {
+                        // Scan forward to find the first entry with a timestamp greater than the new entry's timestamp
+                        insert_position += new_values[index..]
+                            .iter()
+                            .take_while(|v| v.ts <= ts)
+                            .count();
+                    } else {
+                        // Scan backward to find the insertion point before the first entry with a timestamp less than the new entry's timestamp
+                        insert_position -= new_values[..index]
+                            .iter()
+                            .rev()
+                            .take_while(|v| v.ts >= ts)
+                            .count();
+                    }
+                    new_values.insert(insert_position, Arc::new(new_leaf_value));
                 }
             }
             Err(index) => {
@@ -110,7 +126,23 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
                     return;
                 }
 
-                index
+                let mut insert_position = index;
+                if self.values[index].ts < ts {
+                    // Scan forward to find the first entry with a timestamp greater than the new entry's timestamp
+                    insert_position += self.values[index..]
+                        .iter()
+                        .take_while(|v| v.ts <= ts)
+                        .count();
+                } else {
+                    // Scan backward to find the insertion point before the first entry with a timestamp less than the new entry's timestamp
+                    insert_position -= self.values[..index]
+                        .iter()
+                        .rev()
+                        .take_while(|v| v.ts >= ts)
+                        .count();
+                }
+
+                insert_position
             }
             Err(index) => index,
         };

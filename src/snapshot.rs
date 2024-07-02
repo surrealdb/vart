@@ -63,7 +63,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         // Use a recursive function to get the value and timestamp from the root node
         match self.root.as_ref() {
             Some(root) => Node::get_recurse(root, key, root.version())
-                .map(|(_, value, version, ts)| (value, version, ts)),
+                .map(|(value, version, ts)| (value, version, ts)),
             None => Err(TrieError::KeyNotFound),
         }
     }
@@ -74,8 +74,9 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         self.is_closed()?;
 
         match self.root.as_ref() {
-            Some(root) => Node::get_recurse_at_ts(root, key, ts)
-                .map(|(_, value, version, _)| (value, version)),
+            Some(root) => {
+                Node::get_recurse_at_ts(root, key, ts).map(|(value, version, _)| (value, version))
+            }
             None => Err(TrieError::KeyNotFound),
         }
     }
@@ -461,5 +462,51 @@ mod tests {
 
         let result = snapshot.get_at_ts(&key, ts_query);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_all_versions() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+
+        // Scenario 1: Insert multiple values for the same key with different timestamps
+        let key1 = VariableSizeKey::from_str("test_key1").unwrap();
+        let value1_1 = 10;
+        let value1_2 = 20;
+        let ts1_1 = 100;
+        let ts1_2 = 200;
+        snapshot.insert(&key1, value1_1, ts1_1).unwrap();
+        snapshot.insert(&key1, value1_2, ts1_2).unwrap();
+
+        let history1 = snapshot.get_version_history(&key1).unwrap();
+        assert_eq!(history1.len(), 2);
+
+        let (retrieved_value1_1, v1_1, t1_1) = history1[0];
+        assert_eq!(retrieved_value1_1, value1_1);
+        assert_eq!(v1_1, 1);
+        assert_eq!(t1_1, ts1_1);
+
+        let (retrieved_value1_2, v1_2, t1_2) = history1[1];
+        assert_eq!(retrieved_value1_2, value1_2);
+        assert_eq!(v1_2, 1);
+        assert_eq!(t1_2, ts1_2);
+
+        // Scenario 2: Insert values for different keys
+        let key2 = VariableSizeKey::from_str("test_key2").unwrap();
+        let value2 = 30;
+        let ts2 = 300;
+        snapshot.insert(&key2, value2, ts2).unwrap();
+
+        let history2 = snapshot.get_version_history(&key2).unwrap();
+        assert_eq!(history2.len(), 1);
+
+        let (retrieved_value2, v2, t2) = history2[0];
+        assert_eq!(retrieved_value2, value2);
+        assert_eq!(v2, 1);
+        assert_eq!(t2, ts2);
+
+        // Scenario 3: Ensure no history for a non-existent key
+        let key3 = VariableSizeKey::from_str("non_existent_key").unwrap();
+        assert!(snapshot.get_version_history(&key3).is_err());
     }
 }
