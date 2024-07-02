@@ -1065,7 +1065,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         self.insert_common(key, value, version, ts, true)
     }
 
-    pub fn insert_without_version_increment_check(
+    pub fn insert_unchecked(
         &mut self,
         key: &P,
         value: V,
@@ -2470,7 +2470,7 @@ mod tests {
             let id = format!("key{}", i + 1);
             let key = VariableSizeKey::from_str(&id).unwrap();
             if tree
-                .insert_without_version_increment_check(&key, rng.gen::<i32>(), version as u64, 0)
+                .insert_unchecked(&key, rng.gen::<i32>(), version as u64, 0)
                 .is_ok()
             {
                 expected_entries += 1;
@@ -2509,7 +2509,7 @@ mod tests {
 
         for i in (0..num_keys).rev() {
             let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
-            tree.insert_without_version_increment_check(&key, i as i32, i, 0)
+            tree.insert_unchecked(&key, i as i32, i, 0)
                 .unwrap();
         }
 
@@ -2527,9 +2527,9 @@ mod tests {
         let key = VariableSizeKey::from_str("key1").unwrap();
 
         // Insert the same key with two different versions
-        tree.insert_without_version_increment_check(&key, 2, 2, 0)
+        tree.insert_unchecked(&key, 2, 2, 0)
             .unwrap(); // Second version
-        tree.insert_without_version_increment_check(&key, 1, 1, 0)
+        tree.insert_unchecked(&key, 1, 1, 0)
             .unwrap(); // First version
 
         // Verify the order during iteration
@@ -2552,9 +2552,9 @@ mod tests {
         // Insert two versions for each key
         for i in 0..num_keys {
             let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
-            tree.insert_without_version_increment_check(&key, i as u64 + 1000, 2, 0)
+            tree.insert_unchecked(&key, i as u64 + 1000, 2, 0)
                 .unwrap(); // Second version
-            tree.insert_without_version_increment_check(&key, i as u64, 1, 0)
+            tree.insert_unchecked(&key, i as u64, 1, 0)
                 .unwrap(); // First version
         }
 
