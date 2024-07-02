@@ -39,11 +39,11 @@ const NODE256MIN: usize = NODE48MAX + 1;
 /// - `node_type`: The `NodeType` variant representing the type of the node, containing its
 ///                specific structure and associated data.
 ///
-pub struct Node<P: KeyTrait + Clone, V: Clone> {
+pub struct Node<P: KeyTrait, V: Clone> {
     pub(crate) node_type: NodeType<P, V>, // Type of the node
 }
 
-impl<P: KeyTrait + Clone, V: Clone> Version for Node<P, V> {
+impl<P: KeyTrait, V: Clone> Version for Node<P, V> {
     fn version(&self) -> u64 {
         match &self.node_type {
             NodeType::Twig(twig) => twig.version(),
@@ -75,7 +75,7 @@ impl<P: KeyTrait + Clone, V: Clone> Version for Node<P, V> {
 /// - `Node48(Node48<P, Node<P, V>>)`: Represents an inner node with 256 keys and 48 children.
 /// - `Node256(Node256<P, Node<P, V>>)`: Represents an inner node with 256 keys and 256 children.
 ///
-pub(crate) enum NodeType<P: KeyTrait + Clone, V: Clone> {
+pub(crate) enum NodeType<P: KeyTrait, V: Clone> {
     // Twig node of the adaptive radix trie
     Twig(TwigNode<P, V>),
     // Inner node of the adaptive radix trie
@@ -86,7 +86,7 @@ pub(crate) enum NodeType<P: KeyTrait + Clone, V: Clone> {
     Node256(Node256<P, Node<P, V>>),   // Node with 256 keys and 256 children
 }
 
-impl<P: KeyTrait + Clone, V: Clone> Node<P, V> {
+impl<P: KeyTrait, V: Clone> Node<P, V> {
     /// Creates a new Twig node with a given prefix, key, value, and version.
     ///
     /// Constructs a new Twig node using the provided prefix, key, and value. The version
@@ -908,7 +908,7 @@ impl<P: KeyTrait, V: Clone> KV<P, V> {
     }
 }
 
-impl<P: KeyTrait + Clone, V: Clone> NodeType<P, V> {
+impl<P: KeyTrait, V: Clone> NodeType<P, V> {
     fn clone(&self) -> Self {
         match self {
             // twig value not actually cloned

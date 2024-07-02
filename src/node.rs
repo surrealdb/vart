@@ -21,7 +21,7 @@ pub trait Version {
 }
 
 #[derive(Clone)]
-pub struct TwigNode<K: KeyTrait + Clone, V> {
+pub struct TwigNode<K: KeyTrait, V> {
     pub(crate) prefix: K,
     pub(crate) key: K,
     pub(crate) values: Vec<Arc<LeafValue<V>>>,
@@ -41,7 +41,7 @@ impl<V> LeafValue<V> {
     }
 }
 
-impl<K: KeyTrait + Clone, V> TwigNode<K, V> {
+impl<K: KeyTrait, V> TwigNode<K, V> {
     pub fn new(prefix: K, key: K) -> Self {
         TwigNode {
             prefix,
@@ -127,7 +127,7 @@ impl<K: KeyTrait + Clone, V> TwigNode<K, V> {
     }
 }
 
-impl<K: KeyTrait + Clone, V> Version for TwigNode<K, V> {
+impl<K: KeyTrait, V> Version for TwigNode<K, V> {
     fn version(&self) -> u64 {
         self.version
     }
@@ -149,7 +149,7 @@ impl<K: KeyTrait + Clone, V> Version for TwigNode<K, V> {
 // keys are stored in a parallel array. The keys are stored in sorted order, so
 // binary search can be used to find a particular key. The FlatNode is used for
 // storing Node4 and Node16 since they have identical layouts.
-pub struct FlatNode<P: KeyTrait + Clone, N: Version, const WIDTH: usize> {
+pub struct FlatNode<P: KeyTrait, N: Version, const WIDTH: usize> {
     pub(crate) prefix: P,
     pub(crate) version: u64,
     keys: [u8; WIDTH],
@@ -157,7 +157,7 @@ pub struct FlatNode<P: KeyTrait + Clone, N: Version, const WIDTH: usize> {
     num_children: u8,
 }
 
-impl<P: KeyTrait + Clone, N: Version, const WIDTH: usize> FlatNode<P, N, WIDTH> {
+impl<P: KeyTrait, N: Version, const WIDTH: usize> FlatNode<P, N, WIDTH> {
     pub fn new(prefix: P) -> Self {
         let children: [Option<Arc<N>>; WIDTH] = std::array::from_fn(|_| None);
 
@@ -260,7 +260,7 @@ impl<P: KeyTrait + Clone, N: Version, const WIDTH: usize> FlatNode<P, N, WIDTH> 
     }
 }
 
-impl<P: KeyTrait + Clone, N: Version, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N, WIDTH> {
+impl<P: KeyTrait, N: Version, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N, WIDTH> {
     fn clone(&self) -> Self {
         let mut new_node = Self::new(self.prefix.clone());
         for i in 0..self.num_children as usize {
@@ -333,7 +333,7 @@ impl<P: KeyTrait + Clone, N: Version, const WIDTH: usize> NodeTrait<N> for FlatN
     }
 }
 
-impl<P: KeyTrait + Clone, N: Version, const WIDTH: usize> Version for FlatNode<P, N, WIDTH> {
+impl<P: KeyTrait, N: Version, const WIDTH: usize> Version for FlatNode<P, N, WIDTH> {
     fn version(&self) -> u64 {
         self.version
     }
@@ -349,7 +349,7 @@ impl<P: KeyTrait + Clone, N: Version, const WIDTH: usize> Version for FlatNode<P
 // A Node48 is a 256-entry array of pointers to children. The pointers are stored in
 // a Vector Array, which is a Vector of length WIDTH (48) that stores the pointers.
 
-pub struct Node48<P: KeyTrait + Clone, N: Version> {
+pub struct Node48<P: KeyTrait, N: Version> {
     pub(crate) prefix: P,
     pub(crate) version: u64,
     keys: Box<[u8; 256]>,
@@ -357,7 +357,7 @@ pub struct Node48<P: KeyTrait + Clone, N: Version> {
     child_bitmap: u64,
 }
 
-impl<P: KeyTrait + Clone, N: Version> Node48<P, N> {
+impl<P: KeyTrait, N: Version> Node48<P, N> {
     pub fn new(prefix: P) -> Self {
         Self {
             prefix,
@@ -449,7 +449,7 @@ impl<P: KeyTrait + Clone, N: Version> Node48<P, N> {
     }
 }
 
-impl<P: KeyTrait + Clone, N: Version> NodeTrait<N> for Node48<P, N> {
+impl<P: KeyTrait, N: Version> NodeTrait<N> for Node48<P, N> {
     fn clone(&self) -> Self {
         Node48 {
             prefix: self.prefix.clone(),
@@ -510,7 +510,7 @@ impl<P: KeyTrait + Clone, N: Version> NodeTrait<N> for Node48<P, N> {
     }
 }
 
-impl<P: KeyTrait + Clone, N: Version> Version for Node48<P, N> {
+impl<P: KeyTrait, N: Version> Version for Node48<P, N> {
     fn version(&self) -> u64 {
         self.version
     }
@@ -525,7 +525,7 @@ impl<P: KeyTrait + Clone, N: Version> Version for Node48<P, N> {
 //
 // A Node256 is a 256-entry array of pointers to children. The pointers are stored in
 // a Vector Array, which is a Vector of length WIDTH (256) that stores the pointers.
-pub struct Node256<P: KeyTrait + Clone, N: Version> {
+pub struct Node256<P: KeyTrait, N: Version> {
     pub(crate) prefix: P,    // Prefix associated with the node
     pub(crate) version: u64, // Version for node256
 
@@ -533,7 +533,7 @@ pub struct Node256<P: KeyTrait + Clone, N: Version> {
     num_children: usize,
 }
 
-impl<P: KeyTrait + Clone, N: Version> Node256<P, N> {
+impl<P: KeyTrait, N: Version> Node256<P, N> {
     pub fn new(prefix: P) -> Self {
         Self {
             prefix,
@@ -605,7 +605,7 @@ impl<P: KeyTrait + Clone, N: Version> Node256<P, N> {
     }
 }
 
-impl<P: KeyTrait + Clone, N: Version> NodeTrait<N> for Node256<P, N> {
+impl<P: KeyTrait, N: Version> NodeTrait<N> for Node256<P, N> {
     fn clone(&self) -> Self {
         Self {
             prefix: self.prefix.clone(),
@@ -660,7 +660,7 @@ impl<P: KeyTrait + Clone, N: Version> NodeTrait<N> for Node256<P, N> {
     }
 }
 
-impl<P: KeyTrait + Clone, N: Version> Version for Node256<P, N> {
+impl<P: KeyTrait, N: Version> Version for Node256<P, N> {
     fn version(&self) -> u64 {
         self.version
     }
