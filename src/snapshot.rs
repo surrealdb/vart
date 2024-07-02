@@ -1,8 +1,9 @@
 //! This module defines the Snapshot struct for managing snapshots within a Trie structure.
+use std::ops::RangeBounds;
 use std::sync::Arc;
 
 use crate::art::{Node, Tree};
-use crate::iter::IterationPointer;
+use crate::iter::{Iter, Range, VersionedIter};
 use crate::node::Version;
 use crate::{KeyTrait, TrieError};
 
@@ -116,17 +117,6 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         Ok(())
     }
 
-    pub fn new_reader(&mut self) -> Result<IterationPointer<P, V>, TrieError> {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
-
-        if self.root.is_none() {
-            return Err(TrieError::SnapshotEmpty);
-        }
-
-        Ok(IterationPointer::new(self.root.as_ref().unwrap().clone()))
-    }
-
     pub fn remove(&mut self, key: &P) -> Result<bool, TrieError> {
         // Check if the tree is already closed
         self.is_closed()?;
@@ -140,12 +130,52 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
     pub fn ts(&self) -> u64 {
         self.ts
     }
+
+    pub fn iter(&self) -> Result<Iter<P, V>, TrieError> {
+        // Check if the snapshot is already closed
+        self.is_closed()?;
+        Ok(Iter::new(self.root.as_ref()))
+    }
+
+    /// Returns an iterator over all versions of the key-value pairs within the Trie.
+    pub fn iter_with_versions(&self) -> Result<VersionedIter<P, V>, TrieError> {
+        // Check if the snapshot is already closed
+        self.is_closed()?;
+        Ok(VersionedIter::new(self.root.as_ref()))
+    }
+
+    /// Returns a range query iterator over the Trie.
+    pub fn range<'a, R>(
+        &'a self,
+        range: R,
+    ) -> Result<impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>, TrieError>
+    where
+        R: RangeBounds<P> + 'a,
+    {
+        // Check if the snapshot is already closed
+        self.is_closed()?;
+        Ok(Range::new(self.root.as_ref(), range))
+    }
+
+    /// Returns a versioned range query iterator over the Trie.
+    pub fn range_with_versions<'a, R>(
+        &'a self,
+        range: R,
+    ) -> Result<impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>, TrieError>
+    where
+        R: RangeBounds<P> + 'a,
+    {
+        // Check if the snapshot is already closed
+        self.is_closed()?;
+        Ok(Range::new_versioned(self.root.as_ref(), range))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::art::Tree;
-    use crate::iter::IterationPointer;
+    use crate::iter::Iter;
+    use crate::KeyTrait;
     use crate::TrieError;
     use crate::VariableSizeKey;
     use std::str::FromStr;
@@ -226,21 +256,19 @@ mod tests {
         let mut snap = tree.create_snapshot().unwrap();
         assert!(snap.insert(&key_4, 1, 0).is_ok());
 
-        // Reader 1
-        let reader1 = snap.new_reader().unwrap();
-        assert_eq!(count_items(&reader1), 4);
-
-        // Reader 2
-        let reader2 = snap.new_reader().unwrap();
-        assert_eq!(count_items(&reader2), 4);
+        {
+            // Reader
+            let mut reader = snap.iter().unwrap();
+            assert_eq!(count_items(&mut reader), 4);
+        }
 
         // Close snapshot
         assert!(snap.close().is_ok());
     }
 
-    fn count_items(reader: &IterationPointer<VariableSizeKey, i32>) -> usize {
+    fn count_items<P: KeyTrait, V: Clone>(reader: &mut Iter<P, V>) -> usize {
         let mut len = 0;
-        for _ in reader.iter() {
+        for _ in reader {
             len += 1;
         }
         len
