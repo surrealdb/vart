@@ -62,8 +62,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
 
         // Use a recursive function to get the value and timestamp from the root node
         match self.root.as_ref() {
-            Some(root) => Node::get_recurse(root, key, root.version())
-                .map(|(value, version, ts)| (value, version, ts)),
+            Some(root) => Node::get_recurse(root, key, root.version()),
             None => Err(TrieError::KeyNotFound),
         }
     }

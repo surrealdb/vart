@@ -405,8 +405,7 @@ mod tests {
         for i in 0..num_keys {
             let key: FixedSizeKey<16> = i.into();
             for version in 1..versions_per_key + 1 {
-                tree.insert_unchecked(&key, i, version, 0_u64)
-                    .unwrap();
+                tree.insert_unchecked(&key, i, version, 0_u64).unwrap();
             }
         }
 
@@ -461,8 +460,7 @@ mod tests {
         for i in 0..num_keys {
             let key: FixedSizeKey<16> = i.into();
             for version in (1..=versions_per_key).rev() {
-                tree.insert_unchecked(&key, i, version, 0_u64)
-                    .unwrap();
+                tree.insert_unchecked(&key, i, version, 0_u64).unwrap();
             }
         }
 
@@ -525,8 +523,7 @@ mod tests {
         for i in 0..num_keys {
             let key: FixedSizeKey<16> = i.into();
             for version in 1..=versions_per_key {
-                tree.insert_unchecked(&key, i, version, 0_u64)
-                    .unwrap();
+                tree.insert_unchecked(&key, i, version, 0_u64).unwrap();
             }
         }
 
@@ -610,8 +607,7 @@ mod tests {
         let key: FixedSizeKey<16> = 1u16.into();
         let versions = [1, 2];
         for &version in &versions {
-            tree.insert_unchecked(&key, 1, version, 0_u64)
-                .unwrap();
+            tree.insert_unchecked(&key, 1, version, 0_u64).unwrap();
         }
 
         // Use iterator to iterate through the tree
@@ -654,8 +650,7 @@ mod tests {
         let key: FixedSizeKey<16> = 1u16.into();
         let versions = [1, 2];
         for &version in &versions {
-            tree.insert_unchecked(&key, 1, version, 0_u64)
-                .unwrap();
+            tree.insert_unchecked(&key, 1, version, 0_u64).unwrap();
         }
 
         // Define start and end keys for the range query
