@@ -5,61 +5,6 @@ use std::sync::Arc;
 use crate::art::{Node, NodeType};
 use crate::KeyTrait;
 
-// TODO: need to add more tests for snapshot readers
-/// A structure representing a pointer for iterating over the Trie's key-value pairs.
-pub struct IterationPointer<P: KeyTrait, V: Clone> {
-    root: Arc<Node<P, V>>,
-}
-
-impl<P: KeyTrait, V: Clone> IterationPointer<P, V> {
-    /// Creates a new IterationPointer instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `root` - The root node of the Trie.
-    ///
-    pub fn new(root: Arc<Node<P, V>>) -> IterationPointer<P, V> {
-        IterationPointer { root }
-    }
-
-    /// Returns an iterator over the key-value pairs within the Trie.
-    ///
-    /// # Returns
-    ///
-    /// Returns an Iter iterator instance.
-    ///
-    pub fn iter(&self) -> Iter<P, V> {
-        Iter::new(Some(&self.root))
-    }
-
-    /// Returns an iterator over all
-    pub fn iter_with_versions(&self) -> VersionedIter<P, V> {
-        VersionedIter::new(Some(&self.root))
-    }
-
-    /// Returns a range query iterator over the Trie.
-    pub fn range<'a, R>(
-        &'a self,
-        range: R,
-    ) -> impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>
-    where
-        R: RangeBounds<P> + 'a,
-    {
-        Range::new(Some(&self.root), range)
-    }
-
-    /// Returns a versioned range query iterator over the Trie.
-    pub fn range_with_versions<'a, R>(
-        &'a self,
-        range: R,
-    ) -> impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>
-    where
-        R: RangeBounds<P> + 'a,
-    {
-        Range::new_versioned(Some(&self.root), range)
-    }
-}
-
 type NodeIterator<'a, P, V> = Box<dyn Iterator<Item = (u8, &'a Arc<Node<P, V>>)> + 'a>;
 
 /// An iterator over the nodes in the Trie.
@@ -404,8 +349,7 @@ mod tests {
         for i in 0..num_keys {
             let key: FixedSizeKey<16> = i.into();
             for version in 1..versions_per_key + 1 {
-                tree.insert_without_version_increment_check(&key, i, version, 0_u64)
-                    .unwrap();
+                tree.insert_unchecked(&key, i, version, 0_u64).unwrap();
             }
         }
 
@@ -460,8 +404,7 @@ mod tests {
         for i in 0..num_keys {
             let key: FixedSizeKey<16> = i.into();
             for version in (1..=versions_per_key).rev() {
-                tree.insert_without_version_increment_check(&key, i, version, 0_u64)
-                    .unwrap();
+                tree.insert_unchecked(&key, i, version, 0_u64).unwrap();
             }
         }
 
@@ -524,8 +467,7 @@ mod tests {
         for i in 0..num_keys {
             let key: FixedSizeKey<16> = i.into();
             for version in 1..=versions_per_key {
-                tree.insert_without_version_increment_check(&key, i, version, 0_u64)
-                    .unwrap();
+                tree.insert_unchecked(&key, i, version, 0_u64).unwrap();
             }
         }
 
@@ -609,8 +551,7 @@ mod tests {
         let key: FixedSizeKey<16> = 1u16.into();
         let versions = [1, 2];
         for &version in &versions {
-            tree.insert_without_version_increment_check(&key, 1, version, 0_u64)
-                .unwrap();
+            tree.insert_unchecked(&key, 1, version, 0_u64).unwrap();
         }
 
         // Use iterator to iterate through the tree
@@ -653,8 +594,7 @@ mod tests {
         let key: FixedSizeKey<16> = 1u16.into();
         let versions = [1, 2];
         for &version in &versions {
-            tree.insert_without_version_increment_check(&key, 1, version, 0_u64)
-                .unwrap();
+            tree.insert_unchecked(&key, 1, version, 0_u64).unwrap();
         }
 
         // Define start and end keys for the range query

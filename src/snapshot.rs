@@ -1,8 +1,9 @@
 //! This module defines the Snapshot struct for managing snapshots within a Trie structure.
+use std::ops::RangeBounds;
 use std::sync::Arc;
 
 use crate::art::{Node, Tree};
-use crate::iter::IterationPointer;
+use crate::iter::{Iter, Range, VersionedIter};
 use crate::node::Version;
 use crate::{KeyTrait, TrieError};
 
@@ -55,15 +56,40 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         Ok(())
     }
 
-    /// Retrieves the value and timestamp associated with the given key from the snapshot.
+    /// Retrieves the value, version and timestamp associated with the given key from the snapshot.
     pub fn get(&self, key: &P) -> Result<(V, u64, u64), TrieError> {
         // Check if the snapshot is already closed
         self.is_closed()?;
 
         // Use a recursive function to get the value and timestamp from the root node
         match self.root.as_ref() {
-            Some(root) => Node::get_recurse(root, key, root.version())
-                .map(|(_, value, version, ts)| (value, version, ts)),
+            Some(root) => Node::get_recurse(root, key, root.version()),
+            None => Err(TrieError::KeyNotFound),
+        }
+    }
+
+    /// Retrieves the value, version associated with the given key from the snapshot at the specified timestamp.
+    pub fn get_at_ts(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
+        // Check if the snapshot is already closed
+        self.is_closed()?;
+
+        match self.root.as_ref() {
+            Some(root) => {
+                Node::get_recurse_at_ts(root, key, ts).map(|(value, version, _)| (value, version))
+            }
+            None => Err(TrieError::KeyNotFound),
+        }
+    }
+
+    pub fn get_version_history(&self, key: &P) -> Result<Vec<(V, u64, u64)>, TrieError> {
+        // Check if the snapshot is already closed
+        self.is_closed()?;
+
+        match self.root.as_ref() {
+            Some(root) => {
+                // Directly return the Result from Node::get_all_versions
+                Node::get_version_history(root, key)
+            }
             None => Err(TrieError::KeyNotFound),
         }
     }
@@ -91,17 +117,6 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         Ok(())
     }
 
-    pub fn new_reader(&mut self) -> Result<IterationPointer<P, V>, TrieError> {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
-
-        if self.root.is_none() {
-            return Err(TrieError::SnapshotEmpty);
-        }
-
-        Ok(IterationPointer::new(self.root.as_ref().unwrap().clone()))
-    }
-
     pub fn remove(&mut self, key: &P) -> Result<bool, TrieError> {
         // Check if the tree is already closed
         self.is_closed()?;
@@ -115,12 +130,53 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
     pub fn ts(&self) -> u64 {
         self.ts
     }
+
+    pub fn iter(&self) -> Result<Iter<P, V>, TrieError> {
+        // Check if the snapshot is already closed
+        self.is_closed()?;
+        Ok(Iter::new(self.root.as_ref()))
+    }
+
+    /// Returns an iterator over all versions of the key-value pairs within the Trie.
+    pub fn iter_with_versions(&self) -> Result<VersionedIter<P, V>, TrieError> {
+        // Check if the snapshot is already closed
+        self.is_closed()?;
+        Ok(VersionedIter::new(self.root.as_ref()))
+    }
+
+    /// Returns a range query iterator over the Trie.
+    pub fn range<'a, R>(
+        &'a self,
+        range: R,
+    ) -> Result<impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>, TrieError>
+    where
+        R: RangeBounds<P> + 'a,
+    {
+        // Check if the snapshot is already closed
+        self.is_closed()?;
+        Ok(Range::new(self.root.as_ref(), range))
+    }
+
+    /// Returns a versioned range query iterator over the Trie.
+    pub fn range_with_versions<'a, R>(
+        &'a self,
+        range: R,
+    ) -> Result<impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>, TrieError>
+    where
+        R: RangeBounds<P> + 'a,
+    {
+        // Check if the snapshot is already closed
+        self.is_closed()?;
+        Ok(Range::new_versioned(self.root.as_ref(), range))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::art::Tree;
-    use crate::iter::IterationPointer;
+    use crate::iter::Iter;
+    use crate::KeyTrait;
+    use crate::TrieError;
     use crate::VariableSizeKey;
     use std::str::FromStr;
 
@@ -200,21 +256,19 @@ mod tests {
         let mut snap = tree.create_snapshot().unwrap();
         assert!(snap.insert(&key_4, 1, 0).is_ok());
 
-        // Reader 1
-        let reader1 = snap.new_reader().unwrap();
-        assert_eq!(count_items(&reader1), 4);
-
-        // Reader 2
-        let reader2 = snap.new_reader().unwrap();
-        assert_eq!(count_items(&reader2), 4);
+        {
+            // Reader
+            let mut reader = snap.iter().unwrap();
+            assert_eq!(count_items(&mut reader), 4);
+        }
 
         // Close snapshot
         assert!(snap.close().is_ok());
     }
 
-    fn count_items(reader: &IterationPointer<VariableSizeKey, i32>) -> usize {
+    fn count_items<P: KeyTrait, V: Clone>(reader: &mut Iter<P, V>) -> usize {
         let mut len = 0;
-        for _ in reader.iter() {
+        for _ in reader {
             len += 1;
         }
         len
@@ -294,5 +348,192 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_get_at_ts_successful_retrieval() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        let value = 10;
+        let ts = 100;
+        snapshot.insert(&key, value, ts).unwrap();
+
+        let (retrieved_value, retrieved_version) = snapshot.get_at_ts(&key, ts).unwrap();
+        assert_eq!(retrieved_value, value);
+        assert_eq!(retrieved_version, 1);
+    }
+
+    #[test]
+    fn test_get_at_ts_key_not_found() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("nonexistent_key").unwrap();
+        let result = snapshot.get_at_ts(&key, 100);
+        assert!(matches!(result, Err(TrieError::KeyNotFound)));
+    }
+
+    #[test]
+    fn test_get_at_ts_closed_snapshot() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        snapshot.closed = true;
+        let key = VariableSizeKey::from_str("any_key").unwrap();
+        let result = snapshot.get_at_ts(&key, 100);
+        assert!(matches!(result, Err(TrieError::SnapshotAlreadyClosed)));
+    }
+
+    #[test]
+    fn test_get_at_ts_timestamp_before_insertion() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        let value = 10;
+        let ts = 100;
+        snapshot.insert(&key, value, ts).unwrap();
+
+        let result = snapshot.get_at_ts(&key, ts - 1);
+        assert!(matches!(result, Err(TrieError::KeyNotFound)));
+    }
+
+    #[test]
+    fn test_get_at_ts_multiple_versions() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        let value1 = 10;
+        let value2 = 11;
+        let ts1 = 100;
+        let ts2 = 200;
+        snapshot.insert(&key, value1, ts1).unwrap();
+        snapshot.insert(&key, value2, ts2).unwrap();
+
+        let (retrieved_value, _) = snapshot.get_at_ts(&key, ts2).unwrap();
+        assert_eq!(retrieved_value, value2);
+    }
+
+    #[test]
+    fn test_retrieving_value_at_timestamp_between_two_inserts() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        let value1 = 10;
+        let value2 = 20;
+        let ts1 = 100;
+        let ts2 = 200;
+        let ts_query = 150;
+        snapshot.insert(&key, value1, ts1).unwrap();
+        snapshot.insert(&key, value2, ts2).unwrap();
+
+        let (retrieved_value, _) = snapshot.get_at_ts(&key, ts_query).unwrap();
+        assert_eq!(retrieved_value, value1);
+    }
+
+    #[test]
+    fn test_inserting_and_retrieving_with_same_timestamp() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        let value1 = 10;
+        let value2 = 20;
+        let ts = 100;
+        snapshot.insert(&key, value1, ts).unwrap();
+        snapshot.insert(&key, value2, ts).unwrap();
+
+        let (retrieved_value, _) = snapshot.get_at_ts(&key, ts).unwrap();
+        assert_eq!(retrieved_value, value2);
+    }
+
+    #[test]
+    fn test_retrieving_value_at_future_timestamp() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        let value = 10;
+        let ts_insert = 100;
+        let ts_future = 200;
+        snapshot.insert(&key, value, ts_insert).unwrap();
+
+        let (retrieved_value, _) = snapshot.get_at_ts(&key, ts_future).unwrap();
+        assert_eq!(retrieved_value, value);
+    }
+
+    #[test]
+    fn test_inserting_values_with_decreasing_timestamps() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        let value1 = 10;
+        let value2 = 20;
+        let ts1 = 200;
+        let ts2 = 100;
+        snapshot.insert(&key, value1, ts1).unwrap();
+        snapshot.insert(&key, value2, ts2).unwrap();
+
+        let (retrieved_value_early, _) = snapshot.get_at_ts(&key, ts2).unwrap();
+        let (retrieved_value_late, _) = snapshot.get_at_ts(&key, ts1).unwrap();
+        assert_eq!(retrieved_value_early, value2);
+        assert_eq!(retrieved_value_late, value1);
+    }
+
+    #[test]
+    fn test_retrieving_value_after_deleting_it() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        let value = 10;
+        let ts_insert = 100;
+        let ts_query = 150;
+        snapshot.insert(&key, value, ts_insert).unwrap();
+        snapshot.remove(&key).unwrap();
+
+        let result = snapshot.get_at_ts(&key, ts_query);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_all_versions() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+
+        // Scenario 1: Insert multiple values for the same key with different timestamps
+        let key1 = VariableSizeKey::from_str("test_key1").unwrap();
+        let value1_1 = 10;
+        let value1_2 = 20;
+        let ts1_1 = 100;
+        let ts1_2 = 200;
+        snapshot.insert(&key1, value1_1, ts1_1).unwrap();
+        snapshot.insert(&key1, value1_2, ts1_2).unwrap();
+
+        let history1 = snapshot.get_version_history(&key1).unwrap();
+        assert_eq!(history1.len(), 2);
+
+        let (retrieved_value1_1, v1_1, t1_1) = history1[0];
+        assert_eq!(retrieved_value1_1, value1_1);
+        assert_eq!(v1_1, 1);
+        assert_eq!(t1_1, ts1_1);
+
+        let (retrieved_value1_2, v1_2, t1_2) = history1[1];
+        assert_eq!(retrieved_value1_2, value1_2);
+        assert_eq!(v1_2, 1);
+        assert_eq!(t1_2, ts1_2);
+
+        // Scenario 2: Insert values for different keys
+        let key2 = VariableSizeKey::from_str("test_key2").unwrap();
+        let value2 = 30;
+        let ts2 = 300;
+        snapshot.insert(&key2, value2, ts2).unwrap();
+
+        let history2 = snapshot.get_version_history(&key2).unwrap();
+        assert_eq!(history2.len(), 1);
+
+        let (retrieved_value2, v2, t2) = history2[0];
+        assert_eq!(retrieved_value2, value2);
+        assert_eq!(v2, 1);
+        assert_eq!(t2, ts2);
+
+        // Scenario 3: Ensure no history for a non-existent key
+        let key3 = VariableSizeKey::from_str("non_existent_key").unwrap();
+        assert!(snapshot.get_version_history(&key3).is_err());
     }
 }
