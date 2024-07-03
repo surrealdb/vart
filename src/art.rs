@@ -565,7 +565,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     }
 
     #[inline]
-    pub(crate) fn get_value(&self, query_type: QueryType) -> Option<Arc<LeafValue<V>>> {
+    pub(crate) fn get_value_by_query(&self, query_type: QueryType) -> Option<Arc<LeafValue<V>>> {
         // Unwrap the NodeType::Twig to access the TwigNode instance.
         let NodeType::Twig(twig) = &self.node_type else {
             return None;
@@ -883,7 +883,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     ) -> Result<(V, u64, u64), TrieError> {
         let cur_node = Self::navigate_to_node(cur_node, key)?;
         let val = cur_node
-            .get_value(query_type)
+            .get_value_by_query(query_type)
             .ok_or(TrieError::KeyNotFound)?;
         Ok((val.value.clone(), val.version, val.ts))
     }
@@ -1377,7 +1377,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         &self,
         key: &P,
         query_type: QueryType,
-    ) -> Result<(V, u64), TrieError> {
+    ) -> Result<(V, u64, u64), TrieError> {
         // Check if the tree is already closed
         self.check_if_closed()?;
 
@@ -1386,7 +1386,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         }
 
         let root = self.root.as_ref().unwrap();
-        Node::get_recurse(root, key, query_type).map(|(value, version, _)| (value, version))
+        Node::get_recurse(root, key, query_type)
     }
 }
 
@@ -1397,6 +1397,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 #[cfg(test)]
 mod tests {
     use super::{Tree, KV};
+    use crate::art::QueryType;
     use crate::{FixedSizeKey, VariableSizeKey};
     use rand::{thread_rng, Rng};
     use std::str::FromStr;
@@ -2786,5 +2787,83 @@ mod tests {
         assert_eq!(retrieved_value, value2);
         assert_eq!(version, 1);
         assert_eq!(t, ts);
+    }
+
+    #[test]
+    fn test_latest_by_version() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        tree.insert_unchecked(&key, 10, 1, 100).unwrap();
+        tree.insert_unchecked(&key, 20, 2, 200).unwrap();
+        tree.insert_unchecked(&key, 30, 3, 300).unwrap();
+
+        let query_type = QueryType::LatestByVersion(3);
+        let result = tree.get_value_by_query(&key, query_type).unwrap();
+        assert_eq!(result, (30, 3, 300));
+    }
+
+    #[test]
+    fn test_latest_by_ts() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        tree.insert_unchecked(&key, 10, 1, 100).unwrap();
+        tree.insert_unchecked(&key, 20, 2, 200).unwrap();
+        tree.insert_unchecked(&key, 30, 3, 300).unwrap();
+
+        let query_type = QueryType::LatestByTs(300);
+        let result = tree.get_value_by_query(&key, query_type).unwrap();
+        assert_eq!(result, (30, 3, 300));
+    }
+
+    #[test]
+    fn test_last_less_than_ts() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        tree.insert_unchecked(&key, 10, 1, 100).unwrap();
+        tree.insert_unchecked(&key, 20, 2, 150).unwrap();
+        tree.insert_unchecked(&key, 30, 3, 200).unwrap();
+
+        let query_type = QueryType::LastLessThanTs(150);
+        let result = tree.get_value_by_query(&key, query_type).unwrap();
+        assert_eq!(result, (10, 1, 100));
+    }
+
+    #[test]
+    fn test_last_less_or_equal_ts() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        tree.insert_unchecked(&key, 10, 1, 100).unwrap();
+        tree.insert_unchecked(&key, 20, 2, 150).unwrap();
+        tree.insert_unchecked(&key, 30, 3, 200).unwrap();
+
+        let query_type = QueryType::LastLessOrEqualTs(150);
+        let result = tree.get_value_by_query(&key, query_type).unwrap();
+        assert_eq!(result, (20, 2, 150));
+    }
+
+    #[test]
+    fn test_first_greater_than_ts() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        tree.insert_unchecked(&key, 10, 1, 100).unwrap();
+        tree.insert_unchecked(&key, 20, 2, 150).unwrap();
+        tree.insert_unchecked(&key, 30, 3, 200).unwrap();
+
+        let query_type = QueryType::FirstGreaterThanTs(150);
+        let result = tree.get_value_by_query(&key, query_type).unwrap();
+        assert_eq!(result, (30, 3, 200));
+    }
+
+    #[test]
+    fn test_first_greater_or_equal_ts() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        tree.insert_unchecked(&key, 10, 1, 100).unwrap();
+        tree.insert_unchecked(&key, 20, 2, 150).unwrap();
+        tree.insert_unchecked(&key, 30, 3, 200).unwrap();
+
+        let query_type = QueryType::FirstGreaterOrEqualTs(150);
+        let result = tree.get_value_by_query(&key, query_type).unwrap();
+        assert_eq!(result, (20, 2, 150));
     }
 }

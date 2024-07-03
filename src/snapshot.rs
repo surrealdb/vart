@@ -175,14 +175,12 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         &self,
         key: &P,
         query_type: QueryType,
-    ) -> Result<(V, u64), TrieError> {
+    ) -> Result<(V, u64, u64), TrieError> {
         // Check if the snapshot is already closed
         self.is_closed()?;
 
         match self.root.as_ref() {
-            Some(root) => {
-                Node::get_recurse(root, key, query_type).map(|(value, version, _)| (value, version))
-            }
+            Some(root) => Node::get_recurse(root, key, query_type),
             None => Err(TrieError::KeyNotFound),
         }
     }
