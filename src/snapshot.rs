@@ -64,9 +64,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
 
         // Use a recursive function to get the value and timestamp from the root node
         match self.root.as_ref() {
-            Some(root) => {
-                Node::get_recurse_query(root, key, QueryType::LeafByVersion(root.version()))
-            }
+            Some(root) => Node::get_recurse(root, key, QueryType::LatestByVersion(root.version())),
             None => Err(TrieError::KeyNotFound),
         }
     }
@@ -77,7 +75,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         self.is_closed()?;
 
         match self.root.as_ref() {
-            Some(root) => Node::get_recurse_query(root, key, QueryType::LeafByTs(ts))
+            Some(root) => Node::get_recurse(root, key, QueryType::LatestByTs(ts))
                 .map(|(value, version, _)| (value, version)),
             None => Err(TrieError::KeyNotFound),
         }
@@ -173,46 +171,18 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         Ok(Range::new_versioned(self.root.as_ref(), range))
     }
 
-    pub fn get_last_less_than(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
+    pub fn get_value_by_query(
+        &self,
+        key: &P,
+        query_type: QueryType,
+    ) -> Result<(V, u64), TrieError> {
         // Check if the snapshot is already closed
         self.is_closed()?;
 
         match self.root.as_ref() {
-            Some(root) => Node::get_recurse_query(root, key, QueryType::LastLessThan(ts))
-                .map(|(value, version, _)| (value, version)),
-            None => Err(TrieError::KeyNotFound),
-        }
-    }
-
-    pub fn get_last_less_or_equal(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
-
-        match self.root.as_ref() {
-            Some(root) => Node::get_recurse_query(root, key, QueryType::LastLessOrEqual(ts))
-                .map(|(value, version, _)| (value, version)),
-            None => Err(TrieError::KeyNotFound),
-        }
-    }
-
-    pub fn get_first_greater_than(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
-
-        match self.root.as_ref() {
-            Some(root) => Node::get_recurse_query(root, key, QueryType::FirstGreaterThan(ts))
-                .map(|(value, version, _)| (value, version)),
-            None => Err(TrieError::KeyNotFound),
-        }
-    }
-
-    pub fn get_first_greater_or_equal(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
-
-        match self.root.as_ref() {
-            Some(root) => Node::get_recurse_query(root, key, QueryType::FirstGreaterOrEqual(ts))
-                .map(|(value, version, _)| (value, version)),
+            Some(root) => {
+                Node::get_recurse(root, key, query_type).map(|(value, version, _)| (value, version))
+            }
             None => Err(TrieError::KeyNotFound),
         }
     }

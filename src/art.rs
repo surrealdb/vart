@@ -57,13 +57,13 @@ impl<P: KeyTrait, V: Clone> Version for Node<P, V> {
 }
 
 // An enum for the different types of queries on the TwigNode
-pub(crate) enum QueryType {
-    LeafByVersion(u64),
-    LeafByTs(u64),
-    LastLessThan(u64),
-    LastLessOrEqual(u64),
-    FirstGreaterThan(u64),
-    FirstGreaterOrEqual(u64),
+pub enum QueryType {
+    LatestByVersion(u64),
+    LatestByTs(u64),
+    LastLessThanTs(u64),
+    LastLessOrEqualTs(u64),
+    FirstGreaterThanTs(u64),
+    FirstGreaterOrEqualTs(u64),
 }
 
 /// An enumeration representing different types of nodes in an Adaptive Radix Trie.
@@ -572,12 +572,12 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         };
 
         match query_type {
-            QueryType::LeafByVersion(version) => twig.get_leaf_by_version(version),
-            QueryType::LeafByTs(ts) => twig.get_leaf_by_ts(ts),
-            QueryType::LastLessThan(ts) => twig.last_less_than(ts),
-            QueryType::LastLessOrEqual(ts) => twig.last_less_or_equal(ts),
-            QueryType::FirstGreaterThan(ts) => twig.first_greater_than(ts),
-            QueryType::FirstGreaterOrEqual(ts) => twig.first_greater_or_equal(ts),
+            QueryType::LatestByVersion(version) => twig.get_leaf_by_version(version),
+            QueryType::LatestByTs(ts) => twig.get_leaf_by_ts(ts),
+            QueryType::LastLessThanTs(ts) => twig.last_less_than_ts(ts),
+            QueryType::LastLessOrEqualTs(ts) => twig.last_less_or_equal_ts(ts),
+            QueryType::FirstGreaterThanTs(ts) => twig.first_greater_than_ts(ts),
+            QueryType::FirstGreaterOrEqualTs(ts) => twig.first_greater_or_equal_ts(ts),
         }
     }
 
@@ -876,7 +876,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     /// Recursively searches for a key in the node and its children.
     ///
     /// Recursively searches for a key in the current node and its child nodes, considering versions.
-    pub(crate) fn get_recurse_query(
+    pub(crate) fn get_recurse(
         cur_node: &Node<P, V>,
         key: &P,
         query_type: QueryType,
@@ -1219,7 +1219,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
             commit_version = root.version();
         }
 
-        Node::get_recurse_query(root, key, QueryType::LeafByVersion(commit_version))
+        Node::get_recurse(root, key, QueryType::LatestByVersion(commit_version))
     }
 
     /// Retrieves the latest version of the Trie.
@@ -1353,7 +1353,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         }
 
         let root = self.root.as_ref().unwrap();
-        Node::get_recurse_query(root, key, QueryType::LeafByTs(ts))
+        Node::get_recurse(root, key, QueryType::LatestByTs(ts))
     }
 
     pub fn get_version_history(&self, key: &P) -> Result<Vec<(V, u64, u64)>, TrieError> {
@@ -1373,7 +1373,11 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         }
     }
 
-    pub fn get_last_less_than(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
+    pub fn get_value_by_query(
+        &self,
+        key: &P,
+        query_type: QueryType,
+    ) -> Result<(V, u64), TrieError> {
         // Check if the tree is already closed
         self.check_if_closed()?;
 
@@ -1382,47 +1386,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         }
 
         let root = self.root.as_ref().unwrap();
-        Node::get_recurse_query(root, key, QueryType::LastLessThan(ts))
-            .map(|(value, version, _)| (value, version))
-    }
-
-    pub fn get_last_less_or_equal(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
-        // Check if the tree is already closed
-        self.check_if_closed()?;
-
-        if self.root.is_none() {
-            return Err(TrieError::Other("cannot read from empty tree".to_string()));
-        }
-
-        let root = self.root.as_ref().unwrap();
-        Node::get_recurse_query(root, key, QueryType::LastLessOrEqual(ts))
-            .map(|(value, version, _)| (value, version))
-    }
-
-    pub fn get_first_greater_than(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
-        // Check if the tree is already closed
-        self.check_if_closed()?;
-
-        if self.root.is_none() {
-            return Err(TrieError::Other("cannot read from empty tree".to_string()));
-        }
-
-        let root = self.root.as_ref().unwrap();
-        Node::get_recurse_query(root, key, QueryType::FirstGreaterThan(ts))
-            .map(|(value, version, _)| (value, version))
-    }
-
-    pub fn get_first_greater_or_equal(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
-        // Check if the tree is already closed
-        self.check_if_closed()?;
-
-        if self.root.is_none() {
-            return Err(TrieError::Other("cannot read from empty tree".to_string()));
-        }
-
-        let root = self.root.as_ref().unwrap();
-        Node::get_recurse_query(root, key, QueryType::FirstGreaterOrEqual(ts))
-            .map(|(value, version, _)| (value, version))
+        Node::get_recurse(root, key, query_type).map(|(value, version, _)| (value, version))
     }
 }
 
