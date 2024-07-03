@@ -824,8 +824,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     }
 
     /// Recursively searches for a key in the node and its children.
-    ///
-    /// Recursively searches for a key in the current node and its child nodes, considering versions.
     pub(crate) fn get_recurse(
         cur_node: &Node<P, V>,
         key: &P,
