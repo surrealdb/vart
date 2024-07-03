@@ -252,6 +252,8 @@ impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K
                 Some(other) => {
                     if let NodeType::Twig(twig) = &other.1.node_type {
                         if self.range.contains(&twig.key) {
+                            // If the query is versioned, iterate over all versions of the key
+                            // and add them to the leafs queue. Otherwise, add the latest version.
                             if self.is_versioned {
                                 for leaf in twig.iter() {
                                     self.forward.leafs.push_back((

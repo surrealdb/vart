@@ -7,6 +7,7 @@ use crate::iter::{Iter, Range, VersionedIter};
 use crate::node::Version;
 use crate::{KeyTrait, TrieError};
 
+#[derive(Clone)]
 /// Represents a snapshot of the data within the Trie.
 pub struct Snapshot<P: KeyTrait, V: Clone> {
     pub(crate) ts: u64,

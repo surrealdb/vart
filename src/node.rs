@@ -28,6 +28,14 @@ pub struct TwigNode<K: KeyTrait, V: Clone> {
     pub(crate) version: u64, // Version for the twig node
 }
 
+// Timestamp-Version Ordering Constraint Explanation:
+// Given two internal keys associated with the same user key, represented as:
+// (key, version1, ts1) and (key, version2, ts2),
+// the following ordering constraints apply:
+//      - If version1 < version2, then it must be that ts1 <= ts2.
+//      - If ts1 < ts2, then it must be that version1 < version2.
+// This ensures a consistent ordering of versions based on their timestamps.
+//
 #[derive(Copy, Clone)]
 pub struct LeafValue<V: Clone> {
     pub(crate) value: V,
@@ -152,6 +160,66 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         self.version = self.version(); // Update LeafNode's version
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &Arc<LeafValue<V>>> {
+        self.values.iter()
+    }
+}
+
+impl<K: KeyTrait + Clone, V: Clone> Version for TwigNode<K, V> {
+    fn version(&self) -> u64 {
+        self.version
+    }
+}
+
+// An enum to encapsulate the different return types from TwigNode queries
+pub enum QueryResult<V: Clone> {
+    SingleOption(Arc<LeafValue<V>>),
+    MultipleVersions(Vec<(V, u64, u64)>),
+    None,
+}
+
+// An enum for the different types of queries on the TwigNode
+pub enum QueryType {
+    LeafByVersion(u64),
+    LeafByTs(u64),
+    AllVersions,
+    LastLessThan(u64),
+    LastLessOrEqual(u64),
+    FirstGreaterThan(u64),
+    FirstGreaterOrEqual(u64),
+}
+
+impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
+    pub fn query(&self, query_type: QueryType) -> QueryResult<V> {
+        match query_type {
+            QueryType::LeafByVersion(version) => self
+                .get_leaf_by_version(version)
+                .map(QueryResult::SingleOption)
+                .unwrap_or(QueryResult::None),
+            QueryType::LeafByTs(ts) => self
+                .get_leaf_by_ts(ts)
+                .map(QueryResult::SingleOption)
+                .unwrap_or(QueryResult::None),
+            QueryType::AllVersions => QueryResult::MultipleVersions(self.get_all_versions()),
+            QueryType::LastLessThan(ts) => self
+                .last_less_than(ts)
+                .map(QueryResult::SingleOption)
+                .unwrap_or(QueryResult::None),
+            QueryType::LastLessOrEqual(ts) => self
+                .last_less_or_equal(ts)
+                .map(QueryResult::SingleOption)
+                .unwrap_or(QueryResult::None),
+            QueryType::FirstGreaterThan(ts) => self
+                .first_greater_than(ts)
+                .map(QueryResult::SingleOption)
+                .unwrap_or(QueryResult::None),
+            QueryType::FirstGreaterOrEqual(ts) => self
+                .first_greater_or_equal(ts)
+                .map(QueryResult::SingleOption)
+                .unwrap_or(QueryResult::None),
+        }
+    }
+
     pub fn get_latest_leaf(&self) -> Option<&Arc<LeafValue<V>>> {
         self.values.iter().max_by_key(|value| value.version)
     }
@@ -186,14 +254,33 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
             .collect()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Arc<LeafValue<V>>> {
-        self.values.iter()
+    // Implementations of new functions
+    pub fn last_less_than(&self, ts: u64) -> Option<Arc<LeafValue<V>>> {
+        self.values
+            .iter()
+            .filter(|value| value.ts < ts)
+            .max_by_key(|value| value.ts)
+            .cloned()
     }
-}
 
-impl<K: KeyTrait, V: Clone> Version for TwigNode<K, V> {
-    fn version(&self) -> u64 {
-        self.version
+    pub fn last_less_or_equal(&self, ts: u64) -> Option<Arc<LeafValue<V>>> {
+        self.get_leaf_by_ts(ts)
+    }
+
+    pub fn first_greater_than(&self, ts: u64) -> Option<Arc<LeafValue<V>>> {
+        self.values
+            .iter()
+            .filter(|value| value.ts > ts)
+            .min_by_key(|value| value.ts)
+            .cloned()
+    }
+
+    pub fn first_greater_or_equal(&self, ts: u64) -> Option<Arc<LeafValue<V>>> {
+        self.values
+            .iter()
+            .filter(|value| value.ts >= ts)
+            .min_by_key(|value| value.ts)
+            .cloned()
     }
 }
 
