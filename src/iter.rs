@@ -2,63 +2,8 @@ use std::collections::{Bound, VecDeque};
 use std::ops::RangeBounds;
 use std::sync::Arc;
 
-use crate::art::{Node, NodeType};
+use crate::art::{Node, NodeType, QueryType};
 use crate::KeyTrait;
-
-// TODO: need to add more tests for snapshot readers
-/// A structure representing a pointer for iterating over the Trie's key-value pairs.
-pub struct IterationPointer<P: KeyTrait, V: Clone> {
-    root: Arc<Node<P, V>>,
-}
-
-impl<P: KeyTrait, V: Clone> IterationPointer<P, V> {
-    /// Creates a new IterationPointer instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `root` - The root node of the Trie.
-    ///
-    pub fn new(root: Arc<Node<P, V>>) -> IterationPointer<P, V> {
-        IterationPointer { root }
-    }
-
-    /// Returns an iterator over the key-value pairs within the Trie.
-    ///
-    /// # Returns
-    ///
-    /// Returns an Iter iterator instance.
-    ///
-    pub fn iter(&self) -> Iter<P, V> {
-        Iter::new(Some(&self.root))
-    }
-
-    /// Returns an iterator over all
-    pub fn iter_with_versions(&self) -> VersionedIter<P, V> {
-        VersionedIter::new(Some(&self.root))
-    }
-
-    /// Returns a range query iterator over the Trie.
-    pub fn range<'a, R>(
-        &'a self,
-        range: R,
-    ) -> impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>
-    where
-        R: RangeBounds<P> + 'a,
-    {
-        Range::new(Some(&self.root), range)
-    }
-
-    /// Returns a versioned range query iterator over the Trie.
-    pub fn range_with_versions<'a, R>(
-        &'a self,
-        range: R,
-    ) -> impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>
-    where
-        R: RangeBounds<P> + 'a,
-    {
-        Range::new_versioned(Some(&self.root), range)
-    }
-}
 
 type NodeIterator<'a, P, V> = Box<dyn Iterator<Item = (u8, &'a Arc<Node<P, V>>)> + 'a>;
 
@@ -198,6 +143,29 @@ impl<'a, P: KeyTrait + 'a, V: Clone> IterState<'a, P, V> {
             is_versioned,
         }
     }
+
+    fn scan_at<R>(node: &'a Node<P, V>, range: &R, query_type: QueryType) -> Self
+    where
+        R: RangeBounds<P>,
+    {
+        let mut leafs = VecDeque::new();
+        let mut iters = Vec::new();
+        if let NodeType::Twig(twig) = &node.node_type {
+            if range.contains(&twig.key) {
+                if let Some(v) = twig.get_leaf_by_query_ref(query_type) {
+                    leafs.push_back((&twig.key, &v.value, &v.version, &v.ts));
+                }
+            }
+        } else {
+            iters.push(NodeIter::new(node.iter()));
+        }
+
+        Self {
+            iters,
+            leafs,
+            is_versioned: false,
+        }
+    }
 }
 
 impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
@@ -262,18 +230,12 @@ where
     where
         R: RangeBounds<K>,
     {
-        if let Some(node) = node {
-            Self {
-                forward: IterState::forward_scan(node, &range, false),
-                range,
-                is_versioned: false,
-            }
-        } else {
-            Self {
-                forward: IterState::empty(),
-                range,
-                is_versioned: false,
-            }
+        Self {
+            forward: node.map_or_else(IterState::empty, |n| {
+                IterState::forward_scan(n, &range, false)
+            }),
+            range,
+            is_versioned: false,
         }
     }
 
@@ -281,18 +243,12 @@ where
     where
         R: RangeBounds<K>,
     {
-        if let Some(node) = node {
-            Self {
-                forward: IterState::forward_scan(node, &range, true),
-                range,
-                is_versioned: true,
-            }
-        } else {
-            Self {
-                forward: IterState::empty(),
-                range,
-                is_versioned: true,
-            }
+        Self {
+            forward: node.map_or_else(IterState::empty, |n| {
+                IterState::forward_scan(n, &range, true)
+            }),
+            range,
+            is_versioned: true,
         }
     }
 }
@@ -307,6 +263,8 @@ impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K
                 Some(other) => {
                     if let NodeType::Twig(twig) = &other.1.node_type {
                         if self.range.contains(&twig.key) {
+                            // If the query is versioned, iterate over all versions of the key
+                            // and add them to the leafs queue. Otherwise, add the latest version.
                             if self.is_versioned {
                                 for leaf in twig.iter() {
                                     self.forward.leafs.push_back((
@@ -374,6 +332,99 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for VersionedIter<'a, P, V> {
     }
 }
 
+pub(crate) fn scan_node<K, V, R>(
+    node: Option<&Arc<Node<K, V>>>,
+    range: R,
+    query_type: QueryType,
+) -> Vec<(Vec<u8>, V)>
+where
+    K: KeyTrait,
+    V: Clone,
+    R: RangeBounds<K>,
+{
+    iterate(node, range, query_type, true)
+        .into_iter()
+        .filter_map(|(k, v_opt)| v_opt.map(|v| (k, v)))
+        .collect()
+}
+
+pub(crate) fn query_keys_at_node<K, V, R>(
+    node: Option<&Arc<Node<K, V>>>,
+    range: R,
+    query_type: QueryType,
+) -> Vec<Vec<u8>>
+where
+    K: KeyTrait + Ord,
+    V: Clone,
+    R: RangeBounds<K>,
+{
+    iterate(node, range, query_type, false)
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect()
+}
+
+fn iterate<K, V, R>(
+    node: Option<&Arc<Node<K, V>>>,
+    range: R,
+    query_type: QueryType,
+    include_values: bool,
+) -> Vec<(Vec<u8>, Option<V>)>
+where
+    K: KeyTrait,
+    V: Clone,
+    R: RangeBounds<K>,
+{
+    let mut results = Vec::new();
+    let mut forward = node.map_or_else(IterState::empty, |n| {
+        IterState::scan_at(n, &range, query_type)
+    });
+
+    while let Some(node) = forward.iters.last_mut() {
+        if let Some((_, res)) = node.next() {
+            if let NodeType::Twig(twig) = &res.node_type {
+                if range.contains(&twig.key) {
+                    // Iterate through leaves of the twig
+                    if let Some(leaf) = twig.get_leaf_by_query(query_type) {
+                        let key = twig.key.as_slice().to_vec();
+                        if include_values {
+                            results.push((key, Some(leaf.value.clone())));
+                        } else {
+                            results.push((key, None));
+                        }
+                    }
+                } else {
+                    // stop iteration if the range end is exceeded
+                    match range.end_bound() {
+                        Bound::Included(k) if &twig.key > k => forward.iters.clear(),
+                        Bound::Excluded(k) if &twig.key >= k => forward.iters.clear(),
+                        _ => {}
+                    }
+                }
+            } else {
+                // Push the iterator if it is not a leaf node
+                forward.iters.push(NodeIter::new(res.iter()));
+            }
+        } else {
+            // Pop the iterator if no more elements
+            forward.iters.pop();
+        }
+    }
+
+    // Iterate over all leafs in forward.leafs and append them to results
+    for leaf in forward.leafs {
+        let key = leaf.0.as_slice().to_vec();
+        let value = if include_values {
+            Some(leaf.1.clone())
+        } else {
+            None
+        };
+        results.push((key, value));
+    }
+
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use hashbrown::HashMap;
@@ -404,8 +455,7 @@ mod tests {
         for i in 0..num_keys {
             let key: FixedSizeKey<16> = i.into();
             for version in 1..versions_per_key + 1 {
-                tree.insert_without_version_increment_check(&key, i, version, 0_u64)
-                    .unwrap();
+                tree.insert_unchecked(&key, i, version, 0_u64).unwrap();
             }
         }
 
@@ -430,7 +480,6 @@ mod tests {
         for (_, versions) in &versions_map {
             assert_eq!(versions.len() as u64, versions_per_key);
 
-            // Check if versions are sequential, assuming they start from 1
             let mut expected_version = 1;
             for version in versions {
                 assert_eq!(*version, expected_version);
@@ -460,8 +509,7 @@ mod tests {
         for i in 0..num_keys {
             let key: FixedSizeKey<16> = i.into();
             for version in (1..=versions_per_key).rev() {
-                tree.insert_without_version_increment_check(&key, i, version, 0_u64)
-                    .unwrap();
+                tree.insert_unchecked(&key, i, version, 0_u64).unwrap();
             }
         }
 
@@ -524,8 +572,7 @@ mod tests {
         for i in 0..num_keys {
             let key: FixedSizeKey<16> = i.into();
             for version in 1..=versions_per_key {
-                tree.insert_without_version_increment_check(&key, i, version, 0_u64)
-                    .unwrap();
+                tree.insert_unchecked(&key, i, version, 0_u64).unwrap();
             }
         }
 
@@ -562,7 +609,6 @@ mod tests {
                     key
                 );
 
-                // Check if versions are sequential, assuming they start from 1
                 let mut expected_version = 1;
                 for version in versions {
                     assert_eq!(
@@ -609,8 +655,7 @@ mod tests {
         let key: FixedSizeKey<16> = 1u16.into();
         let versions = [1, 2];
         for &version in &versions {
-            tree.insert_without_version_increment_check(&key, 1, version, 0_u64)
-                .unwrap();
+            tree.insert_unchecked(&key, 1, version, 0_u64).unwrap();
         }
 
         // Use iterator to iterate through the tree
@@ -653,8 +698,7 @@ mod tests {
         let key: FixedSizeKey<16> = 1u16.into();
         let versions = [1, 2];
         for &version in &versions {
-            tree.insert_without_version_increment_check(&key, 1, version, 0_u64)
-                .unwrap();
+            tree.insert_unchecked(&key, 1, version, 0_u64).unwrap();
         }
 
         // Define start and end keys for the range query
