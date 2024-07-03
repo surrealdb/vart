@@ -12,24 +12,16 @@ use crate::{KeyTrait, TrieError};
 pub struct Snapshot<P: KeyTrait, V: Clone> {
     pub(crate) ts: u64,
     pub(crate) root: Option<Arc<Node<P, V>>>,
-    pub(crate) closed: bool,
 }
 
 impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
     /// Creates a new Snapshot instance with the provided snapshot_id and root node.
     pub(crate) fn new(root: Option<Arc<Node<P, V>>>, ts: u64) -> Self {
-        Snapshot {
-            ts,
-            root,
-            closed: false,
-        }
+        Snapshot { ts, root }
     }
 
     /// Inserts a key-value pair into the snapshot.
     pub fn insert(&mut self, key: &P, value: V, ts: u64) -> Result<(), TrieError> {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
-
         // Insert the key-value pair into the root node using a recursive function
         match &self.root {
             Some(root) => {
@@ -59,9 +51,6 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
 
     /// Retrieves the value, version and timestamp associated with the given key from the snapshot.
     pub fn get(&self, key: &P) -> Result<(V, u64, u64), TrieError> {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
-
         // Use a recursive function to get the value and timestamp from the root node
         match self.root.as_ref() {
             Some(root) => Node::get_recurse(root, key, QueryType::LatestByVersion(root.version())),
@@ -71,9 +60,6 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
 
     /// Retrieves the value, version associated with the given key from the snapshot at the specified timestamp.
     pub fn get_at_ts(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
-
         match self.root.as_ref() {
             Some(root) => Node::get_recurse(root, key, QueryType::LatestByTs(ts))
                 .map(|(value, version, _)| (value, version)),
@@ -83,9 +69,6 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
 
     /// Retrieves the version history of the key from the snapshot.
     pub fn get_version_history(&self, key: &P) -> Result<Vec<(V, u64, u64)>, TrieError> {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
-
         match self.root.as_ref() {
             Some(root) => {
                 // Directly return the Result from Node::get_all_versions
@@ -100,28 +83,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         self.root.as_ref().map_or(0, |root| root.version())
     }
 
-    fn is_closed(&self) -> Result<(), TrieError> {
-        if self.closed {
-            return Err(TrieError::SnapshotAlreadyClosed);
-        }
-        Ok(())
-    }
-
-    /// Closes the snapshot, preventing further modifications, and releases associated resources.
-    pub fn close(&mut self) -> Result<(), TrieError> {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
-
-        // Mark the snapshot as closed
-        self.closed = true;
-
-        Ok(())
-    }
-
     pub fn remove(&mut self, key: &P) -> Result<bool, TrieError> {
-        // Check if the tree is already closed
-        self.is_closed()?;
-
         let (new_root, is_deleted) = Tree::remove_from_node(self.root.as_ref(), key);
 
         self.root = new_root;
@@ -133,15 +95,11 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
     }
 
     pub fn iter(&self) -> Result<Iter<P, V>, TrieError> {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
         Ok(Iter::new(self.root.as_ref()))
     }
 
     /// Returns an iterator over all versions of the key-value pairs within the Trie.
     pub fn iter_with_versions(&self) -> Result<VersionedIter<P, V>, TrieError> {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
         Ok(VersionedIter::new(self.root.as_ref()))
     }
 
@@ -153,8 +111,6 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
     where
         R: RangeBounds<P> + 'a,
     {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
         Ok(Range::new(self.root.as_ref(), range))
     }
 
@@ -166,8 +122,6 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
     where
         R: RangeBounds<P> + 'a,
     {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
         Ok(Range::new_versioned(self.root.as_ref(), range))
     }
 
@@ -176,9 +130,6 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         key: &P,
         query_type: QueryType,
     ) -> Result<(V, u64, u64), TrieError> {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
-
         match self.root.as_ref() {
             Some(root) => Node::get_recurse(root, key, query_type),
             None => Err(TrieError::KeyNotFound),
@@ -189,8 +140,6 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
     where
         R: RangeBounds<P>,
     {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
         Ok(scan_node(
             self.root.as_ref(),
             range,
@@ -202,8 +151,6 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
     where
         R: RangeBounds<P>,
     {
-        // Check if the snapshot is already closed
-        self.is_closed()?;
         Ok(query_keys_at_node(
             self.root.as_ref(),
             range,
@@ -280,9 +227,6 @@ mod tests {
         // Keys inserted after snapshot creation should not be visible to other snapshots
         assert!(snap1.get(&key_3_snap2).is_err());
         assert!(snap2.get(&key_3_snap1).is_err());
-
-        assert!(snap1.close().is_ok());
-        assert!(snap2.close().is_ok());
     }
 
     #[test]
@@ -305,9 +249,6 @@ mod tests {
             let mut reader = snap.iter().unwrap();
             assert_eq!(count_items(&mut reader), 4);
         }
-
-        // Close snapshot
-        assert!(snap.close().is_ok());
     }
 
     fn count_items<P: KeyTrait, V: Clone>(reader: &mut Iter<P, V>) -> usize {
@@ -415,16 +356,6 @@ mod tests {
         let key = VariableSizeKey::from_str("nonexistent_key").unwrap();
         let result = snapshot.get_at_ts(&key, 100);
         assert!(matches!(result, Err(TrieError::KeyNotFound)));
-    }
-
-    #[test]
-    fn test_get_at_ts_closed_snapshot() {
-        let tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
-        let mut snapshot = tree.create_snapshot().unwrap();
-        snapshot.closed = true;
-        let key = VariableSizeKey::from_str("any_key").unwrap();
-        let result = snapshot.get_at_ts(&key, 100);
-        assert!(matches!(result, Err(TrieError::SnapshotAlreadyClosed)));
     }
 
     #[test]

@@ -883,8 +883,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 pub struct Tree<P: KeyTrait, V: Clone> {
     /// An optional shared reference to the root node of the tree.
     pub(crate) root: Option<Arc<Node<P, V>>>,
-    /// A flag indicating whether the tree is closed.
-    pub(crate) closed: bool,
 }
 
 pub struct KV<P, V> {
@@ -931,10 +929,7 @@ impl<P: KeyTrait, V: Clone> Default for Tree<P, V> {
 
 impl<P: KeyTrait, V: Clone> Tree<P, V> {
     pub fn new() -> Self {
-        Tree {
-            root: None,
-            closed: false,
-        }
+        Tree { root: None }
     }
 
     fn insert_common(
@@ -945,8 +940,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         ts: u64,
         check_version: bool,
     ) -> Result<Option<V>, TrieError> {
-        self.check_if_closed()?;
-
         let (new_root, old_node) = match &self.root {
             None => {
                 let commit_version = if version == 0 { 1 } else { version };
@@ -1025,9 +1018,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         kv_pairs: &[KV<P, V>],
         check_version: bool,
     ) -> Result<(), TrieError> {
-        // Check if the tree is already closed
-        self.check_if_closed()?;
-
         let curr_version = self.version();
         let mut new_version = 0;
 
@@ -1140,9 +1130,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     }
 
     pub fn remove(&mut self, key: &P) -> Result<bool, TrieError> {
-        // Check if the tree is already closed
-        self.check_if_closed()?;
-
         // Directly match on the root to simplify logic
         let (new_root, is_deleted) = Tree::remove_from_node(self.root.as_ref(), key);
 
@@ -1154,9 +1141,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     }
 
     pub fn get(&self, key: &P, version: u64) -> Result<(V, u64, u64), TrieError> {
-        // Check if the tree is already closed
-        self.check_if_closed()?;
-
         if self.root.is_none() {
             return Err(TrieError::Other("cannot read from empty tree".to_string()));
         }
@@ -1197,9 +1181,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// or an `Err` with an appropriate error message if creation fails.
     ///
     pub fn create_snapshot(&self) -> Result<Snapshot<P, V>, TrieError> {
-        // Check if the tree is already closed
-        self.check_if_closed()?;
-
         let root = self.root.as_ref().cloned();
         let version = self.root.as_ref().map_or(1, |root| root.version() + 1);
         let new_snapshot = Snapshot::new(root, version);
@@ -1275,27 +1256,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Range::new_versioned(root, range)
     }
 
-    fn check_if_closed(&self) -> Result<(), TrieError> {
-        if self.closed {
-            return Err(TrieError::TreeAlreadyClosed);
-        }
-        Ok(())
-    }
-
-    /// Closes the tree, preventing further modifications, and releases associated resources.
-    pub fn close(&mut self) -> Result<(), TrieError> {
-        // Check if the tree is already closed
-        self.check_if_closed()?;
-
-        self.closed = true;
-
-        Ok(())
-    }
-
     pub fn get_at_ts(&self, key: &P, ts: u64) -> Result<(V, u64, u64), TrieError> {
-        // Check if the tree is already closed
-        self.check_if_closed()?;
-
         if self.root.is_none() {
             return Err(TrieError::Other("cannot read from empty tree".to_string()));
         }
@@ -1305,9 +1266,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     }
 
     pub fn get_version_history(&self, key: &P) -> Result<Vec<(V, u64, u64)>, TrieError> {
-        // Check if the tree is already closed
-        self.check_if_closed()?;
-
         if self.root.is_none() {
             return Err(TrieError::Other("cannot read from empty tree".to_string()));
         }
@@ -1326,9 +1284,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         key: &P,
         query_type: QueryType,
     ) -> Result<(V, u64, u64), TrieError> {
-        // Check if the tree is already closed
-        self.check_if_closed()?;
-
         if self.root.is_none() {
             return Err(TrieError::Other("cannot read from empty tree".to_string()));
         }
