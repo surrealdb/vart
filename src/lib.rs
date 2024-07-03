@@ -403,12 +403,8 @@ impl<const SIZE: usize> BitSet<SIZE> {
 // Define a custom error enum representing different error cases for the Trie
 #[derive(Clone, Debug)]
 pub enum TrieError {
-    IllegalArguments,
-    NotFound,
-    KeyNotFound,
-    SnapshotEmpty,
     FixedSizeKeyLengthExceeded,
-    Other(String),
+    VersionIsOld,
 }
 
 impl Error for TrieError {}
@@ -417,12 +413,10 @@ impl Error for TrieError {}
 impl fmt::Display for TrieError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            TrieError::IllegalArguments => write!(f, "Illegal arguments"),
-            TrieError::NotFound => write!(f, "Not found"),
-            TrieError::KeyNotFound => write!(f, "Key not found"),
-            TrieError::Other(ref message) => write!(f, "Other error: {}", message),
-            TrieError::SnapshotEmpty => write!(f, "Snapshot is empty"),
             TrieError::FixedSizeKeyLengthExceeded => write!(f, "Fixed key length exceeded"),
+            TrieError::VersionIsOld => {
+                write!(f, "Given version is older than root's current version")
+            }
         }
     }
 }

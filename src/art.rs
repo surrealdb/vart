@@ -792,10 +792,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         (Some(cur_node.clone()), false)
     }
 
-    fn navigate_to_node<'a>(
-        cur_node: &'a Node<P, V>,
-        key: &P,
-    ) -> Result<&'a Node<P, V>, TrieError> {
+    fn navigate_to_node<'a>(cur_node: &'a Node<P, V>, key: &P) -> Option<&'a Node<P, V>> {
         let mut cur_node = cur_node;
         let mut depth = 0;
 
@@ -806,11 +803,11 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             let lcp = prefix.longest_common_prefix(key_prefix);
 
             if lcp != prefix.len() {
-                return Err(TrieError::KeyNotFound);
+                return None;
             }
 
             if prefix.len() == key_prefix.len() {
-                return Ok(cur_node);
+                return Some(cur_node);
             }
 
             let k = key.at(depth + prefix.len());
@@ -818,7 +815,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
             match cur_node.find_child(k) {
                 Some(child) => cur_node = child,
-                None => return Err(TrieError::KeyNotFound),
+                None => return None,
             }
         }
     }
@@ -828,20 +825,14 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         cur_node: &Node<P, V>,
         key: &P,
         query_type: QueryType,
-    ) -> Result<(V, u64, u64), TrieError> {
+    ) -> Option<(V, u64, u64)> {
         let cur_node = Self::navigate_to_node(cur_node, key)?;
-        let val = cur_node
-            .get_leaf_by_query(query_type)
-            .ok_or(TrieError::KeyNotFound)?;
-        Ok((val.value.clone(), val.version, val.ts))
+        let val = cur_node.get_leaf_by_query(query_type)?;
+        Some((val.value.clone(), val.version, val.ts))
     }
 
-    pub fn get_version_history(
-        cur_node: &Node<P, V>,
-        key: &P,
-    ) -> Result<Vec<(V, u64, u64)>, TrieError> {
-        let cur_node = Self::navigate_to_node(cur_node, key)?;
-        cur_node.get_all_versions().ok_or(TrieError::KeyNotFound)
+    pub fn get_version_history(cur_node: &Node<P, V>, key: &P) -> Option<Vec<(V, u64, u64)>> {
+        Self::navigate_to_node(cur_node, key).and_then(|cur_node| cur_node.get_all_versions())
     }
 
     /// Returns an iterator that iterates over child nodes of the current node.
@@ -960,9 +951,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                 if version == 0 {
                     commit_version = curr_version + 1;
                 } else if check_version && curr_version >= version {
-                    return Err(TrieError::Other(
-                        "given version is older than root's current version".to_string(),
-                    ));
+                    return Err(TrieError::VersionIsOld);
                 }
                 Node::insert_recurse(root, key, value, commit_version, ts, 0)?
             }
@@ -1030,9 +1019,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                 // Zero-valued timestamps are associated with current time plus one
                 t = curr_version + 1;
             } else if check_version && (curr_version >= kv.version) {
-                return Err(TrieError::Other(
-                    "given version is older than root's current version".to_string(),
-                ));
+                return Err(TrieError::VersionIsOld);
             }
 
             // Create a new KV instance
@@ -1140,12 +1127,8 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Ok(is_deleted)
     }
 
-    pub fn get(&self, key: &P, version: u64) -> Result<(V, u64, u64), TrieError> {
-        if self.root.is_none() {
-            return Err(TrieError::Other("cannot read from empty tree".to_string()));
-        }
-
-        let root = self.root.as_ref().unwrap();
+    pub fn get(&self, key: &P, version: u64) -> Option<(V, u64, u64)> {
+        let root = self.root.as_ref()?;
         let mut commit_version = version;
         if commit_version == 0 {
             commit_version = root.version();
@@ -1256,39 +1239,18 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Range::new_versioned(root, range)
     }
 
-    pub fn get_at_ts(&self, key: &P, ts: u64) -> Result<(V, u64, u64), TrieError> {
-        if self.root.is_none() {
-            return Err(TrieError::Other("cannot read from empty tree".to_string()));
-        }
-
-        let root = self.root.as_ref().unwrap();
+    pub fn get_at_ts(&self, key: &P, ts: u64) -> Option<(V, u64, u64)> {
+        let root = self.root.as_ref()?;
         Node::get_recurse(root, key, QueryType::LatestByTs(ts))
     }
 
-    pub fn get_version_history(&self, key: &P) -> Result<Vec<(V, u64, u64)>, TrieError> {
-        if self.root.is_none() {
-            return Err(TrieError::Other("cannot read from empty tree".to_string()));
-        }
-
-        match self.root.as_ref() {
-            Some(root) => {
-                // Directly return the Result from Node::get_all_versions
-                Node::get_version_history(root, key)
-            }
-            None => Err(TrieError::KeyNotFound),
-        }
+    pub fn get_version_history(&self, key: &P) -> Option<Vec<(V, u64, u64)>> {
+        let root = self.root.as_ref()?;
+        Node::get_version_history(root, key)
     }
 
-    pub fn get_value_by_query(
-        &self,
-        key: &P,
-        query_type: QueryType,
-    ) -> Result<(V, u64, u64), TrieError> {
-        if self.root.is_none() {
-            return Err(TrieError::Other("cannot read from empty tree".to_string()));
-        }
-
-        let root = self.root.as_ref().unwrap();
+    pub fn get_value_by_query(&self, key: &P, query_type: QueryType) -> Option<(V, u64, u64)> {
+        let root = self.root.as_ref()?;
         Node::get_recurse(root, key, query_type)
     }
 }
@@ -1435,7 +1397,7 @@ mod tests {
         assert!(tree.remove(&key).unwrap());
 
         // Verification
-        assert!(tree.get(&key, 0).is_err());
+        assert!(tree.get(&key, 0).is_none());
     }
 
     #[test]
@@ -2131,7 +2093,7 @@ mod tests {
                 if remaining_index <= index {
                     // Check that the deleted key is no longer present
                     assert!(
-                        tree.get(&key_to_delete, version).is_err(),
+                        tree.get(&key_to_delete, version).is_none(),
                         "Key {:?} should not exist after deletion",
                         key_data_to_delete
                     );
@@ -2142,7 +2104,7 @@ mod tests {
                     data: remaining_key_data.to_vec(),
                 };
                 assert!(
-                    tree.get(&remaining_key, version).is_ok(),
+                    tree.get(&remaining_key, version).is_some(),
                     "Key {:?} should exist",
                     remaining_key_data
                 );
@@ -2195,7 +2157,7 @@ mod tests {
                 if remaining_index <= index {
                     // Check that the deleted key is no longer present
                     assert!(
-                        tree.get(&key_to_delete, version).is_err(),
+                        tree.get(&key_to_delete, version).is_none(),
                         "Key {:?} should not exist after deletion",
                         key_data_to_delete
                     );
@@ -2206,7 +2168,7 @@ mod tests {
                     data: remaining_key_data.to_vec(),
                 };
                 assert!(
-                    tree.get(&remaining_key, version).is_ok(),
+                    tree.get(&remaining_key, version).is_some(),
                     "Key {:?} should exist",
                     remaining_key_data
                 );
@@ -2322,7 +2284,7 @@ mod tests {
 
         // Verify all keys are removed
         for key in keys {
-            assert!(tree.get(&key, 0).is_err());
+            assert!(tree.get(&key, 0).is_none());
         }
     }
 
@@ -2360,7 +2322,7 @@ mod tests {
         let _ = tree.insert(&key2, 2, 0, 0);
 
         // Verify
-        assert!(tree.get(&key1, 0).is_err());
+        assert!(tree.get(&key1, 0).is_none());
         assert_eq!(tree.get(&key2, 0).unwrap().0, 2);
     }
 
@@ -2398,7 +2360,7 @@ mod tests {
         for (key, version) in key_version_map.iter() {
             let key = VariableSizeKey::from_str(key).unwrap();
             assert!(
-                tree.get(&key, *version as u64).is_ok(),
+                tree.get(&key, *version as u64).is_some(),
                 "The key {:?} at version {} should be present in the tree.",
                 key,
                 version
@@ -2656,7 +2618,7 @@ mod tests {
 
         // Scenario 3: Ensure no history for a non-existent key
         let key3 = VariableSizeKey::from_str("non_existent_key").unwrap();
-        assert!(tree.get_version_history(&key3).is_err());
+        assert!(tree.get_version_history(&key3).is_none());
     }
 
     #[test]

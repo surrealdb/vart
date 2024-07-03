@@ -50,32 +50,26 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
     }
 
     /// Retrieves the value, version and timestamp associated with the given key from the snapshot.
-    pub fn get(&self, key: &P) -> Result<(V, u64, u64), TrieError> {
+    pub fn get(&self, key: &P) -> Option<(V, u64, u64)> {
         // Use a recursive function to get the value and timestamp from the root node
-        match self.root.as_ref() {
-            Some(root) => Node::get_recurse(root, key, QueryType::LatestByVersion(root.version())),
-            None => Err(TrieError::KeyNotFound),
-        }
+        self.root.as_ref().and_then(|root| {
+            Node::get_recurse(root, key, QueryType::LatestByVersion(root.version()))
+        })
     }
 
     /// Retrieves the value, version associated with the given key from the snapshot at the specified timestamp.
-    pub fn get_at_ts(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
-        match self.root.as_ref() {
-            Some(root) => Node::get_recurse(root, key, QueryType::LatestByTs(ts))
-                .map(|(value, version, _)| (value, version)),
-            None => Err(TrieError::KeyNotFound),
-        }
+    pub fn get_at_ts(&self, key: &P, ts: u64) -> Option<(V, u64)> {
+        self.root
+            .as_ref()
+            .and_then(|root| Node::get_recurse(root, key, QueryType::LatestByTs(ts)))
+            .map(|(value, version, _)| (value, version))
     }
 
     /// Retrieves the version history of the key from the snapshot.
-    pub fn get_version_history(&self, key: &P) -> Result<Vec<(V, u64, u64)>, TrieError> {
-        match self.root.as_ref() {
-            Some(root) => {
-                // Directly return the Result from Node::get_all_versions
-                Node::get_version_history(root, key)
-            }
-            None => Err(TrieError::KeyNotFound),
-        }
+    pub fn get_version_history(&self, key: &P) -> Option<Vec<(V, u64, u64)>> {
+        self.root
+            .as_ref()
+            .and_then(|root| Node::get_version_history(root, key))
     }
 
     /// Returns the version of the snapshot.
@@ -125,15 +119,10 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         Ok(Range::new_versioned(self.root.as_ref(), range))
     }
 
-    pub fn get_value_by_query(
-        &self,
-        key: &P,
-        query_type: QueryType,
-    ) -> Result<(V, u64, u64), TrieError> {
-        match self.root.as_ref() {
-            Some(root) => Node::get_recurse(root, key, query_type),
-            None => Err(TrieError::KeyNotFound),
-        }
+    pub fn get_value_by_query(&self, key: &P, query_type: QueryType) -> Option<(V, u64, u64)> {
+        self.root
+            .as_ref()
+            .and_then(|root| Node::get_recurse(root, key, query_type))
     }
 
     pub fn scan_at_ts<R>(&self, range: R, ts: u64) -> Result<Vec<(Vec<u8>, V)>, TrieError>
@@ -165,7 +154,6 @@ mod tests {
     use crate::art::Tree;
     use crate::iter::Iter;
     use crate::KeyTrait;
-    use crate::TrieError;
     use crate::VariableSizeKey;
 
     use std::ops::RangeFull;
@@ -214,8 +202,8 @@ mod tests {
 
         // Keys inserted after snapshot creation should not be visible to other snapshots
         assert!(tree.insert(&key_2, 1, 0, 0).is_ok());
-        assert!(snap1.get(&key_2).is_err());
-        assert!(snap2.get(&key_2).is_err());
+        assert!(snap1.get(&key_2).is_none());
+        assert!(snap2.get(&key_2).is_none());
 
         // Keys inserted after snapshot creation should be visible to the snapshot that inserted them
         assert!(snap1.insert(&key_3_snap1, 2, 0).is_ok());
@@ -225,8 +213,8 @@ mod tests {
         assert_eq!(snap2.get(&key_3_snap2).unwrap(), (3, 2, 0));
 
         // Keys inserted after snapshot creation should not be visible to other snapshots
-        assert!(snap1.get(&key_3_snap2).is_err());
-        assert!(snap2.get(&key_3_snap1).is_err());
+        assert!(snap1.get(&key_3_snap2).is_none());
+        assert!(snap2.get(&key_3_snap1).is_none());
     }
 
     #[test]
@@ -317,7 +305,7 @@ mod tests {
                     // This key has been deleted; skip
                     // Check that the deleted key is no longer present
                     assert!(
-                        snap.get(&key_to_delete).is_err(),
+                        snap.get(&key_to_delete).is_none(),
                         "Key {:?} should not exist after deletion",
                         key_data_to_delete
                     );
@@ -327,7 +315,7 @@ mod tests {
                     data: remaining_key_data.to_vec(),
                 };
                 assert!(
-                    snap.get(&remaining_key).is_ok(),
+                    snap.get(&remaining_key).is_some(),
                     "Key {:?} should exist",
                     remaining_key_data
                 );
@@ -355,7 +343,7 @@ mod tests {
         let snapshot = tree.create_snapshot().unwrap();
         let key = VariableSizeKey::from_str("nonexistent_key").unwrap();
         let result = snapshot.get_at_ts(&key, 100);
-        assert!(matches!(result, Err(TrieError::KeyNotFound)));
+        assert!(result.is_none());
     }
 
     #[test]
@@ -368,7 +356,7 @@ mod tests {
         snapshot.insert(&key, value, ts).unwrap();
 
         let result = snapshot.get_at_ts(&key, ts - 1);
-        assert!(matches!(result, Err(TrieError::KeyNotFound)));
+        assert!(result.is_none());
     }
 
     #[test]
@@ -463,7 +451,7 @@ mod tests {
         snapshot.remove(&key).unwrap();
 
         let result = snapshot.get_at_ts(&key, ts_query);
-        assert!(result.is_err());
+        assert!(result.is_none());
     }
 
     #[test]
@@ -509,7 +497,7 @@ mod tests {
 
         // Scenario 3: Ensure no history for a non-existent key
         let key3 = VariableSizeKey::from_str("non_existent_key").unwrap();
-        assert!(snapshot.get_version_history(&key3).is_err());
+        assert!(snapshot.get_version_history(&key3).is_none());
     }
 
     #[test]
