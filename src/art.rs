@@ -56,6 +56,7 @@ impl<P: KeyTrait, V: Clone> Version for Node<P, V> {
     }
 }
 
+#[derive(Copy, Clone)]
 // An enum for the different types of queries on the TwigNode
 pub enum QueryType {
     LatestByVersion(u64),
@@ -565,65 +566,14 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     }
 
     #[inline]
-    pub(crate) fn get_value_by_query(&self, query_type: QueryType) -> Option<Arc<LeafValue<V>>> {
+    pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<Arc<LeafValue<V>>> {
         // Unwrap the NodeType::Twig to access the TwigNode instance.
         let NodeType::Twig(twig) = &self.node_type else {
             return None;
         };
 
-        match query_type {
-            QueryType::LatestByVersion(version) => twig.get_leaf_by_version(version),
-            QueryType::LatestByTs(ts) => twig.get_leaf_by_ts(ts),
-            QueryType::LastLessThanTs(ts) => twig.last_less_than_ts(ts),
-            QueryType::LastLessOrEqualTs(ts) => twig.last_less_or_equal_ts(ts),
-            QueryType::FirstGreaterThanTs(ts) => twig.first_greater_than_ts(ts),
-            QueryType::FirstGreaterOrEqualTs(ts) => twig.first_greater_or_equal_ts(ts),
-        }
+        twig.get_leaf_by_query(query_type)
     }
-
-    /// TODO: fix having separate key and prefix traits to avoid copying
-    /// Retrieves a value from a Twig node by the specified version.
-    ///
-    /// Retrieves a value from the current Twig node by matching the provided version.
-    ///
-    /// # Parameters
-    ///
-    /// - `ts`: The version for which to retrieve the value.
-    ///
-    /// # Returns
-    ///
-    /// Returns `Some((key, value, version))` if a matching value is found in the Twig node for the given version.
-    /// If no matching value is found, returns `None`.
-    ///
-    // #[inline]
-    // pub fn get_value_by_version(&self, version: u64) -> Option<(V, u64, u64)> {
-    //     // Unwrap the NodeType::Twig to access the TwigNode instance.
-    //     let NodeType::Twig(twig) = &self.node_type else {
-    //         return None;
-    //     };
-
-    //     // Get the value from the TwigNode instance by the specified version.
-    //     let val = twig.get_leaf_by_version(version)?;
-
-    //     // Return the retrieved key, value, and version as a tuple.
-    //     // TODO: should return copy of value or reference?
-    //     Some((val.value.clone(), val.version, val.ts))
-    // }
-
-    // #[inline]
-    // pub fn get_value_by_ts(&self, ts: u64) -> Option<(V, u64, u64)> {
-    //     // Unwrap the NodeType::Twig to access the TwigNode instance.
-    //     let NodeType::Twig(twig) = &self.node_type else {
-    //         return None;
-    //     };
-
-    //     // Get the value from the TwigNode instance by the specified version.
-    //     let val = twig.get_leaf_by_ts(ts)?;
-
-    //     // Return the retrieved key, value, and version as a tuple.
-    //     // TODO: should return copy of value or reference?
-    //     Some((val.value.clone(), val.version, val.ts))
-    // }
 
     #[inline]
     pub fn get_all_versions(&self) -> Option<Vec<(V, u64, u64)>> {
@@ -883,7 +833,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     ) -> Result<(V, u64, u64), TrieError> {
         let cur_node = Self::navigate_to_node(cur_node, key)?;
         let val = cur_node
-            .get_value_by_query(query_type)
+            .get_leaf_by_query(query_type)
             .ok_or(TrieError::KeyNotFound)?;
         Ok((val.value.clone(), val.version, val.ts))
     }
@@ -2628,8 +2578,7 @@ mod tests {
         // Insert 75 keys
         for i in 1..=75 {
             let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
-            // Assuming version is incremented with each insert, and starting version is 0
-            let _ = tree.insert(&key, i, i as u64, 0); // Here, `i as u64` is used as the version for simplicity
+            let _ = tree.insert(&key, i, i as u64, 0);
         }
 
         // Attempt to delete 25 keys (76 to 100), which do not exist
@@ -2644,7 +2593,6 @@ mod tests {
         let key1 = VariableSizeKey::from_str("key1").unwrap();
         let key75 = VariableSizeKey::from_str("key75").unwrap();
 
-        // Assuming `get` returns a Result<(Value, Version), Error>
         assert_eq!(tree.get(&key1, 0).unwrap().1, 1); // Check version of key1
         assert_eq!(tree.get(&key75, 0).unwrap().1, 75); // Check version of key75
     }
@@ -2655,8 +2603,7 @@ mod tests {
 
         for i in 1..=1 {
             let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
-            // Assuming version is incremented with each insert, and starting version is 0
-            let _ = tree.insert(&key, i, i as u64, 0); // Here, `i as u64` is used as the version for simplicity
+            let _ = tree.insert(&key, i, i as u64, 0);
         }
 
         for i in 2..=2 {

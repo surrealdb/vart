@@ -3,7 +3,7 @@ use std::ops::RangeBounds;
 use std::sync::Arc;
 
 use crate::art::{Node, QueryType, Tree};
-use crate::iter::{Iter, Range, VersionedIter};
+use crate::iter::{query_keys_at_node, scan_node, Iter, Range, VersionedIter};
 use crate::node::Version;
 use crate::{KeyTrait, TrieError};
 
@@ -183,6 +183,32 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
             Some(root) => Node::get_recurse(root, key, query_type),
             None => Err(TrieError::KeyNotFound),
         }
+    }
+
+    pub fn scan_at_ts<R>(&self, range: R, ts: u64) -> Result<Vec<(Vec<u8>, V)>, TrieError>
+    where
+        R: RangeBounds<P>,
+    {
+        // Check if the snapshot is already closed
+        self.is_closed()?;
+        Ok(scan_node(
+            self.root.as_ref(),
+            range,
+            QueryType::LatestByTs(ts),
+        ))
+    }
+
+    pub fn keys_at_ts<R>(&self, range: R, ts: u64) -> Result<Vec<Vec<u8>>, TrieError>
+    where
+        R: RangeBounds<P>,
+    {
+        // Check if the snapshot is already closed
+        self.is_closed()?;
+        Ok(query_keys_at_node(
+            self.root.as_ref(),
+            range,
+            QueryType::LatestByTs(ts),
+        ))
     }
 }
 

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::KeyTrait;
+use crate::{art::QueryType, KeyTrait};
 
 /*
     Immutable nodes
@@ -173,10 +173,32 @@ impl<K: KeyTrait + Clone, V: Clone> Version for TwigNode<K, V> {
 
 /// Helper functions for TwigNode for timestamp-based queries
 impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
+    #[inline]
+    pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<Arc<LeafValue<V>>> {
+        self.get_leaf_by_query_ref(query_type).cloned()
+    }
+
+    #[inline]
+    pub(crate) fn get_leaf_by_query_ref(
+        &self,
+        query_type: QueryType,
+    ) -> Option<&Arc<LeafValue<V>>> {
+        match query_type {
+            QueryType::LatestByVersion(version) => self.get_leaf_by_version(version),
+            QueryType::LatestByTs(ts) => self.get_leaf_by_ts(ts),
+            QueryType::LastLessThanTs(ts) => self.last_less_than_ts(ts),
+            QueryType::LastLessOrEqualTs(ts) => self.last_less_or_equal_ts(ts),
+            QueryType::FirstGreaterThanTs(ts) => self.first_greater_than_ts(ts),
+            QueryType::FirstGreaterOrEqualTs(ts) => self.first_greater_or_equal_ts(ts),
+        }
+    }
+
+    #[inline]
     pub fn get_latest_leaf(&self) -> Option<&Arc<LeafValue<V>>> {
         self.values.iter().max_by_key(|value| value.version)
     }
 
+    #[inline]
     pub fn get_latest_value(&self) -> Option<&V> {
         self.values
             .iter()
@@ -184,22 +206,23 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
             .map(|value| &value.value)
     }
 
-    pub fn get_leaf_by_version(&self, version: u64) -> Option<Arc<LeafValue<V>>> {
+    #[inline]
+    pub fn get_leaf_by_version(&self, version: u64) -> Option<&Arc<LeafValue<V>>> {
         self.values
             .iter()
             .filter(|value| value.version <= version)
             .max_by_key(|value| value.version)
-            .cloned()
     }
 
-    pub fn get_leaf_by_ts(&self, ts: u64) -> Option<Arc<LeafValue<V>>> {
+    #[inline]
+    pub fn get_leaf_by_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
         self.values
             .iter()
             .filter(|value| value.ts <= ts)
             .max_by_key(|value| value.ts)
-            .cloned()
     }
 
+    #[inline]
     pub fn get_all_versions(&self) -> Vec<(V, u64, u64)> {
         self.values
             .iter()
@@ -207,33 +230,33 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
             .collect()
     }
 
-    // Implementations of new functions
-    pub fn last_less_than_ts(&self, ts: u64) -> Option<Arc<LeafValue<V>>> {
+    #[inline]
+    pub fn last_less_than_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
         self.values
             .iter()
             .filter(|value| value.ts < ts)
             .max_by_key(|value| value.ts)
-            .cloned()
     }
 
-    pub fn last_less_or_equal_ts(&self, ts: u64) -> Option<Arc<LeafValue<V>>> {
+    #[inline]
+    pub fn last_less_or_equal_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
         self.get_leaf_by_ts(ts)
     }
 
-    pub fn first_greater_than_ts(&self, ts: u64) -> Option<Arc<LeafValue<V>>> {
+    #[inline]
+    pub fn first_greater_than_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
         self.values
             .iter()
             .filter(|value| value.ts > ts)
             .min_by_key(|value| value.ts)
-            .cloned()
     }
 
-    pub fn first_greater_or_equal_ts(&self, ts: u64) -> Option<Arc<LeafValue<V>>> {
+    #[inline]
+    pub fn first_greater_or_equal_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
         self.values
             .iter()
             .filter(|value| value.ts >= ts)
             .min_by_key(|value| value.ts)
-            .cloned()
     }
 }
 
