@@ -188,6 +188,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
 
 #[cfg(test)]
 mod tests {
+    use crate::art::QueryType;
     use crate::art::Tree;
     use crate::iter::Iter;
     use crate::KeyTrait;
@@ -550,5 +551,89 @@ mod tests {
         // Scenario 3: Ensure no history for a non-existent key
         let key3 = VariableSizeKey::from_str("non_existent_key").unwrap();
         assert!(snapshot.get_version_history(&key3).is_err());
+    }
+
+    #[test]
+    fn test_latest_by_version() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        snapshot.insert(&key, 10, 1).unwrap();
+        snapshot.insert(&key, 20, 2).unwrap();
+        snapshot.insert(&key, 30, 3).unwrap();
+
+        let query_type = QueryType::LatestByVersion(3);
+        let result = snapshot.get_value_by_query(&key, query_type).unwrap();
+        assert_eq!(result, (30, 1, 3));
+    }
+
+    #[test]
+    fn test_latest_by_ts() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        snapshot.insert(&key, 10, 1).unwrap();
+        snapshot.insert(&key, 20, 2).unwrap();
+        snapshot.insert(&key, 30, 3).unwrap();
+
+        let query_type = QueryType::LatestByTs(300);
+        let result = snapshot.get_value_by_query(&key, query_type).unwrap();
+        assert_eq!(result, (30, 1, 3));
+    }
+
+    #[test]
+    fn test_last_less_than_ts() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        snapshot.insert(&key, 10, 100).unwrap();
+        snapshot.insert(&key, 20, 150).unwrap();
+        snapshot.insert(&key, 30, 300).unwrap();
+
+        let query_type = QueryType::LastLessThanTs(150);
+        let result = snapshot.get_value_by_query(&key, query_type).unwrap();
+        assert_eq!(result, (10, 1, 100));
+    }
+
+    #[test]
+    fn test_last_less_or_equal_ts() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        snapshot.insert(&key, 10, 100).unwrap();
+        snapshot.insert(&key, 20, 150).unwrap();
+        snapshot.insert(&key, 30, 300).unwrap();
+
+        let query_type = QueryType::LastLessOrEqualTs(150);
+        let result = snapshot.get_value_by_query(&key, query_type).unwrap();
+        assert_eq!(result, (20, 1, 150));
+    }
+
+    #[test]
+    fn test_first_greater_than_ts() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        snapshot.insert(&key, 10, 100).unwrap();
+        snapshot.insert(&key, 20, 150).unwrap();
+        snapshot.insert(&key, 30, 300).unwrap();
+
+        let query_type = QueryType::FirstGreaterThanTs(150);
+        let result = snapshot.get_value_by_query(&key, query_type).unwrap();
+        assert_eq!(result, (30, 1, 300));
+    }
+
+    #[test]
+    fn test_first_greater_or_equal_ts() {
+        let tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut snapshot = tree.create_snapshot().unwrap();
+        let key = VariableSizeKey::from_str("test_key").unwrap();
+        snapshot.insert(&key, 10, 100).unwrap();
+        snapshot.insert(&key, 20, 150).unwrap();
+        snapshot.insert(&key, 30, 300).unwrap();
+
+        let query_type = QueryType::FirstGreaterOrEqualTs(150);
+        let result = snapshot.get_value_by_query(&key, query_type).unwrap();
+        assert_eq!(result, (20, 1, 150));
     }
 }
