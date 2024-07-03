@@ -171,55 +171,8 @@ impl<K: KeyTrait + Clone, V: Clone> Version for TwigNode<K, V> {
     }
 }
 
-// An enum to encapsulate the different return types from TwigNode queries
-pub enum QueryResult<V: Clone> {
-    SingleOption(Arc<LeafValue<V>>),
-    MultipleVersions(Vec<(V, u64, u64)>),
-    None,
-}
-
-// An enum for the different types of queries on the TwigNode
-pub enum QueryType {
-    LeafByVersion(u64),
-    LeafByTs(u64),
-    AllVersions,
-    LastLessThan(u64),
-    LastLessOrEqual(u64),
-    FirstGreaterThan(u64),
-    FirstGreaterOrEqual(u64),
-}
-
+/// Helper functions for TwigNode for timestamp-based queries
 impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
-    pub fn query(&self, query_type: QueryType) -> QueryResult<V> {
-        match query_type {
-            QueryType::LeafByVersion(version) => self
-                .get_leaf_by_version(version)
-                .map(QueryResult::SingleOption)
-                .unwrap_or(QueryResult::None),
-            QueryType::LeafByTs(ts) => self
-                .get_leaf_by_ts(ts)
-                .map(QueryResult::SingleOption)
-                .unwrap_or(QueryResult::None),
-            QueryType::AllVersions => QueryResult::MultipleVersions(self.get_all_versions()),
-            QueryType::LastLessThan(ts) => self
-                .last_less_than(ts)
-                .map(QueryResult::SingleOption)
-                .unwrap_or(QueryResult::None),
-            QueryType::LastLessOrEqual(ts) => self
-                .last_less_or_equal(ts)
-                .map(QueryResult::SingleOption)
-                .unwrap_or(QueryResult::None),
-            QueryType::FirstGreaterThan(ts) => self
-                .first_greater_than(ts)
-                .map(QueryResult::SingleOption)
-                .unwrap_or(QueryResult::None),
-            QueryType::FirstGreaterOrEqual(ts) => self
-                .first_greater_or_equal(ts)
-                .map(QueryResult::SingleOption)
-                .unwrap_or(QueryResult::None),
-        }
-    }
-
     pub fn get_latest_leaf(&self) -> Option<&Arc<LeafValue<V>>> {
         self.values.iter().max_by_key(|value| value.version)
     }
@@ -1351,5 +1304,138 @@ mod tests {
         // Test case 3: Attempt to retrieve leaf by a non-existent timestamp
         let leaf_by_ts = node.get_leaf_by_ts(30);
         assert_eq!(leaf_by_ts.unwrap().value, 51);
+    }
+
+    #[test]
+    fn test_get_leaf_by_version() {
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
+        node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
+
+        // Exact version match
+        let leaf = node.get_leaf_by_version(200);
+        assert_eq!(leaf.unwrap().value, 50);
+
+        // Version not present, should get closest lower version
+        let leaf = node.get_leaf_by_version(199);
+        assert!(leaf.is_none());
+
+        // Higher version, should get the highest available version
+        let leaf = node.get_leaf_by_version(202);
+        assert_eq!(leaf.unwrap().value, 51);
+    }
+
+    #[test]
+    fn test_get_leaf_by_ts() {
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
+        node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
+
+        // Exact timestamp match
+        let leaf = node.get_leaf_by_ts(10);
+        assert_eq!(leaf.unwrap().value, 50);
+
+        // Timestamp not present, should get closest lower timestamp
+        let leaf = node.get_leaf_by_ts(15);
+        assert_eq!(leaf.unwrap().value, 50);
+
+        // Higher timestamp, should get the highest available timestamp
+        let leaf = node.get_leaf_by_ts(25);
+        assert_eq!(leaf.unwrap().value, 51);
+    }
+
+    #[test]
+    fn test_get_all_versions() {
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
+        node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
+
+        let versions = node.get_all_versions();
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions[0], (50, 200, 10));
+        assert_eq!(versions[1], (51, 201, 20));
+    }
+
+    #[test]
+    fn test_last_less_than() {
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
+        node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
+
+        // Timestamp just below an existing timestamp
+        let leaf = node.last_less_than(20);
+        assert_eq!(leaf.unwrap().value, 50);
+
+        // Timestamp well below any existing timestamp
+        let leaf = node.last_less_than(5);
+        assert!(leaf.is_none());
+
+        // Timestamp above all existing timestamps
+        let leaf = node.last_less_than(25);
+        assert_eq!(leaf.unwrap().value, 51);
+    }
+
+    #[test]
+    fn test_last_less_or_equal() {
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
+        node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
+
+        // Exact timestamp
+        let leaf = node.last_less_or_equal(10);
+        assert_eq!(leaf.unwrap().value, 50);
+
+        // Timestamp not present, should get closest lower timestamp
+        let leaf = node.last_less_or_equal(15);
+        assert_eq!(leaf.unwrap().value, 50);
+
+        // Higher timestamp, should get the highest available timestamp
+        let leaf = node.last_less_or_equal(25);
+        assert_eq!(leaf.unwrap().value, 51);
+    }
+
+    #[test]
+    fn test_first_greater_than() {
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
+        node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
+
+        // Timestamp just above an existing timestamp
+        let leaf = node.first_greater_than(10);
+        assert_eq!(leaf.unwrap().value, 51);
+
+        // Timestamp well above any existing timestamp
+        let leaf = node.first_greater_than(25);
+        assert!(leaf.is_none());
+
+        // Timestamp below all existing timestamps
+        let leaf = node.first_greater_than(5);
+        assert_eq!(leaf.unwrap().value, 50);
+    }
+
+    #[test]
+    fn test_first_greater_or_equal() {
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
+        node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
+
+        // Exact timestamp
+        let leaf = node.first_greater_or_equal(10);
+        assert_eq!(leaf.unwrap().value, 50);
+
+        // Timestamp not present, should get closest higher timestamp
+        let leaf = node.first_greater_or_equal(15);
+        assert_eq!(leaf.unwrap().value, 51);
+
+        // Lower timestamp, should get the lowest available timestamp
+        let leaf = node.first_greater_or_equal(5);
+        assert_eq!(leaf.unwrap().value, 50);
     }
 }

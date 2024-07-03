@@ -2,7 +2,7 @@
 use std::ops::RangeBounds;
 use std::sync::Arc;
 
-use crate::art::{Node, Tree};
+use crate::art::{Node, QueryType, Tree};
 use crate::iter::{Iter, Range, VersionedIter};
 use crate::node::Version;
 use crate::{KeyTrait, TrieError};
@@ -64,7 +64,9 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
 
         // Use a recursive function to get the value and timestamp from the root node
         match self.root.as_ref() {
-            Some(root) => Node::get_recurse(root, key, root.version()),
+            Some(root) => {
+                Node::get_recurse_query(root, key, QueryType::LeafByVersion(root.version()))
+            }
             None => Err(TrieError::KeyNotFound),
         }
     }
@@ -75,13 +77,13 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         self.is_closed()?;
 
         match self.root.as_ref() {
-            Some(root) => {
-                Node::get_recurse_at_ts(root, key, ts).map(|(value, version, _)| (value, version))
-            }
+            Some(root) => Node::get_recurse_query(root, key, QueryType::LeafByTs(ts))
+                .map(|(value, version, _)| (value, version)),
             None => Err(TrieError::KeyNotFound),
         }
     }
 
+    /// Retrieves the version history of the key from the snapshot.
     pub fn get_version_history(&self, key: &P) -> Result<Vec<(V, u64, u64)>, TrieError> {
         // Check if the snapshot is already closed
         self.is_closed()?;
@@ -169,6 +171,50 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         // Check if the snapshot is already closed
         self.is_closed()?;
         Ok(Range::new_versioned(self.root.as_ref(), range))
+    }
+
+    pub fn get_last_less_than(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
+        // Check if the snapshot is already closed
+        self.is_closed()?;
+
+        match self.root.as_ref() {
+            Some(root) => Node::get_recurse_query(root, key, QueryType::LastLessThan(ts))
+                .map(|(value, version, _)| (value, version)),
+            None => Err(TrieError::KeyNotFound),
+        }
+    }
+
+    pub fn get_last_less_or_equal(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
+        // Check if the snapshot is already closed
+        self.is_closed()?;
+
+        match self.root.as_ref() {
+            Some(root) => Node::get_recurse_query(root, key, QueryType::LastLessOrEqual(ts))
+                .map(|(value, version, _)| (value, version)),
+            None => Err(TrieError::KeyNotFound),
+        }
+    }
+
+    pub fn get_first_greater_than(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
+        // Check if the snapshot is already closed
+        self.is_closed()?;
+
+        match self.root.as_ref() {
+            Some(root) => Node::get_recurse_query(root, key, QueryType::FirstGreaterThan(ts))
+                .map(|(value, version, _)| (value, version)),
+            None => Err(TrieError::KeyNotFound),
+        }
+    }
+
+    pub fn get_first_greater_or_equal(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
+        // Check if the snapshot is already closed
+        self.is_closed()?;
+
+        match self.root.as_ref() {
+            Some(root) => Node::get_recurse_query(root, key, QueryType::FirstGreaterOrEqual(ts))
+                .map(|(value, version, _)| (value, version)),
+            None => Err(TrieError::KeyNotFound),
+        }
     }
 }
 

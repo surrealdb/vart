@@ -4,7 +4,7 @@ use std::ops::RangeBounds;
 use std::sync::Arc;
 
 use crate::iter::{Iter, Range, VersionedIter};
-use crate::node::{FlatNode, Node256, Node48, NodeTrait, TwigNode, Version};
+use crate::node::{FlatNode, LeafValue, Node256, Node48, NodeTrait, TwigNode, Version};
 use crate::snapshot::Snapshot;
 use crate::{KeyTrait, TrieError};
 
@@ -54,6 +54,16 @@ impl<P: KeyTrait, V: Clone> Version for Node<P, V> {
             NodeType::Node256(n) => n.version(),
         }
     }
+}
+
+// An enum for the different types of queries on the TwigNode
+pub(crate) enum QueryType {
+    LeafByVersion(u64),
+    LeafByTs(u64),
+    LastLessThan(u64),
+    LastLessOrEqual(u64),
+    FirstGreaterThan(u64),
+    FirstGreaterOrEqual(u64),
 }
 
 /// An enumeration representing different types of nodes in an Adaptive Radix Trie.
@@ -554,6 +564,23 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         }
     }
 
+    #[inline]
+    pub(crate) fn get_value(&self, query_type: QueryType) -> Option<Arc<LeafValue<V>>> {
+        // Unwrap the NodeType::Twig to access the TwigNode instance.
+        let NodeType::Twig(twig) = &self.node_type else {
+            return None;
+        };
+
+        match query_type {
+            QueryType::LeafByVersion(version) => twig.get_leaf_by_version(version),
+            QueryType::LeafByTs(ts) => twig.get_leaf_by_ts(ts),
+            QueryType::LastLessThan(ts) => twig.last_less_than(ts),
+            QueryType::LastLessOrEqual(ts) => twig.last_less_or_equal(ts),
+            QueryType::FirstGreaterThan(ts) => twig.first_greater_than(ts),
+            QueryType::FirstGreaterOrEqual(ts) => twig.first_greater_or_equal(ts),
+        }
+    }
+
     /// TODO: fix having separate key and prefix traits to avoid copying
     /// Retrieves a value from a Twig node by the specified version.
     ///
@@ -568,35 +595,35 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     /// Returns `Some((key, value, version))` if a matching value is found in the Twig node for the given version.
     /// If no matching value is found, returns `None`.
     ///
-    #[inline]
-    pub fn get_value_by_version(&self, version: u64) -> Option<(V, u64, u64)> {
-        // Unwrap the NodeType::Twig to access the TwigNode instance.
-        let NodeType::Twig(twig) = &self.node_type else {
-            return None;
-        };
+    // #[inline]
+    // pub fn get_value_by_version(&self, version: u64) -> Option<(V, u64, u64)> {
+    //     // Unwrap the NodeType::Twig to access the TwigNode instance.
+    //     let NodeType::Twig(twig) = &self.node_type else {
+    //         return None;
+    //     };
 
-        // Get the value from the TwigNode instance by the specified version.
-        let val = twig.get_leaf_by_version(version)?;
+    //     // Get the value from the TwigNode instance by the specified version.
+    //     let val = twig.get_leaf_by_version(version)?;
 
-        // Return the retrieved key, value, and version as a tuple.
-        // TODO: should return copy of value or reference?
-        Some((val.value.clone(), val.version, val.ts))
-    }
+    //     // Return the retrieved key, value, and version as a tuple.
+    //     // TODO: should return copy of value or reference?
+    //     Some((val.value.clone(), val.version, val.ts))
+    // }
 
-    #[inline]
-    pub fn get_value_by_ts(&self, ts: u64) -> Option<(V, u64, u64)> {
-        // Unwrap the NodeType::Twig to access the TwigNode instance.
-        let NodeType::Twig(twig) = &self.node_type else {
-            return None;
-        };
+    // #[inline]
+    // pub fn get_value_by_ts(&self, ts: u64) -> Option<(V, u64, u64)> {
+    //     // Unwrap the NodeType::Twig to access the TwigNode instance.
+    //     let NodeType::Twig(twig) = &self.node_type else {
+    //         return None;
+    //     };
 
-        // Get the value from the TwigNode instance by the specified version.
-        let val = twig.get_leaf_by_ts(ts)?;
+    //     // Get the value from the TwigNode instance by the specified version.
+    //     let val = twig.get_leaf_by_ts(ts)?;
 
-        // Return the retrieved key, value, and version as a tuple.
-        // TODO: should return copy of value or reference?
-        Some((val.value.clone(), val.version, val.ts))
-    }
+    //     // Return the retrieved key, value, and version as a tuple.
+    //     // TODO: should return copy of value or reference?
+    //     Some((val.value.clone(), val.version, val.ts))
+    // }
 
     #[inline]
     pub fn get_all_versions(&self) -> Option<Vec<(V, u64, u64)>> {
@@ -815,37 +842,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         (Some(cur_node.clone()), false)
     }
 
-    /// Recursively searches for a key in the node and its children.
-    ///
-    /// Recursively searches for a key in the current node and its child nodes, considering versions.
-    ///
-    /// # Parameters
-    ///
-    /// - `cur_node`: A reference to the current node.
-    /// - `key`: The key to be searched for.
-    /// - `version`: The version for which to retrieve the value.
-    ///
-    /// # Returns
-    ///
-    /// Returns a result containing the prefix, value, and version if the key is found, or Error if not.
-    ///
-    pub fn get_recurse(
-        cur_node: &Node<P, V>,
-        key: &P,
-        version: u64,
-    ) -> Result<(V, u64, u64), TrieError> {
-        Self::get_recurse_common(cur_node, key, version, Node::get_value_by_version)
-    }
-
-    /// Recursively searches for a key at a specific timestamp
-    pub fn get_recurse_at_ts(
-        cur_node: &Node<P, V>,
-        key: &P,
-        ts: u64,
-    ) -> Result<(V, u64, u64), TrieError> {
-        Self::get_recurse_common(cur_node, key, ts, Node::get_value_by_ts)
-    }
-
     fn navigate_to_node<'a>(
         cur_node: &'a Node<P, V>,
         key: &P,
@@ -877,18 +873,19 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         }
     }
 
-    // Common function with a closure for value retrieval
-    fn get_recurse_common<F>(
+    /// Recursively searches for a key in the node and its children.
+    ///
+    /// Recursively searches for a key in the current node and its child nodes, considering versions.
+    pub(crate) fn get_recurse_query(
         cur_node: &Node<P, V>,
         key: &P,
-        criteria: u64,
-        value_retriever: F,
-    ) -> Result<(V, u64, u64), TrieError>
-    where
-        F: Fn(&Node<P, V>, u64) -> Option<(V, u64, u64)>,
-    {
+        query_type: QueryType,
+    ) -> Result<(V, u64, u64), TrieError> {
         let cur_node = Self::navigate_to_node(cur_node, key)?;
-        value_retriever(cur_node, criteria).ok_or(TrieError::KeyNotFound)
+        let val = cur_node
+            .get_value(query_type)
+            .ok_or(TrieError::KeyNotFound)?;
+        Ok((val.value.clone(), val.version, val.ts))
     }
 
     pub fn get_version_history(
@@ -1222,7 +1219,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
             commit_version = root.version();
         }
 
-        Node::get_recurse(root, key, commit_version)
+        Node::get_recurse_query(root, key, QueryType::LeafByVersion(commit_version))
     }
 
     /// Retrieves the latest version of the Trie.
@@ -1356,8 +1353,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         }
 
         let root = self.root.as_ref().unwrap();
-
-        Node::get_recurse_at_ts(root, key, ts)
+        Node::get_recurse_query(root, key, QueryType::LeafByTs(ts))
     }
 
     pub fn get_version_history(&self, key: &P) -> Result<Vec<(V, u64, u64)>, TrieError> {
@@ -1375,6 +1371,58 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
             }
             None => Err(TrieError::KeyNotFound),
         }
+    }
+
+    pub fn get_last_less_than(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
+        // Check if the tree is already closed
+        self.check_if_closed()?;
+
+        if self.root.is_none() {
+            return Err(TrieError::Other("cannot read from empty tree".to_string()));
+        }
+
+        let root = self.root.as_ref().unwrap();
+        Node::get_recurse_query(root, key, QueryType::LastLessThan(ts))
+            .map(|(value, version, _)| (value, version))
+    }
+
+    pub fn get_last_less_or_equal(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
+        // Check if the tree is already closed
+        self.check_if_closed()?;
+
+        if self.root.is_none() {
+            return Err(TrieError::Other("cannot read from empty tree".to_string()));
+        }
+
+        let root = self.root.as_ref().unwrap();
+        Node::get_recurse_query(root, key, QueryType::LastLessOrEqual(ts))
+            .map(|(value, version, _)| (value, version))
+    }
+
+    pub fn get_first_greater_than(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
+        // Check if the tree is already closed
+        self.check_if_closed()?;
+
+        if self.root.is_none() {
+            return Err(TrieError::Other("cannot read from empty tree".to_string()));
+        }
+
+        let root = self.root.as_ref().unwrap();
+        Node::get_recurse_query(root, key, QueryType::FirstGreaterThan(ts))
+            .map(|(value, version, _)| (value, version))
+    }
+
+    pub fn get_first_greater_or_equal(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
+        // Check if the tree is already closed
+        self.check_if_closed()?;
+
+        if self.root.is_none() {
+            return Err(TrieError::Other("cannot read from empty tree".to_string()));
+        }
+
+        let root = self.root.as_ref().unwrap();
+        Node::get_recurse_query(root, key, QueryType::FirstGreaterOrEqual(ts))
+            .map(|(value, version, _)| (value, version))
     }
 }
 
