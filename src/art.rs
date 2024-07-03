@@ -2553,11 +2553,12 @@ mod tests {
         tree.bulk_insert(&entries, false).unwrap();
 
         // Define a range that encompasses all keys
-        let range = VariableSizeKey::from("test1".as_bytes().to_vec())
-            ..=VariableSizeKey::from("test5".as_bytes().to_vec());
+        let range = VariableSizeKey::from_slice_with_termination("test1".as_bytes())
+            ..=VariableSizeKey::from_slice_with_termination("test5".as_bytes());
 
         // Collect results of the range scan
         let results: Vec<_> = tree.range(range).collect();
+        assert_eq!(results.len(), insert_words.len());
 
         // Expected order
         let expected_order = ["test1", "test2", "test3", "test4", "test5"];

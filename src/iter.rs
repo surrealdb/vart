@@ -396,16 +396,30 @@ where
                 } else {
                     // stop iteration if the range end is exceeded
                     match range.end_bound() {
-                        Bound::Included(k) if &twig.key > k => break,
-                        Bound::Excluded(k) if &twig.key >= k => break,
+                        Bound::Included(k) if &twig.key > k => forward.iters.clear(),
+                        Bound::Excluded(k) if &twig.key >= k => forward.iters.clear(),
                         _ => {}
                     }
                 }
+            } else {
+                // Push the iterator if it is not a leaf node
+                forward.iters.push(NodeIter::new(res.iter()));
             }
         } else {
             // Pop the iterator if no more elements
             forward.iters.pop();
         }
+    }
+
+    // Iterate over all leafs in forward.leafs and append them to results
+    for leaf in forward.leafs {
+        let key = leaf.0.as_slice().to_vec();
+        let value = if include_values {
+            Some(leaf.1.clone())
+        } else {
+            None
+        };
+        results.push((key, value));
     }
 
     results
