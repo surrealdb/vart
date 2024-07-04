@@ -18,8 +18,8 @@ use std::str::FromStr;
 pub trait Key {
     fn at(&self, pos: usize) -> u8;
     fn len(&self) -> usize;
-    fn prefix_before(&self, length: usize) -> Self;
-    fn prefix_after(&self, start: usize) -> Self;
+    fn prefix_before(&self, length: usize) -> &[u8];
+    fn prefix_after(&self, start: usize) -> &[u8];
     fn longest_common_prefix(&self, slice: &[u8]) -> usize;
     fn as_slice(&self) -> &[u8];
     fn extend(&self, other: &Self) -> Self;
@@ -28,14 +28,8 @@ pub trait Key {
     }
 }
 
-pub trait KeyTrait:
-    Key + Clone + PartialEq + PartialOrd + Ord + Debug + for<'a> From<&'a [u8]>
-{
-}
-impl<T: Key + Clone + PartialOrd + PartialEq + Ord + Debug + for<'a> From<&'a [u8]>> KeyTrait
-    for T
-{
-}
+pub trait KeyTrait: Key + Clone + Ord + Debug + for<'a> From<&'a [u8]> {}
+impl<T: Key + Clone + Ord + Debug + for<'a> From<&'a [u8]>> KeyTrait for T {}
 
 /*
     Key trait implementations
@@ -119,15 +113,15 @@ impl<const SIZE: usize> Key for FixedSizeKey<SIZE> {
     }
 
     // Creates a new instance of FixedSizeKey consisting only of the initial part of the content
-    fn prefix_before(&self, length: usize) -> Self {
+    fn prefix_before(&self, length: usize) -> &[u8] {
         assert!(length <= self.len);
-        Self::from_slice(&self.content[..length])
+        &self.content[..length]
     }
 
     // Creates a new instance of FixedSizeKey excluding the initial part of the content
-    fn prefix_after(&self, start: usize) -> Self {
+    fn prefix_after(&self, start: usize) -> &[u8] {
         assert!(start <= self.len);
-        Self::from_slice(&self.content[start..self.len])
+        &self.content[start..self.len]
     }
 
     #[inline(always)]
@@ -288,14 +282,14 @@ impl From<&[u8]> for VariableSizeKey {
 }
 
 impl Key for VariableSizeKey {
-    fn prefix_before(&self, length: usize) -> Self {
+    fn prefix_before(&self, length: usize) -> &[u8] {
         assert!(length <= self.data.len());
-        VariableSizeKey::from_slice(&self.data[..length])
+        &self.data[..length]
     }
 
-    fn prefix_after(&self, start: usize) -> Self {
+    fn prefix_after(&self, start: usize) -> &[u8] {
         assert!(start <= self.data.len());
-        VariableSizeKey::from_slice(&self.data[start..self.data.len()])
+        &self.data[start..self.data.len()]
     }
 
     #[inline(always)]
