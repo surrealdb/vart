@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::art::{Node, QueryType, Tree};
 use crate::iter::{query_keys_at_node, scan_node, Iter, Range, VersionedIter};
 use crate::node::Version;
-use crate::{KeyTrait, TrieError};
+use crate::KeyTrait;
 
 #[derive(Clone)]
 /// Represents a snapshot of the data within the Trie.
@@ -21,17 +21,11 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
     }
 
     /// Inserts a key-value pair into the snapshot.
-    pub fn insert(&mut self, key: &P, value: V, ts: u64) -> Result<(), TrieError> {
+    pub fn insert(&mut self, key: &P, value: V, ts: u64) {
         // Insert the key-value pair into the root node using a recursive function
         match &self.root {
             Some(root) => {
-                let (new_node, _) = match Node::insert_recurse(root, key, value, self.ts, ts, 0) {
-                    Ok((new_node, old_node)) => (new_node, old_node),
-                    Err(err) => {
-                        return Err(err);
-                    }
-                };
-
+                let (new_node, _) = Node::insert_recurse(root, key, value, self.ts, ts, 0);
                 // Update the root node with the new node after insertion
                 self.root = Some(new_node);
             }
@@ -45,37 +39,29 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
                 )))
             }
         };
-
-        Ok(())
     }
 
     /// Retrieves the value, version and timestamp associated with the given key from the snapshot.
-    pub fn get(&self, key: &P) -> Result<(V, u64, u64), TrieError> {
+    pub fn get(&self, key: &P) -> Option<(V, u64, u64)> {
         // Use a recursive function to get the value and timestamp from the root node
-        match self.root.as_ref() {
-            Some(root) => Node::get_recurse(root, key, QueryType::LatestByVersion(root.version())),
-            None => Err(TrieError::KeyNotFound),
-        }
+        self.root.as_ref().and_then(|root| {
+            Node::get_recurse(root, key, QueryType::LatestByVersion(root.version()))
+        })
     }
 
     /// Retrieves the value, version associated with the given key from the snapshot at the specified timestamp.
-    pub fn get_at_ts(&self, key: &P, ts: u64) -> Result<(V, u64), TrieError> {
-        match self.root.as_ref() {
-            Some(root) => Node::get_recurse(root, key, QueryType::LatestByTs(ts))
-                .map(|(value, version, _)| (value, version)),
-            None => Err(TrieError::KeyNotFound),
-        }
+    pub fn get_at_ts(&self, key: &P, ts: u64) -> Option<(V, u64)> {
+        self.root
+            .as_ref()
+            .and_then(|root| Node::get_recurse(root, key, QueryType::LatestByTs(ts)))
+            .map(|(value, version, _)| (value, version))
     }
 
     /// Retrieves the version history of the key from the snapshot.
-    pub fn get_version_history(&self, key: &P) -> Result<Vec<(V, u64, u64)>, TrieError> {
-        match self.root.as_ref() {
-            Some(root) => {
-                // Directly return the Result from Node::get_all_versions
-                Node::get_version_history(root, key)
-            }
-            None => Err(TrieError::KeyNotFound),
-        }
+    pub fn get_version_history(&self, key: &P) -> Option<Vec<(V, u64, u64)>> {
+        self.root
+            .as_ref()
+            .and_then(|root| Node::get_version_history(root, key))
     }
 
     /// Returns the version of the snapshot.
@@ -83,79 +69,65 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         self.root.as_ref().map_or(0, |root| root.version())
     }
 
-    pub fn remove(&mut self, key: &P) -> Result<bool, TrieError> {
+    pub fn remove(&mut self, key: &P) -> bool {
         let (new_root, is_deleted) = Tree::remove_from_node(self.root.as_ref(), key);
-
         self.root = new_root;
-        Ok(is_deleted)
+        is_deleted
     }
 
     pub fn ts(&self) -> u64 {
         self.ts
     }
 
-    pub fn iter(&self) -> Result<Iter<P, V>, TrieError> {
-        Ok(Iter::new(self.root.as_ref()))
+    pub fn iter(&self) -> Iter<P, V> {
+        Iter::new(self.root.as_ref())
     }
 
     /// Returns an iterator over all versions of the key-value pairs within the Trie.
-    pub fn iter_with_versions(&self) -> Result<VersionedIter<P, V>, TrieError> {
-        Ok(VersionedIter::new(self.root.as_ref()))
+    pub fn iter_with_versions(&self) -> VersionedIter<P, V> {
+        VersionedIter::new(self.root.as_ref())
     }
 
     /// Returns a range query iterator over the Trie.
     pub fn range<'a, R>(
         &'a self,
         range: R,
-    ) -> Result<impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>, TrieError>
+    ) -> impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>
     where
         R: RangeBounds<P> + 'a,
     {
-        Ok(Range::new(self.root.as_ref(), range))
+        Range::new(self.root.as_ref(), range)
     }
 
     /// Returns a versioned range query iterator over the Trie.
     pub fn range_with_versions<'a, R>(
         &'a self,
         range: R,
-    ) -> Result<impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>, TrieError>
+    ) -> impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>
     where
         R: RangeBounds<P> + 'a,
     {
-        Ok(Range::new_versioned(self.root.as_ref(), range))
+        Range::new_versioned(self.root.as_ref(), range)
     }
 
-    pub fn get_value_by_query(
-        &self,
-        key: &P,
-        query_type: QueryType,
-    ) -> Result<(V, u64, u64), TrieError> {
-        match self.root.as_ref() {
-            Some(root) => Node::get_recurse(root, key, query_type),
-            None => Err(TrieError::KeyNotFound),
-        }
+    pub fn get_value_by_query(&self, key: &P, query_type: QueryType) -> Option<(V, u64, u64)> {
+        self.root
+            .as_ref()
+            .and_then(|root| Node::get_recurse(root, key, query_type))
     }
 
-    pub fn scan_at_ts<R>(&self, range: R, ts: u64) -> Result<Vec<(Vec<u8>, V)>, TrieError>
+    pub fn scan_at_ts<R>(&self, range: R, ts: u64) -> Vec<(Vec<u8>, V)>
     where
         R: RangeBounds<P>,
     {
-        Ok(scan_node(
-            self.root.as_ref(),
-            range,
-            QueryType::LatestByTs(ts),
-        ))
+        scan_node(self.root.as_ref(), range, QueryType::LatestByTs(ts))
     }
 
-    pub fn keys_at_ts<R>(&self, range: R, ts: u64) -> Result<Vec<Vec<u8>>, TrieError>
+    pub fn keys_at_ts<R>(&self, range: R, ts: u64) -> Vec<Vec<u8>>
     where
         R: RangeBounds<P>,
     {
-        Ok(query_keys_at_node(
-            self.root.as_ref(),
-            range,
-            QueryType::LatestByTs(ts),
-        ))
+        query_keys_at_node(self.root.as_ref(), range, QueryType::LatestByTs(ts))
     }
 }
 
@@ -165,7 +137,6 @@ mod tests {
     use crate::art::Tree;
     use crate::iter::Iter;
     use crate::KeyTrait;
-    use crate::TrieError;
     use crate::VariableSizeKey;
 
     use std::ops::RangeFull;
@@ -182,11 +153,9 @@ mod tests {
                 .is_ok());
         }
 
-        let mut snap1 = tree.create_snapshot().unwrap();
+        let mut snap1 = tree.create_snapshot();
         let key_to_insert = "key_1";
-        assert!(snap1
-            .insert(&VariableSizeKey::from_str(key_to_insert).unwrap(), 1, 0)
-            .is_ok());
+        snap1.insert(&VariableSizeKey::from_str(key_to_insert).unwrap(), 1, 0);
 
         let expected_snap_ts = keys.len() as u64 + 1;
         assert_eq!(snap1.version(), expected_snap_ts);
@@ -206,27 +175,27 @@ mod tests {
         assert!(tree.insert(&key_1, 1, 0, 0).is_ok());
 
         // Keys inserted before snapshot creation should be visible
-        let mut snap1 = tree.create_snapshot().unwrap();
+        let mut snap1 = tree.create_snapshot();
         assert_eq!(snap1.get(&key_1).unwrap(), (1, 1, 0));
 
-        let mut snap2 = tree.create_snapshot().unwrap();
+        let mut snap2 = tree.create_snapshot();
         assert_eq!(snap2.get(&key_1).unwrap(), (1, 1, 0));
 
         // Keys inserted after snapshot creation should not be visible to other snapshots
         assert!(tree.insert(&key_2, 1, 0, 0).is_ok());
-        assert!(snap1.get(&key_2).is_err());
-        assert!(snap2.get(&key_2).is_err());
+        assert!(snap1.get(&key_2).is_none());
+        assert!(snap2.get(&key_2).is_none());
 
         // Keys inserted after snapshot creation should be visible to the snapshot that inserted them
-        assert!(snap1.insert(&key_3_snap1, 2, 0).is_ok());
+        snap1.insert(&key_3_snap1, 2, 0);
         assert_eq!(snap1.get(&key_3_snap1).unwrap(), (2, 2, 0));
 
-        assert!(snap2.insert(&key_3_snap2, 3, 0).is_ok());
+        snap2.insert(&key_3_snap2, 3, 0);
         assert_eq!(snap2.get(&key_3_snap2).unwrap(), (3, 2, 0));
 
         // Keys inserted after snapshot creation should not be visible to other snapshots
-        assert!(snap1.get(&key_3_snap2).is_err());
-        assert!(snap2.get(&key_3_snap1).is_err());
+        assert!(snap1.get(&key_3_snap2).is_none());
+        assert!(snap2.get(&key_3_snap1).is_none());
     }
 
     #[test]
@@ -241,12 +210,12 @@ mod tests {
         assert!(tree.insert(&key_2, 1, 0, 0).is_ok());
         assert!(tree.insert(&key_3, 1, 0, 0).is_ok());
 
-        let mut snap = tree.create_snapshot().unwrap();
-        assert!(snap.insert(&key_4, 1, 0).is_ok());
+        let mut snap = tree.create_snapshot();
+        snap.insert(&key_4, 1, 0);
 
         {
             // Reader
-            let mut reader = snap.iter().unwrap();
+            let mut reader = snap.iter();
             assert_eq!(count_items(&mut reader), 4);
         }
     }
@@ -302,14 +271,14 @@ mod tests {
             tree.insert(&key, 1, version, 0).unwrap();
         }
 
-        let mut snap = tree.create_snapshot().unwrap();
+        let mut snap = tree.create_snapshot();
 
         // Delete one key at a time and check remaining keys
         for (index, key_data_to_delete) in set_keys.iter().enumerate() {
             let key_to_delete = VariableSizeKey {
                 data: key_data_to_delete.to_vec(),
             };
-            snap.remove(&key_to_delete).unwrap();
+            snap.remove(&key_to_delete);
 
             // Check remaining keys are still present
             for (remaining_index, remaining_key_data) in set_keys.iter().enumerate() {
@@ -317,7 +286,7 @@ mod tests {
                     // This key has been deleted; skip
                     // Check that the deleted key is no longer present
                     assert!(
-                        snap.get(&key_to_delete).is_err(),
+                        snap.get(&key_to_delete).is_none(),
                         "Key {:?} should not exist after deletion",
                         key_data_to_delete
                     );
@@ -327,7 +296,7 @@ mod tests {
                     data: remaining_key_data.to_vec(),
                 };
                 assert!(
-                    snap.get(&remaining_key).is_ok(),
+                    snap.get(&remaining_key).is_some(),
                     "Key {:?} should exist",
                     remaining_key_data
                 );
@@ -338,11 +307,11 @@ mod tests {
     #[test]
     fn test_get_at_ts_successful_retrieval() {
         let tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
-        let mut snapshot = tree.create_snapshot().unwrap();
+        let mut snapshot = tree.create_snapshot();
         let key = VariableSizeKey::from_str("test_key").unwrap();
         let value = 10;
         let ts = 100;
-        snapshot.insert(&key, value, ts).unwrap();
+        snapshot.insert(&key, value, ts);
 
         let (retrieved_value, retrieved_version) = snapshot.get_at_ts(&key, ts).unwrap();
         assert_eq!(retrieved_value, value);
@@ -352,36 +321,36 @@ mod tests {
     #[test]
     fn test_get_at_ts_key_not_found() {
         let tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
-        let snapshot = tree.create_snapshot().unwrap();
+        let snapshot = tree.create_snapshot();
         let key = VariableSizeKey::from_str("nonexistent_key").unwrap();
         let result = snapshot.get_at_ts(&key, 100);
-        assert!(matches!(result, Err(TrieError::KeyNotFound)));
+        assert!(result.is_none());
     }
 
     #[test]
     fn test_get_at_ts_timestamp_before_insertion() {
         let tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
-        let mut snapshot = tree.create_snapshot().unwrap();
+        let mut snapshot = tree.create_snapshot();
         let key = VariableSizeKey::from_str("test_key").unwrap();
         let value = 10;
         let ts = 100;
-        snapshot.insert(&key, value, ts).unwrap();
+        snapshot.insert(&key, value, ts);
 
         let result = snapshot.get_at_ts(&key, ts - 1);
-        assert!(matches!(result, Err(TrieError::KeyNotFound)));
+        assert!(result.is_none());
     }
 
     #[test]
     fn test_get_at_ts_multiple_versions() {
         let tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
-        let mut snapshot = tree.create_snapshot().unwrap();
+        let mut snapshot = tree.create_snapshot();
         let key = VariableSizeKey::from_str("test_key").unwrap();
         let value1 = 10;
         let value2 = 11;
         let ts1 = 100;
         let ts2 = 200;
-        snapshot.insert(&key, value1, ts1).unwrap();
-        snapshot.insert(&key, value2, ts2).unwrap();
+        snapshot.insert(&key, value1, ts1);
+        snapshot.insert(&key, value2, ts2);
 
         let (retrieved_value, _) = snapshot.get_at_ts(&key, ts2).unwrap();
         assert_eq!(retrieved_value, value2);
@@ -390,15 +359,15 @@ mod tests {
     #[test]
     fn test_retrieving_value_at_timestamp_between_two_inserts() {
         let tree: Tree<VariableSizeKey, i32> = Tree::new();
-        let mut snapshot = tree.create_snapshot().unwrap();
+        let mut snapshot = tree.create_snapshot();
         let key = VariableSizeKey::from_str("test_key").unwrap();
         let value1 = 10;
         let value2 = 20;
         let ts1 = 100;
         let ts2 = 200;
         let ts_query = 150;
-        snapshot.insert(&key, value1, ts1).unwrap();
-        snapshot.insert(&key, value2, ts2).unwrap();
+        snapshot.insert(&key, value1, ts1);
+        snapshot.insert(&key, value2, ts2);
 
         let (retrieved_value, _) = snapshot.get_at_ts(&key, ts_query).unwrap();
         assert_eq!(retrieved_value, value1);
@@ -407,13 +376,13 @@ mod tests {
     #[test]
     fn test_inserting_and_retrieving_with_same_timestamp() {
         let tree: Tree<VariableSizeKey, i32> = Tree::new();
-        let mut snapshot = tree.create_snapshot().unwrap();
+        let mut snapshot = tree.create_snapshot();
         let key = VariableSizeKey::from_str("test_key").unwrap();
         let value1 = 10;
         let value2 = 20;
         let ts = 100;
-        snapshot.insert(&key, value1, ts).unwrap();
-        snapshot.insert(&key, value2, ts).unwrap();
+        snapshot.insert(&key, value1, ts);
+        snapshot.insert(&key, value2, ts);
 
         let (retrieved_value, _) = snapshot.get_at_ts(&key, ts).unwrap();
         assert_eq!(retrieved_value, value2);
@@ -422,12 +391,12 @@ mod tests {
     #[test]
     fn test_retrieving_value_at_future_timestamp() {
         let tree: Tree<VariableSizeKey, i32> = Tree::new();
-        let mut snapshot = tree.create_snapshot().unwrap();
+        let mut snapshot = tree.create_snapshot();
         let key = VariableSizeKey::from_str("test_key").unwrap();
         let value = 10;
         let ts_insert = 100;
         let ts_future = 200;
-        snapshot.insert(&key, value, ts_insert).unwrap();
+        snapshot.insert(&key, value, ts_insert);
 
         let (retrieved_value, _) = snapshot.get_at_ts(&key, ts_future).unwrap();
         assert_eq!(retrieved_value, value);
@@ -436,14 +405,14 @@ mod tests {
     #[test]
     fn test_inserting_values_with_decreasing_timestamps() {
         let tree: Tree<VariableSizeKey, i32> = Tree::new();
-        let mut snapshot = tree.create_snapshot().unwrap();
+        let mut snapshot = tree.create_snapshot();
         let key = VariableSizeKey::from_str("test_key").unwrap();
         let value1 = 10;
         let value2 = 20;
         let ts1 = 200;
         let ts2 = 100;
-        snapshot.insert(&key, value1, ts1).unwrap();
-        snapshot.insert(&key, value2, ts2).unwrap();
+        snapshot.insert(&key, value1, ts1);
+        snapshot.insert(&key, value2, ts2);
 
         let (retrieved_value_early, _) = snapshot.get_at_ts(&key, ts2).unwrap();
         let (retrieved_value_late, _) = snapshot.get_at_ts(&key, ts1).unwrap();
@@ -454,22 +423,22 @@ mod tests {
     #[test]
     fn test_retrieving_value_after_deleting_it() {
         let tree: Tree<VariableSizeKey, i32> = Tree::new();
-        let mut snapshot = tree.create_snapshot().unwrap();
+        let mut snapshot = tree.create_snapshot();
         let key = VariableSizeKey::from_str("test_key").unwrap();
         let value = 10;
         let ts_insert = 100;
         let ts_query = 150;
-        snapshot.insert(&key, value, ts_insert).unwrap();
-        snapshot.remove(&key).unwrap();
+        snapshot.insert(&key, value, ts_insert);
+        snapshot.remove(&key);
 
         let result = snapshot.get_at_ts(&key, ts_query);
-        assert!(result.is_err());
+        assert!(result.is_none());
     }
 
     #[test]
     fn test_get_all_versions() {
         let tree: Tree<VariableSizeKey, i32> = Tree::new();
-        let mut snapshot = tree.create_snapshot().unwrap();
+        let mut snapshot = tree.create_snapshot();
 
         // Scenario 1: Insert multiple values for the same key with different timestamps
         let key1 = VariableSizeKey::from_str("test_key1").unwrap();
@@ -477,8 +446,8 @@ mod tests {
         let value1_2 = 20;
         let ts1_1 = 100;
         let ts1_2 = 200;
-        snapshot.insert(&key1, value1_1, ts1_1).unwrap();
-        snapshot.insert(&key1, value1_2, ts1_2).unwrap();
+        snapshot.insert(&key1, value1_1, ts1_1);
+        snapshot.insert(&key1, value1_2, ts1_2);
 
         let history1 = snapshot.get_version_history(&key1).unwrap();
         assert_eq!(history1.len(), 2);
@@ -497,7 +466,7 @@ mod tests {
         let key2 = VariableSizeKey::from_str("test_key2").unwrap();
         let value2 = 30;
         let ts2 = 300;
-        snapshot.insert(&key2, value2, ts2).unwrap();
+        snapshot.insert(&key2, value2, ts2);
 
         let history2 = snapshot.get_version_history(&key2).unwrap();
         assert_eq!(history2.len(), 1);
@@ -509,17 +478,17 @@ mod tests {
 
         // Scenario 3: Ensure no history for a non-existent key
         let key3 = VariableSizeKey::from_str("non_existent_key").unwrap();
-        assert!(snapshot.get_version_history(&key3).is_err());
+        assert!(snapshot.get_version_history(&key3).is_none());
     }
 
     #[test]
     fn test_latest_by_version() {
         let tree: Tree<VariableSizeKey, i32> = Tree::new();
-        let mut snapshot = tree.create_snapshot().unwrap();
+        let mut snapshot = tree.create_snapshot();
         let key = VariableSizeKey::from_str("test_key").unwrap();
-        snapshot.insert(&key, 10, 1).unwrap();
-        snapshot.insert(&key, 20, 2).unwrap();
-        snapshot.insert(&key, 30, 3).unwrap();
+        snapshot.insert(&key, 10, 1);
+        snapshot.insert(&key, 20, 2);
+        snapshot.insert(&key, 30, 3);
 
         let query_type = QueryType::LatestByVersion(3);
         let result = snapshot.get_value_by_query(&key, query_type).unwrap();
@@ -529,11 +498,11 @@ mod tests {
     #[test]
     fn test_latest_by_ts() {
         let tree: Tree<VariableSizeKey, i32> = Tree::new();
-        let mut snapshot = tree.create_snapshot().unwrap();
+        let mut snapshot = tree.create_snapshot();
         let key = VariableSizeKey::from_str("test_key").unwrap();
-        snapshot.insert(&key, 10, 1).unwrap();
-        snapshot.insert(&key, 20, 2).unwrap();
-        snapshot.insert(&key, 30, 3).unwrap();
+        snapshot.insert(&key, 10, 1);
+        snapshot.insert(&key, 20, 2);
+        snapshot.insert(&key, 30, 3);
 
         let query_type = QueryType::LatestByTs(300);
         let result = snapshot.get_value_by_query(&key, query_type).unwrap();
@@ -543,11 +512,11 @@ mod tests {
     #[test]
     fn test_last_less_than_ts() {
         let tree: Tree<VariableSizeKey, i32> = Tree::new();
-        let mut snapshot = tree.create_snapshot().unwrap();
+        let mut snapshot = tree.create_snapshot();
         let key = VariableSizeKey::from_str("test_key").unwrap();
-        snapshot.insert(&key, 10, 100).unwrap();
-        snapshot.insert(&key, 20, 150).unwrap();
-        snapshot.insert(&key, 30, 300).unwrap();
+        snapshot.insert(&key, 10, 100);
+        snapshot.insert(&key, 20, 150);
+        snapshot.insert(&key, 30, 300);
 
         let query_type = QueryType::LastLessThanTs(150);
         let result = snapshot.get_value_by_query(&key, query_type).unwrap();
@@ -557,11 +526,11 @@ mod tests {
     #[test]
     fn test_last_less_or_equal_ts() {
         let tree: Tree<VariableSizeKey, i32> = Tree::new();
-        let mut snapshot = tree.create_snapshot().unwrap();
+        let mut snapshot = tree.create_snapshot();
         let key = VariableSizeKey::from_str("test_key").unwrap();
-        snapshot.insert(&key, 10, 100).unwrap();
-        snapshot.insert(&key, 20, 150).unwrap();
-        snapshot.insert(&key, 30, 300).unwrap();
+        snapshot.insert(&key, 10, 100);
+        snapshot.insert(&key, 20, 150);
+        snapshot.insert(&key, 30, 300);
 
         let query_type = QueryType::LastLessOrEqualTs(150);
         let result = snapshot.get_value_by_query(&key, query_type).unwrap();
@@ -571,11 +540,11 @@ mod tests {
     #[test]
     fn test_first_greater_than_ts() {
         let tree: Tree<VariableSizeKey, i32> = Tree::new();
-        let mut snapshot = tree.create_snapshot().unwrap();
+        let mut snapshot = tree.create_snapshot();
         let key = VariableSizeKey::from_str("test_key").unwrap();
-        snapshot.insert(&key, 10, 100).unwrap();
-        snapshot.insert(&key, 20, 150).unwrap();
-        snapshot.insert(&key, 30, 300).unwrap();
+        snapshot.insert(&key, 10, 100);
+        snapshot.insert(&key, 20, 150);
+        snapshot.insert(&key, 30, 300);
 
         let query_type = QueryType::FirstGreaterThanTs(150);
         let result = snapshot.get_value_by_query(&key, query_type).unwrap();
@@ -585,11 +554,11 @@ mod tests {
     #[test]
     fn test_first_greater_or_equal_ts() {
         let tree: Tree<VariableSizeKey, i32> = Tree::new();
-        let mut snapshot = tree.create_snapshot().unwrap();
+        let mut snapshot = tree.create_snapshot();
         let key = VariableSizeKey::from_str("test_key").unwrap();
-        snapshot.insert(&key, 10, 100).unwrap();
-        snapshot.insert(&key, 20, 150).unwrap();
-        snapshot.insert(&key, 30, 300).unwrap();
+        snapshot.insert(&key, 10, 100);
+        snapshot.insert(&key, 20, 150);
+        snapshot.insert(&key, 30, 300);
 
         let query_type = QueryType::FirstGreaterOrEqualTs(150);
         let result = snapshot.get_value_by_query(&key, query_type).unwrap();
@@ -599,10 +568,9 @@ mod tests {
     #[test]
     fn scan_empty_range() {
         let tree: Tree<VariableSizeKey, i32> = Tree::new();
-        let snap = tree.create_snapshot().unwrap();
+        let snap = tree.create_snapshot();
         let result = snap.scan_at_ts(RangeFull {}, 0);
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_empty());
+        assert!(result.is_empty());
     }
 
     #[test]
@@ -613,12 +581,10 @@ mod tests {
             tree.insert(&VariableSizeKey::from_str(key).unwrap(), 1, 0, 0)
                 .unwrap();
         }
-        let snap = tree.create_snapshot().unwrap();
+        let snap = tree.create_snapshot();
         let range = VariableSizeKey::from_slice_with_termination("key_1".as_bytes())
             ..=VariableSizeKey::from_slice_with_termination("key_2".as_bytes());
-        let result = snap.scan_at_ts(range, 0);
-        assert!(result.is_ok());
-        let values = result.unwrap();
+        let values = snap.scan_at_ts(range, 0);
         assert_eq!(values.len(), 2);
     }
 
@@ -630,10 +596,8 @@ mod tests {
             tree.insert(&VariableSizeKey::from_str(key).unwrap(), 1, 0, 0)
                 .unwrap();
         }
-        let snap = tree.create_snapshot().unwrap();
-        let result = snap.scan_at_ts(RangeFull {}, 0);
-        assert!(result.is_ok());
-        let values = result.unwrap();
+        let snap = tree.create_snapshot();
+        let values = snap.scan_at_ts(RangeFull {}, 0);
         assert_eq!(values.len(), keys.len());
     }
 
@@ -645,12 +609,10 @@ mod tests {
             tree.insert(&VariableSizeKey::from_str(key).unwrap(), 1, 0, 0)
                 .unwrap();
         }
-        let snap = tree.create_snapshot().unwrap();
+        let snap = tree.create_snapshot();
         let range = VariableSizeKey::from_slice_with_termination("key_4".as_bytes())
             ..VariableSizeKey::from_slice_with_termination("key_5".as_bytes());
-        let result = snap.scan_at_ts(range, 0);
-        assert!(result.is_ok());
-        let values = result.unwrap();
+        let values = snap.scan_at_ts(range, 0);
         assert!(values.is_empty());
     }
 
@@ -667,11 +629,9 @@ mod tests {
             )
             .unwrap();
         }
-        let snap = tree.create_snapshot().unwrap();
+        let snap = tree.create_snapshot();
         for (i, _) in keys.iter().enumerate() {
-            let result = snap.scan_at_ts(RangeFull {}, i as u64);
-            assert!(result.is_ok());
-            let values = result.unwrap();
+            let values = snap.scan_at_ts(RangeFull {}, i as u64);
             assert_eq!(values.len(), i + 1);
         }
     }
@@ -687,10 +647,8 @@ mod tests {
                 .unwrap();
         }
 
-        let snap = tree.create_snapshot().unwrap();
-        let result = snap.scan_at_ts(RangeFull {}, num_keys);
-        assert!(result.is_ok());
-        let values = result.unwrap();
+        let snap = tree.create_snapshot();
+        let values = snap.scan_at_ts(RangeFull {}, num_keys);
         assert_eq!(values.len(), num_keys as usize); // Expect all keys to be visible
     }
 
@@ -710,21 +668,18 @@ mod tests {
             .unwrap();
         }
 
-        let snap = tree.create_snapshot().unwrap();
+        let snap = tree.create_snapshot();
         // Scan at a timestamp before any insertions
         let result_before = snap.scan_at_ts(RangeFull {}, 0);
-        assert!(result_before.is_ok());
-        assert!(result_before.unwrap().is_empty());
+        assert!(result_before.is_empty());
 
         // Scan between insertions
         let result_mid = snap.scan_at_ts(RangeFull {}, 4);
-        assert!(result_mid.is_ok());
-        assert_eq!(result_mid.unwrap().len(), 2); // Expect first two keys to be visible
+        assert_eq!(result_mid.len(), 2); // Expect first two keys to be visible
 
         // Scan after all insertions
         let result_after = snap.scan_at_ts(RangeFull {}, 7);
-        assert!(result_after.is_ok());
-        assert_eq!(result_after.unwrap().len(), keys.len()); // Expect all keys to be visible
+        assert_eq!(result_after.len(), keys.len()); // Expect all keys to be visible
     }
 
     #[test]
@@ -734,10 +689,8 @@ mod tests {
         tree.insert(&VariableSizeKey::from_str("key_1").unwrap(), 42, 0, 0)
             .unwrap();
 
-        let snap = tree.create_snapshot().unwrap();
-        let result = snap.scan_at_ts(RangeFull {}, 0);
-        assert!(result.is_ok());
-        let values = result.unwrap();
+        let snap = tree.create_snapshot();
+        let values = snap.scan_at_ts(RangeFull {}, 0);
 
         assert_eq!(values.len(), 1);
         assert_eq!(values[0].1, 42);
@@ -746,8 +699,8 @@ mod tests {
     #[test]
     fn keys_at_empty_range() {
         let tree: Tree<VariableSizeKey, i32> = Tree::new();
-        let snap = tree.create_snapshot().unwrap();
-        let keys = snap.keys_at_ts(RangeFull {}, 0).unwrap();
+        let snap = tree.create_snapshot();
+        let keys = snap.keys_at_ts(RangeFull {}, 0);
         assert!(keys.is_empty());
     }
 
@@ -759,10 +712,10 @@ mod tests {
             tree.insert(&VariableSizeKey::from_str(key).unwrap(), 1, 0, 0)
                 .unwrap();
         }
-        let snap = tree.create_snapshot().unwrap();
+        let snap = tree.create_snapshot();
         let range = VariableSizeKey::from_slice_with_termination("key_1".as_bytes())
             ..=VariableSizeKey::from_slice_with_termination("key_2".as_bytes());
-        let keys = snap.keys_at_ts(range, 0).unwrap();
+        let keys = snap.keys_at_ts(range, 0);
         assert_eq!(keys.len(), 2);
     }
 
@@ -774,8 +727,8 @@ mod tests {
             tree.insert(&VariableSizeKey::from_str(key).unwrap(), 1, 0, 0)
                 .unwrap();
         }
-        let snap = tree.create_snapshot().unwrap();
-        let keys = snap.keys_at_ts(RangeFull {}, 0).unwrap();
+        let snap = tree.create_snapshot();
+        let keys = snap.keys_at_ts(RangeFull {}, 0);
         assert_eq!(keys.len(), keys_to_insert.len());
     }
 
@@ -787,10 +740,10 @@ mod tests {
             tree.insert(&VariableSizeKey::from_str(key).unwrap(), 1, 0, 0)
                 .unwrap();
         }
-        let snap = tree.create_snapshot().unwrap();
+        let snap = tree.create_snapshot();
         let range = VariableSizeKey::from("key_4".as_bytes().to_vec())
             ..VariableSizeKey::from("key_5".as_bytes().to_vec());
-        let keys = snap.keys_at_ts(range, 0).unwrap();
+        let keys = snap.keys_at_ts(range, 0);
         assert!(keys.is_empty());
     }
 
@@ -807,9 +760,9 @@ mod tests {
             )
             .unwrap();
         }
-        let snap = tree.create_snapshot().unwrap();
+        let snap = tree.create_snapshot();
         for (i, _) in keys_to_insert.iter().enumerate() {
-            let keys = snap.keys_at_ts(RangeFull {}, i as u64).unwrap();
+            let keys = snap.keys_at_ts(RangeFull {}, i as u64);
             assert_eq!(keys.len(), i + 1);
         }
     }
@@ -826,8 +779,8 @@ mod tests {
                 .unwrap();
         }
 
-        let snap = tree.create_snapshot().unwrap();
-        let keys = snap.keys_at_ts(RangeFull {}, num_keys).unwrap();
+        let snap = tree.create_snapshot();
+        let keys = snap.keys_at_ts(RangeFull {}, num_keys);
         assert_eq!(keys.len(), num_keys as usize); // Expect all keys to be visible
 
         // Sort the expected keys lexicographically
@@ -854,14 +807,14 @@ mod tests {
             .unwrap();
         }
 
-        let snap = tree.create_snapshot().unwrap();
-        let keys_before = snap.keys_at_ts(RangeFull {}, 0).unwrap();
+        let snap = tree.create_snapshot();
+        let keys_before = snap.keys_at_ts(RangeFull {}, 0);
         assert!(keys_before.is_empty());
 
-        let keys_mid = snap.keys_at_ts(RangeFull {}, 4).unwrap();
+        let keys_mid = snap.keys_at_ts(RangeFull {}, 4);
         assert_eq!(keys_mid.len(), 2); // Expect first two keys to be visible
 
-        let keys_after = snap.keys_at_ts(RangeFull {}, 7).unwrap();
+        let keys_after = snap.keys_at_ts(RangeFull {}, 7);
         assert_eq!(keys_after.len(), keys_to_insert.len()); // Expect all keys to be visible
     }
 
@@ -871,8 +824,8 @@ mod tests {
         tree.insert(&VariableSizeKey::from_str("key_1").unwrap(), 42, 0, 0)
             .unwrap();
 
-        let snap = tree.create_snapshot().unwrap();
-        let keys = snap.keys_at_ts(RangeFull {}, 0).unwrap();
+        let snap = tree.create_snapshot();
+        let keys = snap.keys_at_ts(RangeFull {}, 0);
         assert_eq!(keys.len(), 1);
     }
 }
