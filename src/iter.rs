@@ -427,7 +427,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use hashbrown::HashMap;
+    use std::collections::HashMap;
 
     use crate::art::Tree;
     use crate::{FixedSizeKey, Key};
@@ -477,7 +477,7 @@ mod tests {
         }
 
         // Verify that each key has the correct number of versions and they are sequential
-        for (_, versions) in &versions_map {
+        for versions in versions_map.values() {
             assert_eq!(versions.len() as u64, versions_per_key);
 
             let mut expected_version = 1;
@@ -491,8 +491,8 @@ mod tests {
         let expected_count = num_keys as u64 * versions_per_key;
         assert_eq!(
             versions_map
-                .iter()
-                .map(|(_key, versions)| versions.len())
+                .values()
+                .map(|versions| versions.len())
                 .sum::<usize>(),
             expected_count as usize,
             "Total count of versions does not match the expected count"
@@ -531,7 +531,7 @@ mod tests {
         }
 
         // Verify that each key has the correct number of versions and they are in decreasing order
-        for (_, versions) in &versions_map {
+        for versions in versions_map.values() {
             assert_eq!(
                 versions.len() as u64,
                 versions_per_key,
@@ -550,8 +550,8 @@ mod tests {
         let expected_count = num_keys as u64 * versions_per_key;
         assert_eq!(
             versions_map
-                .iter()
-                .map(|(_key, versions)| versions.len())
+                .values()
+                .map(|versions| versions.len())
                 .sum::<usize>(),
             expected_count as usize,
             "Total count of versions does not match the expected count"
@@ -638,8 +638,8 @@ mod tests {
         let expected_count = 25;
         assert_eq!(
             versions_map
-                .iter()
-                .map(|(_key, versions)| versions.len())
+                .values()
+                .map(|versions| versions.len())
                 .sum::<usize>(),
             expected_count as usize,
             "Total count of versions does not match the expected count"
