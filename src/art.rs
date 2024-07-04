@@ -645,14 +645,13 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
         // Determine the prefix of the key after the current depth.
         let key_prefix = key.prefix_after(depth);
-        let key_prefix = key_prefix.as_slice();
         // Find the longest common prefix between the current node's prefix and the key's prefix.
         let longest_common_prefix = cur_node_prefix.longest_common_prefix(key_prefix);
 
         // Create a new key that represents the remaining part of the current node's prefix after the common prefix.
-        let new_key = cur_node_prefix.prefix_after(longest_common_prefix);
+        let new_key = cur_node_prefix.prefix_after(longest_common_prefix).into();
         // Extract the prefix of the current node up to the common prefix.
-        let prefix = cur_node_prefix.prefix_before(longest_common_prefix);
+        let prefix = cur_node_prefix.prefix_before(longest_common_prefix).into();
         // Determine whether the current node's prefix and the key's prefix match up to the common prefix.
         let is_prefix_match = min(cur_node_prefix_len, key_prefix.len()) == longest_common_prefix;
 
@@ -754,7 +753,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
             // Determine the prefix of the key after the current depth.
             let key_prefix = key.prefix_after(depth);
-            let key_prefix = key_prefix.as_slice();
 
             // Find the longest common prefix between the current node's prefix and the key's prefix.
             let longest_common_prefix = prefix.longest_common_prefix(key_prefix);
@@ -792,7 +790,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
         loop {
             let key_prefix = key.prefix_after(depth);
-            let key_prefix = key_prefix.as_slice();
             let prefix = cur_node.prefix();
             let lcp = prefix.longest_common_prefix(key_prefix);
 
@@ -1065,8 +1062,8 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         let (new_root, is_deleted) = match &node {
             Some(root) if !root.is_twig() => {
                 // Determine the prefix of the key after the current depth.
-                let prefix_after = key.prefix_after(0);
-                let key_prefix = prefix_after.as_slice(); // Find the longest common prefix between the current node's prefix and the key's prefix.
+                let key_prefix = key.prefix_after(0);
+                // Find the longest common prefix between the current node's prefix and the key's prefix.
                 let longest_common_prefix = root.prefix().longest_common_prefix(key_prefix);
 
                 if longest_common_prefix != root.prefix().len() {
@@ -1088,8 +1085,8 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
             Some(root) => {
                 // case where the root is a twig.
                 // Determine the prefix of the key after the current depth.
-                let prefix_after = key.prefix_after(0);
-                let key_prefix = prefix_after.as_slice(); // Find the longest common prefix between the current node's prefix and the key's prefix.
+                let key_prefix = key.prefix_after(0);
+                // Find the longest common prefix between the current node's prefix and the key's prefix.
                 let longest_common_prefix = root.prefix().longest_common_prefix(key_prefix);
 
                 if longest_common_prefix != root.prefix().len() {
