@@ -9,10 +9,15 @@ description = "An immutable versioned adaptive radix trie."
 repository = "https://github.com/surrealdb/vart"
 homepage = "https://github.com/surrealdb/vart"
 documentation = "https://docs.rs/vart/"
-keywords = ["trie", "immutable-trie", "snapshot-isolation", "adaptive-radix-trie", "radix-trie"]
+keywords = [
+    "trie",
+    "immutable-trie",
+    "snapshot-isolation",
+    "adaptive-radix-trie",
+    "radix-trie",
+]
 
 [dependencies]
-hashbrown = "0.14.2"
 
 [[bench]]
 name = "vart_bench"
