@@ -312,7 +312,7 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> FlatNode<P, N, WIDTH> {
         let mut new_node = FlatNode::<P, N, NEW_WIDTH>::new(self.prefix.clone());
         for i in 0..self.num_children as usize {
             new_node.keys[i] = self.keys[i];
-            new_node.children[i] = self.children[i].clone();
+            new_node.children[i].clone_from(&self.children[i]);
         }
         new_node.version = self.version;
         new_node.num_children = self.num_children;
@@ -392,7 +392,7 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N
         let mut new_node = Self::new(self.prefix.clone());
         for i in 0..self.num_children as usize {
             new_node.keys[i] = self.keys[i];
-            new_node.children[i] = self.children[i].clone();
+            new_node.children[i].clone_from(&self.children[i])
         }
         new_node.num_children = self.num_children;
         new_node.version = self.version;
@@ -438,7 +438,7 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N
         new_node.children[idx] = None;
         for i in idx..(WIDTH - 1) {
             new_node.keys[i] = self.keys[i + 1];
-            new_node.children[i] = self.children[i + 1].clone();
+            new_node.children[i].clone_from(&self.children[i + 1])
         }
 
         new_node.keys[WIDTH - 1] = 0;
