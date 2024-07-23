@@ -39,7 +39,7 @@ impl<'a, P: KeyTrait, V: Clone> Iterator for NodeIter<'a, P, V> {
 
 /// An iterator over key-value pairs in the Trie.
 pub struct Iter<'a, P: KeyTrait + 'a, V: Clone> {
-    inner: Box<dyn Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)> + 'a>,
+    inner: Box<dyn Iterator<Item = (Vec<u8>, &'a V, &'a u64)> + 'a>,
     _marker: std::marker::PhantomData<P>,
 }
 
@@ -65,7 +65,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iter<'a, P, V> {
 }
 
 impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
-    type Item = (Vec<u8>, &'a V, &'a u64, &'a u64);
+    type Item = (Vec<u8>, &'a V, &'a u64);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next()
@@ -75,7 +75,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
 /// An internal state for the Iter iterator.
 struct IterState<'a, P: KeyTrait + 'a, V: Clone> {
     iters: Vec<NodeIter<'a, P, V>>,
-    leafs: VecDeque<(&'a P, &'a V, &'a u64, &'a u64)>,
+    leafs: VecDeque<(&'a P, &'a V, &'a u64)>,
     is_versioned: bool,
 }
 
@@ -93,10 +93,10 @@ impl<'a, P: KeyTrait + 'a, V: Clone> IterState<'a, P, V> {
         if let NodeType::Twig(twig) = &node.node_type {
             if is_versioned {
                 for leaf in twig.iter() {
-                    leafs.push_back((&twig.key, &leaf.value, &leaf.version, &leaf.ts));
+                    leafs.push_back((&twig.key, &leaf.value, &leaf.version));
                 }
             } else if let Some(v) = twig.get_latest_leaf() {
-                leafs.push_back((&twig.key, &v.value, &v.version, &v.ts));
+                leafs.push_back((&twig.key, &v.value, &v.version));
             }
         } else {
             iters.push(NodeIter::new(node.iter()));
@@ -127,10 +127,10 @@ impl<'a, P: KeyTrait + 'a, V: Clone> IterState<'a, P, V> {
             if range.contains(&twig.key) {
                 if is_versioned {
                     for leaf in twig.iter() {
-                        leafs.push_back((&twig.key, &leaf.value, &leaf.version, &leaf.ts));
+                        leafs.push_back((&twig.key, &leaf.value, &leaf.version));
                     }
                 } else if let Some(v) = twig.get_latest_leaf() {
-                    leafs.push_back((&twig.key, &v.value, &v.version, &v.ts));
+                    leafs.push_back((&twig.key, &v.value, &v.version));
                 }
             }
         } else {
@@ -153,7 +153,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> IterState<'a, P, V> {
         if let NodeType::Twig(twig) = &node.node_type {
             if range.contains(&twig.key) {
                 if let Some(v) = twig.get_leaf_by_query_ref(query_type) {
-                    leafs.push_back((&twig.key, &v.value, &v.version, &v.ts));
+                    leafs.push_back((&twig.key, &v.value, &v.version));
                 }
             }
         } else {
@@ -169,7 +169,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> IterState<'a, P, V> {
 }
 
 impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
-    type Item = (Vec<u8>, &'a V, &'a u64, &'a u64);
+    type Item = (Vec<u8>, &'a V, &'a u64);
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(node) = self.iters.last_mut() {
@@ -186,12 +186,11 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
                                     &twig.key,
                                     &leaf.value,
                                     &leaf.version,
-                                    &leaf.ts,
                                 ));
                             }
                         } else if let Some(v) = twig.get_latest_leaf() {
                             self.leafs
-                                .push_back((&twig.key, &v.value, &v.version, &v.ts));
+                                .push_back((&twig.key, &v.value, &v.version));
                         }
                         break;
                     } else {
@@ -203,7 +202,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for IterState<'a, P, V> {
 
         self.leafs
             .pop_front()
-            .map(|leaf| (leaf.0.as_slice().to_vec(), leaf.1, leaf.2, leaf.3))
+            .map(|leaf| (leaf.0.as_slice().to_vec(), leaf.1, leaf.2))
     }
 }
 
@@ -254,7 +253,7 @@ where
 }
 
 impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K, V, R> {
-    type Item = (Vec<u8>, &'a V, &'a u64, &'a u64);
+    type Item = (Vec<u8>, &'a V, &'a u64);
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(node) = self.forward.iters.last_mut() {
@@ -271,13 +270,12 @@ impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K
                                         &twig.key,
                                         &leaf.value,
                                         &leaf.version,
-                                        &leaf.ts,
                                     ));
                                 }
                             } else if let Some(v) = twig.get_latest_leaf() {
                                 self.forward
                                     .leafs
-                                    .push_back((&twig.key, &v.value, &v.version, &v.ts));
+                                    .push_back((&twig.key, &v.value, &v.version));
                             }
                             break;
                         } else {
@@ -300,12 +298,12 @@ impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K
         self.forward
             .leafs
             .pop_front()
-            .map(|leaf| (leaf.0.as_slice().to_vec(), leaf.1, leaf.2, leaf.3))
+            .map(|leaf| (leaf.0.as_slice().to_vec(), leaf.1, leaf.2))
     }
 }
 
 pub struct VersionedIter<'a, P: KeyTrait + 'a, V: Clone> {
-    inner: Box<dyn Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)> + 'a>,
+    inner: Box<dyn Iterator<Item = (Vec<u8>, &'a V, &'a u64)> + 'a>,
     _marker: std::marker::PhantomData<P>,
 }
 
@@ -325,7 +323,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> VersionedIter<'a, P, V> {
 }
 
 impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for VersionedIter<'a, P, V> {
-    type Item = (Vec<u8>, &'a V, &'a u64, &'a u64);
+    type Item = (Vec<u8>, &'a V, &'a u64);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next()
@@ -455,14 +453,14 @@ mod tests {
         for i in 0..num_keys {
             let key: FixedSizeKey<16> = i.into();
             for version in 1..versions_per_key + 1 {
-                tree.insert_unchecked(&key, i, version, 0_u64).unwrap();
+                tree.insert_unchecked(&key, i, version).unwrap();
             }
         }
 
         // Use the versioned iterator to iterate through the tree
         let iter_with_versions = tree.iter_with_versions();
         let mut versions_map = HashMap::new();
-        for (key, value, version, _timestamp) in iter_with_versions {
+        for (key, value, version) in iter_with_versions {
             let key_num = from_be_bytes_key(&key);
             // Check if the key is correct (matches the value)
             assert_eq!(
@@ -509,14 +507,14 @@ mod tests {
         for i in 0..num_keys {
             let key: FixedSizeKey<16> = i.into();
             for version in (1..=versions_per_key).rev() {
-                tree.insert_unchecked(&key, i, version, 0_u64).unwrap();
+                tree.insert_unchecked(&key, i, version).unwrap();
             }
         }
 
         // Use the versioned iterator to iterate through the tree
         let iter_with_versions = tree.iter_with_versions();
         let mut versions_map = HashMap::new();
-        for (key, value, version, _timestamp) in iter_with_versions {
+        for (key, value, version) in iter_with_versions {
             let key_num = from_be_bytes_key(&key);
             // Check if the key is correct (matches the value)
             assert_eq!(
@@ -572,7 +570,7 @@ mod tests {
         for i in 0..num_keys {
             let key: FixedSizeKey<16> = i.into();
             for version in 1..=versions_per_key {
-                tree.insert_unchecked(&key, i, version, 0_u64).unwrap();
+                tree.insert_unchecked(&key, i, version).unwrap();
             }
         }
 
@@ -585,7 +583,7 @@ mod tests {
         let query_range_start = from_be_bytes_key(query_range_start.as_slice());
         let query_range_end = from_be_bytes_key(query_range_end.as_slice());
 
-        for (key, _value, version, _timestamp) in range_query_iter {
+        for (key, _value, version) in range_query_iter {
             let key_num = from_be_bytes_key(&key);
             assert!(
                 key_num >= query_range_start && key_num <= query_range_end,
@@ -655,13 +653,13 @@ mod tests {
         let key: FixedSizeKey<16> = 1u16.into();
         let versions = [1, 2];
         for &version in &versions {
-            tree.insert_unchecked(&key, 1, version, 0_u64).unwrap();
+            tree.insert_unchecked(&key, 1, version).unwrap();
         }
 
         // Use iterator to iterate through the tree
         let iter = tree.iter_with_versions();
         let mut found_versions = Vec::new();
-        for (iter_key, iter_value, iter_version, _timestamp) in iter {
+        for (iter_key, iter_value, iter_version) in iter {
             // Check if the key and value are as expected
             assert_eq!(
                 from_be_bytes_key(&iter_key),
@@ -698,7 +696,7 @@ mod tests {
         let key: FixedSizeKey<16> = 1u16.into();
         let versions = [1, 2];
         for &version in &versions {
-            tree.insert_unchecked(&key, 1, version, 0_u64).unwrap();
+            tree.insert_unchecked(&key, 1, version).unwrap();
         }
 
         // Define start and end keys for the range query
@@ -708,7 +706,7 @@ mod tests {
         // Use range query to iterate through the tree
         let range_iter = tree.range_with_versions(start_key..=end_key);
         let mut found_versions = Vec::new();
-        for (iter_key, iter_value, iter_version, _timestamp) in range_iter {
+        for (iter_key, iter_value, iter_version) in range_iter {
             // Check if the key and value are as expected
             assert_eq!(
                 from_be_bytes_key(&iter_key),

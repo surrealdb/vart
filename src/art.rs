@@ -60,11 +60,10 @@ impl<P: KeyTrait, V: Clone> Version for Node<P, V> {
 // An enum for the different types of queries on the TwigNode
 pub enum QueryType {
     LatestByVersion(u64),
-    LatestByTs(u64),
-    LastLessThanTs(u64),
-    LastLessOrEqualTs(u64),
-    FirstGreaterThanTs(u64),
-    FirstGreaterOrEqualTs(u64),
+    LastLessThanVersion(u64),
+    LastLessOrEqualVersion(u64),
+    FirstGreaterThanVersion(u64),
+    FirstGreaterOrEqualVersion(u64),
 }
 
 /// An enumeration representing different types of nodes in an Adaptive Radix Trie.
@@ -115,12 +114,12 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     /// Returns a new `Node` instance with a Twig node containing the provided key, value, and version.
     ///
     #[inline]
-    pub(crate) fn new_twig(prefix: P, key: P, value: V, version: u64, ts: u64) -> Node<P, V> {
+    pub(crate) fn new_twig(prefix: P, key: P, value: V, version: u64) -> Node<P, V> {
         // Create a new TwigNode instance using the provided prefix and key.
         let mut twig = TwigNode::new(prefix, key);
 
         // Insert the provided value into the TwigNode along with the version.
-        twig.insert_mut(value, version, ts);
+        twig.insert_mut(value, version);
 
         // Return a new Node instance encapsulating the constructed Twig node.
         Self {
@@ -576,7 +575,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     }
 
     #[inline]
-    pub fn get_all_versions(&self) -> Option<Vec<(V, u64, u64)>> {
+    pub fn get_all_versions(&self) -> Option<Vec<(V, u64)>> {
         // Unwrap the NodeType::Twig to access the TwigNode instance.
         let NodeType::Twig(twig) = &self.node_type else {
             return None;
@@ -636,7 +635,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         key: &P,
         value: V,
         commit_version: u64,
-        ts: u64,
         depth: usize,
     ) -> (NodeArc<P, V>, Option<V>) {
         // Obtain the current node's prefix and its length.
@@ -659,7 +657,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         // update the existing value in the Twig node.
         if let NodeType::Twig(ref twig) = &cur_node.node_type {
             if is_prefix_match && cur_node_prefix.len() == key_prefix.len() {
-                let new_twig = twig.insert(value, commit_version, ts);
+                let new_twig = twig.insert(value, commit_version);
                 if let Some(old_val) = twig.get_leaf_by_version(commit_version) {
                     return (
                         Arc::new(Node {
@@ -691,7 +689,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 key.as_slice().into(),
                 value,
                 commit_version,
-                ts,
             );
             n4 = n4.add_child(k1, old_node).add_child(k2, new_twig);
             return (Arc::new(n4), None);
@@ -706,7 +703,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 key,
                 value,
                 commit_version,
-                ts,
                 depth + longest_common_prefix,
             );
             let new_node = cur_node.replace_child(k, new_child);
@@ -719,7 +715,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             key.as_slice().into(),
             value,
             commit_version,
-            ts,
         );
         let new_node = cur_node.add_child(k, new_twig);
         (Arc::new(new_node), None)
@@ -816,13 +811,13 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         cur_node: &Node<P, V>,
         key: &P,
         query_type: QueryType,
-    ) -> Option<(V, u64, u64)> {
+    ) -> Option<(V, u64)> {
         let cur_node = Self::navigate_to_node(cur_node, key)?;
         let val = cur_node.get_leaf_by_query(query_type)?;
-        Some((val.value.clone(), val.version, val.ts))
+        Some((val.value.clone(), val.version))
     }
 
-    pub fn get_version_history(cur_node: &Node<P, V>, key: &P) -> Option<Vec<(V, u64, u64)>> {
+    pub fn get_version_history(cur_node: &Node<P, V>, key: &P) -> Option<Vec<(V, u64)>> {
         Self::navigate_to_node(cur_node, key).and_then(|cur_node| cur_node.get_all_versions())
     }
 
@@ -871,19 +866,17 @@ pub struct KV<P, V> {
     pub key: P,
     pub value: V,
     pub version: u64,
-    pub ts: u64,
 }
 
 // A type alias for a node reference.
 type NodeArc<P, V> = Arc<Node<P, V>>;
 
 impl<P: KeyTrait, V: Clone> KV<P, V> {
-    pub fn new(key: P, value: V, version: u64, timestamp: u64) -> Self {
+    pub fn new(key: P, value: V, version: u64) -> Self {
         KV {
             key,
             value,
             version,
-            ts: timestamp,
         }
     }
 }
@@ -919,7 +912,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         key: &P,
         value: V,
         version: u64,
-        ts: u64,
         check_version: bool,
     ) -> Result<Option<V>, TrieError> {
         let (new_root, old_node) = match &self.root {
@@ -931,7 +923,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                         key.as_slice().into(),
                         value,
                         commit_version,
-                        ts,
                     )),
                     None,
                 )
@@ -944,7 +935,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                 } else if check_version && curr_version >= version {
                     return Err(TrieError::VersionIsOld);
                 }
-                Node::insert_recurse(root, key, value, commit_version, ts, 0)
+                Node::insert_recurse(root, key, value, commit_version, 0)
             }
         };
 
@@ -978,9 +969,8 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         key: &P,
         value: V,
         version: u64,
-        ts: u64,
     ) -> Result<Option<V>, TrieError> {
-        self.insert_common(key, value, version, ts, true)
+        self.insert_common(key, value, version, true)
     }
 
     pub fn insert_unchecked(
@@ -988,9 +978,8 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         key: &P,
         value: V,
         version: u64,
-        ts: u64,
     ) -> Result<Option<V>, TrieError> {
-        self.insert_common(key, value, version, ts, false)
+        self.insert_common(key, value, version, false)
     }
 
     pub fn bulk_insert(
@@ -1018,7 +1007,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                 key: k,
                 value: v,
                 version: t,
-                ts: kv.ts,
             };
 
             // Insert the new KV instance using the insert function
@@ -1029,7 +1017,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                         new_kv.key.as_slice().into(),
                         new_kv.value,
                         new_kv.version,
-                        new_kv.ts,
                     )))
                 }
                 Some(root) => {
@@ -1038,7 +1025,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                         &new_kv.key,
                         new_kv.value,
                         new_kv.version,
-                        new_kv.ts,
                         0,
                     );
                     self.root = Some(new_node)
@@ -1112,7 +1098,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         is_deleted
     }
 
-    pub fn get(&self, key: &P, version: u64) -> Option<(V, u64, u64)> {
+    pub fn get(&self, key: &P, version: u64) -> Option<(V, u64)> {
         let root = self.root.as_ref()?;
         let mut commit_version = version;
         if commit_version == 0 {
@@ -1193,7 +1179,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     pub fn range<'a, R>(
         &'a self,
         range: R,
-    ) -> impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>
+    ) -> impl Iterator<Item = (Vec<u8>, &'a V, &'a u64)>
     where
         R: RangeBounds<P> + 'a,
     {
@@ -1209,7 +1195,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     pub fn range_with_versions<'a, R>(
         &'a self,
         range: R,
-    ) -> impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>
+    ) -> impl Iterator<Item = (Vec<u8>, &'a V, &'a u64)>
     where
         R: RangeBounds<P> + 'a,
     {
@@ -1222,17 +1208,17 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Range::new_versioned(root, range)
     }
 
-    pub fn get_at_ts(&self, key: &P, ts: u64) -> Option<(V, u64, u64)> {
+    pub fn get_at_version(&self, key: &P, version: u64) -> Option<(V, u64)> {
         let root = self.root.as_ref()?;
-        Node::get_recurse(root, key, QueryType::LatestByTs(ts))
+        Node::get_recurse(root, key, QueryType::LatestByVersion(version))
     }
 
-    pub fn get_version_history(&self, key: &P) -> Option<Vec<(V, u64, u64)>> {
+    pub fn get_version_history(&self, key: &P) -> Option<Vec<(V, u64)>> {
         let root = self.root.as_ref()?;
         Node::get_version_history(root, key)
     }
 
-    pub fn get_value_by_query(&self, key: &P, query_type: QueryType) -> Option<(V, u64, u64)> {
+    pub fn get_value_by_query(&self, key: &P, query_type: QueryType) -> Option<(V, u64)> {
         let root = self.root.as_ref()?;
         Node::get_recurse(root, key, query_type)
     }
@@ -1270,13 +1256,13 @@ mod tests {
             // Insertion phase
             for word in &words {
                 let key = &VariableSizeKey::from_str(word).unwrap();
-                let _ = tree.insert(key, 1, 0, 0);
+                let _ = tree.insert(key, 1, 0);
             }
 
             // Search phase
             for word in &words {
                 let key = VariableSizeKey::from_str(word).unwrap();
-                let (val, _, _) = tree.get(&key, 0).unwrap();
+                let (val, _) = tree.get(&key, 0).unwrap();
                 assert_eq!(val, 1);
             }
 
@@ -1302,7 +1288,7 @@ mod tests {
         ];
 
         for word in &insert_words {
-            let _ = tree.insert(&VariableSizeKey::from_str(word).unwrap(), 1, 0, 0);
+            let _ = tree.insert(&VariableSizeKey::from_str(word).unwrap(), 1, 0);
         }
 
         // Deletion phase
@@ -1323,12 +1309,12 @@ mod tests {
         ];
 
         for (word, val) in &words_to_insert {
-            let _ = tree.insert(&VariableSizeKey::from_str(word).unwrap(), *val, 0, 0);
+            let _ = tree.insert(&VariableSizeKey::from_str(word).unwrap(), *val, 0);
         }
 
         // Verification phase
         for (word, expected_val) in &words_to_insert {
-            let (val, _, _) = tree
+            let (val, _) = tree
                 .get(&VariableSizeKey::from_str(word).unwrap(), 0)
                 .unwrap();
             assert_eq!(val, *expected_val);
@@ -1342,11 +1328,11 @@ mod tests {
         // Insertion phase
         let key = VariableSizeKey::from_str("abc").unwrap();
         let value = 1;
-        let _ = tree.insert(&key, value, 0, 0);
+        let _ = tree.insert(&key, value, 0);
 
         // Verification phase
-        let (val, _ts, _) = tree.get(&key, 0).unwrap();
-        assert_eq!(val, value);
+        let val = tree.get(&key, 0).unwrap();
+        assert_eq!(val.0, value);
     }
 
     #[test]
@@ -1356,11 +1342,11 @@ mod tests {
         // First insertion
         let key = VariableSizeKey::from_str("abc").unwrap();
         let value = 1;
-        let result = tree.insert(&key, value, 0, 0).expect("Failed to insert");
+        let result = tree.insert(&key, value, 0).expect("Failed to insert");
         assert!(result.is_none());
 
         // Second insertion (duplicate)
-        let result = tree.insert(&key, value, 0, 0).expect("Failed to insert");
+        let result = tree.insert(&key, value, 0).expect("Failed to insert");
         assert!(result.is_some());
     }
 
@@ -1372,7 +1358,7 @@ mod tests {
         // Insertion
         let key = VariableSizeKey::from_str("test").unwrap();
         let value = 1;
-        let _ = tree.insert(&key, value, 0, 0);
+        let _ = tree.insert(&key, value, 0);
 
         // Removal
         assert!(tree.remove(&key));
@@ -1389,8 +1375,8 @@ mod tests {
         let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // Insertion
-        tree.insert(&key1, 1, 0, 0).unwrap();
-        tree.insert(&key2, 1, 0, 0).unwrap();
+        tree.insert(&key1, 1, 0).unwrap();
+        tree.insert(&key2, 1, 0).unwrap();
 
         // Removal
         assert!(tree.remove(&key1));
@@ -1413,8 +1399,8 @@ mod tests {
         let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // Insertion
-        tree.insert(&key1, 1, 0, 0).unwrap();
-        tree.insert(&key2, 1, 0, 0).unwrap();
+        tree.insert(&key1, 1, 0).unwrap();
+        tree.insert(&key2, 1, 0).unwrap();
 
         // Removal
         assert!(tree.remove(&key1));
@@ -1437,7 +1423,7 @@ mod tests {
     //     let key2 = &VariableSizeKey::from_str("test2");
 
     //     let mut tree = Tree::<VariableSizeKey, i32>::new();
-    //     tree.insert(key1, 1, 0, 0);
+    //     tree.insert(key1, 1, 0);
     //     tree.insert(key2, 1, 0);
 
     //     assert_eq!(tree.remove(key1), true);
@@ -1457,7 +1443,7 @@ mod tests {
         // Insertion
         for i in 0..5u32 {
             let key = VariableSizeKey::from_slice(&i.to_be_bytes());
-            tree.insert(&key, 1, 0, 0).unwrap();
+            tree.insert(&key, 1, 0).unwrap();
         }
 
         // Removal
@@ -1505,7 +1491,7 @@ mod tests {
         // Insertion
         for i in 0..17u32 {
             let key = VariableSizeKey::from_slice(&i.to_be_bytes());
-            tree.insert(&key, 1, 0, 0).unwrap();
+            tree.insert(&key, 1, 0).unwrap();
         }
 
         // Removal
@@ -1528,7 +1514,7 @@ mod tests {
         // Insertion
         for i in 0..17u32 {
             let key = VariableSizeKey::from_slice(&i.to_be_bytes());
-            tree.insert(&key, 1, 0, 0).unwrap();
+            tree.insert(&key, 1, 0).unwrap();
         }
 
         // Root verification
@@ -1572,7 +1558,7 @@ mod tests {
         // Insertion
         for i in 0..49u32 {
             let key = VariableSizeKey::from_slice(&i.to_be_bytes());
-            tree.insert(&key, 1, 0, 0).unwrap();
+            tree.insert(&key, 1, 0).unwrap();
         }
 
         // Removal
@@ -1595,7 +1581,7 @@ mod tests {
         // Insertion
         for i in 0..49u32 {
             let key = VariableSizeKey::from_slice(&i.to_be_bytes());
-            tree.insert(&key, 1, 0, 0).unwrap();
+            tree.insert(&key, 1, 0).unwrap();
         }
 
         // Root verification
@@ -1673,7 +1659,7 @@ mod tests {
                 kvt.version
             };
             assert!(tree
-                .insert(&VariableSizeKey::from(kvt.k.clone()), 1, ts, 0)
+                .insert(&VariableSizeKey::from(kvt.k.clone()), 1, ts)
                 .is_ok());
         }
 
@@ -1681,7 +1667,7 @@ mod tests {
         let mut curr_version = 1;
         for kvt in &kvts {
             let key = VariableSizeKey::from(kvt.k.clone());
-            let (val, version, _ts) = tree.get(&key, 0).unwrap();
+            let (val, version) = tree.get(&key, 0).unwrap();
             assert_eq!(val, 1);
 
             if kvt.version == 0 {
@@ -1704,26 +1690,24 @@ mod tests {
         let key1 = &VariableSizeKey::from_str("key_1").unwrap();
 
         // insert key1 with version 0
-        assert!(tree.insert(key1, 1, 0, 1).is_ok());
+        assert!(tree.insert(key1, 1, 0).is_ok());
         // update key1 with version 0
-        assert!(tree.insert(key1, 1, 0, 3).is_ok());
+        assert!(tree.insert(key1, 1, 0).is_ok());
 
         // get key1 should return version 2 as the same key was inserted and updated
-        let (val, version, ts) = tree.get(key1, 0).unwrap();
+        let (val, version) = tree.get(key1, 0).unwrap();
         assert_eq!(val, 1);
         assert_eq!(version, 2);
-        assert_eq!(ts, 3);
 
         // update key1 with older version should fail
-        assert!(tree.insert(key1, 1, 1, 0).is_err());
+        assert!(tree.insert(key1, 1, 1).is_err());
         assert_eq!(tree.version(), 2);
 
         // update key1 with newer version should pass
-        assert!(tree.insert(key1, 1, 8, 5).is_ok());
-        let (val, version, ts) = tree.get(key1, 0).unwrap();
+        assert!(tree.insert(key1, 1, 8).is_ok());
+        let (val, version) = tree.get(key1, 0).unwrap();
         assert_eq!(val, 1);
         assert_eq!(version, 8);
-        assert_eq!(ts, 5);
 
         assert_eq!(tree.version(), 8);
     }
@@ -1736,24 +1720,24 @@ mod tests {
         let key2 = VariableSizeKey::from_str("key_2").unwrap();
 
         // Initial insertion
-        assert!(tree.insert(&key1, 1, 10, 0).is_ok());
+        assert!(tree.insert(&key1, 1, 10).is_ok());
         let initial_version_key1 = tree.version();
 
         // Attempt update with non-increasing version
-        assert!(tree.insert(&key1, 1, 2, 0).is_err());
+        assert!(tree.insert(&key1, 1, 2).is_err());
         assert_eq!(initial_version_key1, tree.version());
-        let (val, version, _) = tree.get(&key1, 0).unwrap();
+        let (val, version) = tree.get(&key1, 0).unwrap();
         assert_eq!(val, 1);
         assert_eq!(version, 10);
 
         // Insert another key
-        assert!(tree.insert(&key2, 1, 15, 0).is_ok());
+        assert!(tree.insert(&key2, 1, 15).is_ok());
         let initial_version_key2 = tree.version();
 
         // Attempt update with non-increasing version for the second key
-        assert!(tree.insert(&key2, 1, 11, 0).is_err());
+        assert!(tree.insert(&key2, 1, 11).is_err());
         assert_eq!(initial_version_key2, tree.version());
-        let (val, version, _ts) = tree.get(&key2, 0).unwrap();
+        let (val, version) = tree.get(&key2, 0).unwrap();
         assert_eq!(val, 1);
         assert_eq!(version, 15);
 
@@ -1769,11 +1753,11 @@ mod tests {
         let key2 = VariableSizeKey::from_str("key_2").unwrap();
 
         // Initial insertion
-        assert!(tree.insert(&key1, 1, 10, 0).is_ok());
+        assert!(tree.insert(&key1, 1, 10).is_ok());
         let initial_version = tree.version();
 
         // Attempt update with version equal to root's version
-        assert!(tree.insert(&key2, 1, initial_version, 0).is_err());
+        assert!(tree.insert(&key2, 1, initial_version).is_err());
     }
 
     #[test]
@@ -1783,8 +1767,8 @@ mod tests {
         let key2 = VariableSizeKey::from_str("key_2").unwrap();
 
         // Initial insertions
-        assert!(tree.insert(&key1, 1, 0, 0).is_ok());
-        assert!(tree.insert(&key2, 1, 0, 0).is_ok());
+        assert!(tree.insert(&key1, 1, 0).is_ok());
+        assert!(tree.insert(&key2, 1, 0).is_ok());
         assert_eq!(tree.version(), 2);
 
         // Deletions
@@ -1813,7 +1797,7 @@ mod tests {
         // Insertion
         for i in 0..u16::MAX {
             let key: FixedSizeKey<16> = i.into();
-            tree.insert(&key, i, 0, i as u64).unwrap();
+            tree.insert(&key, i, 0).unwrap();
         }
 
         // Iteration and verification
@@ -1824,8 +1808,6 @@ mod tests {
         for tree_entry in tree_iter {
             let k = from_be_bytes_key(&tree_entry.0);
             assert_eq!(expected as u64, k);
-            let ts = tree_entry.3;
-            assert_eq!(expected as u64, *ts);
             expected = expected.wrapping_add(1);
             len += 1;
         }
@@ -1841,7 +1823,7 @@ mod tests {
         // Insertion
         for i in 0..u8::MAX {
             let key: FixedSizeKey<32> = i.into();
-            tree.insert(&key, i, 0, 0).unwrap();
+            tree.insert(&key, i, 0).unwrap();
         }
 
         // Iteration and verification
@@ -1868,7 +1850,7 @@ mod tests {
         // Insertion
         for i in 0..=max {
             let key: FixedSizeKey<8> = i.into();
-            tree.insert(&key, i, 0, 0).unwrap();
+            tree.insert(&key, i, 0).unwrap();
         }
 
         // Test inclusive range
@@ -1916,7 +1898,7 @@ mod tests {
         // Insertion
         for i in 0..=max {
             let key: FixedSizeKey<16> = i.into();
-            tree.insert(&key, i, 0, 0).unwrap();
+            tree.insert(&key, i, 0).unwrap();
         }
 
         let mut len = 0usize;
@@ -1936,16 +1918,16 @@ mod tests {
         // Insertions
         let key1 = VariableSizeKey::from_str("abc").unwrap();
         let key2 = VariableSizeKey::from_str("efg").unwrap();
-        tree.insert(&key1, 1, 0, 0).unwrap();
-        tree.insert(&key1, 2, 10, 0).unwrap();
-        tree.insert(&key2, 3, 11, 0).unwrap();
+        tree.insert(&key1, 1, 0).unwrap();
+        tree.insert(&key1, 2, 10).unwrap();
+        tree.insert(&key2, 3, 11).unwrap();
 
         // Versioned retrievals and assertions
-        let (val, _, _) = tree.get(&key1, 1).unwrap();
+        let (val, _) = tree.get(&key1, 1).unwrap();
         assert_eq!(val, 1);
-        let (val, _, _) = tree.get(&key1, 10).unwrap();
+        let (val, _) = tree.get(&key1, 10).unwrap();
         assert_eq!(val, 2);
-        let (val, _, _) = tree.get(&key2, 11).unwrap();
+        let (val, _) = tree.get(&key2, 11).unwrap();
         assert_eq!(val, 3);
 
         // Iteration and verification
@@ -1967,37 +1949,31 @@ mod tests {
                 key: VariableSizeKey::from_str("key_1").unwrap(),
                 value: 1,
                 version: 0,
-                ts: 0,
             },
             KV {
                 key: VariableSizeKey::from_str("key_2").unwrap(),
                 value: 1,
                 version: 2,
-                ts: 0,
             },
             KV {
                 key: VariableSizeKey::from_str("key_3").unwrap(),
                 value: 1,
                 version: curr_version + 1,
-                ts: 0,
             },
             KV {
                 key: VariableSizeKey::from_str("key_4").unwrap(),
                 value: 1,
                 version: curr_version + 1,
-                ts: 0,
             },
             KV {
                 key: VariableSizeKey::from_str("key_5").unwrap(),
                 value: 1,
                 version: curr_version + 2,
-                ts: 0,
             },
             KV {
                 key: VariableSizeKey::from_str("key_6").unwrap(),
                 value: 1,
                 version: 0,
-                ts: 0,
             },
         ];
 
@@ -2005,7 +1981,7 @@ mod tests {
         assert!(tree.version() == curr_version + 2);
 
         for kv in kv_pairs {
-            let (val, version, _) = tree.get(&kv.key, 0).unwrap();
+            let (val, version) = tree.get(&kv.key, 0).unwrap();
             assert_eq!(val, kv.value);
             if kv.version == 0 {
                 assert_eq!(version, curr_version + 1);
@@ -2014,7 +1990,7 @@ mod tests {
             }
         }
         assert!(tree
-            .insert(&VariableSizeKey::from_str("key_7").unwrap(), 1, 0, 0)
+            .insert(&VariableSizeKey::from_str("key_7").unwrap(), 1, 0)
             .is_ok());
         assert!(tree.version() == curr_version + 3);
     }
@@ -2059,7 +2035,7 @@ mod tests {
             let key = VariableSizeKey {
                 data: key_data.to_vec(),
             };
-            tree.insert(&key, 1, version, 0).unwrap();
+            tree.insert(&key, 1, version).unwrap();
         }
 
         // Delete one key at a time and check remaining keys
@@ -2123,7 +2099,7 @@ mod tests {
             let key = VariableSizeKey {
                 data: key_data.to_vec(),
             };
-            tree.insert(&key, 1, version, 0).unwrap();
+            tree.insert(&key, 1, version).unwrap();
         }
 
         // Delete one key at a time and check remaining keys
@@ -2172,14 +2148,13 @@ mod tests {
         let mut tree = Tree::<VariableSizeKey, i32>::new();
         let curr_version = tree.version();
         let kv_pairs = vec![
-            KV::new(VariableSizeKey::from_str("key_1").unwrap(), 1, 0, 0), // Version 0, should adopt curr_version + 1
+            KV::new(VariableSizeKey::from_str("key_1").unwrap(), 1, 0), // Version 0, should adopt curr_version + 1
             KV::new(
                 VariableSizeKey::from_str("key_2").unwrap(),
                 2,
                 curr_version + 1,
-                0,
             ), // Explicit version
-            KV::new(VariableSizeKey::from_str("key_3").unwrap(), 3, 0, 0), // Version 0, should adopt curr_version + 1
+            KV::new(VariableSizeKey::from_str("key_3").unwrap(), 3, 0), // Version 0, should adopt curr_version + 1
         ];
 
         assert!(tree.bulk_insert(&kv_pairs, true).is_ok());
@@ -2187,7 +2162,7 @@ mod tests {
 
         // Verify each key's version and value
         for kv in kv_pairs {
-            let (val, version, _) = tree.get(&kv.key, 0).unwrap();
+            let (val, version) = tree.get(&kv.key, 0).unwrap();
             assert_eq!(val, kv.value);
             assert_eq!(version, curr_version + 1);
         }
@@ -2203,7 +2178,6 @@ mod tests {
                 &VariableSizeKey::from_str("key_0").unwrap(),
                 0,
                 curr_version + 2,
-                0
             )
             .is_ok());
         let curr_version = tree.version();
@@ -2213,13 +2187,11 @@ mod tests {
                 VariableSizeKey::from_str("key_1").unwrap(),
                 1,
                 curr_version,
-                0,
             ), // Version conflict, older than current
             KV::new(
                 VariableSizeKey::from_str("key_2").unwrap(),
                 2,
                 curr_version + 1,
-                0,
             ), // Correct version
         ];
 
@@ -2255,7 +2227,7 @@ mod tests {
 
         // Insert keys
         for key in &keys {
-            let _ = tree.insert(key, 1, 0, 0);
+            let _ = tree.insert(key, 1, 0);
         }
 
         // Remove keys sequentially
@@ -2279,7 +2251,7 @@ mod tests {
 
         // Insert keys
         for key in &keys {
-            let _ = tree.insert(key, 1, 0, 0);
+            let _ = tree.insert(key, 1, 0);
         }
 
         // Remove all keys
@@ -2296,11 +2268,11 @@ mod tests {
         let key2 = VariableSizeKey::from_str("key2").unwrap();
 
         // Initial insert
-        let _ = tree.insert(&key1, 1, 0, 0);
+        let _ = tree.insert(&key1, 1, 0);
         // Remove
         assert!(tree.remove(&key1));
         // Insert another key
-        let _ = tree.insert(&key2, 2, 0, 0);
+        let _ = tree.insert(&key2, 2, 0);
 
         // Verify
         assert!(tree.get(&key1, 0).is_none());
@@ -2329,7 +2301,7 @@ mod tests {
             let id = format!("key{}", i + 1);
             let key = VariableSizeKey::from_str(&id).unwrap();
             if tree
-                .insert_unchecked(&key, rng.gen::<i32>(), version as u64, 0)
+                .insert_unchecked(&key, rng.gen::<i32>(), version as u64)
                 .is_ok()
             {
                 expected_entries += 1;
@@ -2368,7 +2340,7 @@ mod tests {
 
         for i in (0..num_keys).rev() {
             let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
-            tree.insert_unchecked(&key, i as i32, i, 0).unwrap();
+            tree.insert_unchecked(&key, i as i32, i).unwrap();
         }
 
         // Verify total entries
@@ -2385,17 +2357,17 @@ mod tests {
         let key = VariableSizeKey::from_str("key1").unwrap();
 
         // Insert the same key with two different versions
-        tree.insert_unchecked(&key, 2, 2, 0).unwrap(); // Second version
-        tree.insert_unchecked(&key, 1, 1, 0).unwrap(); // First version
+        tree.insert_unchecked(&key, 2, 2).unwrap(); // Second version
+        tree.insert_unchecked(&key, 1, 1).unwrap(); // First version
 
         // Verify the order during iteration
         let mut iter = tree.iter();
-        let (_, value, version, _) = iter.next().unwrap();
+        let (_, value, version) = iter.next().unwrap();
         assert_eq!(value, &2);
         assert_eq!(version, &2);
 
         // Verify get at version 0 gives the latest version
-        let (value, version, _) = tree.get(&key, 0).unwrap();
+        let (value, version) = tree.get(&key, 0).unwrap();
         assert_eq!(value, 2);
         assert_eq!(version, 2);
     }
@@ -2408,14 +2380,14 @@ mod tests {
         // Insert two versions for each key
         for i in 0..num_keys {
             let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
-            tree.insert_unchecked(&key, i as u64 + 1000, 2, 0).unwrap(); // Second version
-            tree.insert_unchecked(&key, i as u64, 1, 0).unwrap(); // First version
+            tree.insert_unchecked(&key, i as u64 + 1000, 2).unwrap(); // Second version
+            tree.insert_unchecked(&key, i as u64, 1).unwrap(); // First version
         }
 
         // Verify get at version 0 gives the latest version for each key
         for i in 0..num_keys {
             let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
-            let (value, version, _) = tree.get(&key, 0).unwrap();
+            let (value, version) = tree.get(&key, 0).unwrap();
             assert_eq!(
                 value,
                 i as u64 + 1000,
@@ -2442,7 +2414,6 @@ mod tests {
                 key: VariableSizeKey::from_str(word).unwrap(),
                 value: 1,
                 version: 1,
-                ts: 1,
             })
             .collect();
 
@@ -2475,7 +2446,7 @@ mod tests {
         // Insert 75 keys
         for i in 1..=75 {
             let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
-            let _ = tree.insert(&key, i, i as u64, 0);
+            let _ = tree.insert(&key, i, i as u64);
         }
 
         // Attempt to delete 25 keys (76 to 100), which do not exist
@@ -2500,7 +2471,7 @@ mod tests {
 
         for i in 1..=1 {
             let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
-            let _ = tree.insert(&key, i, i as u64, 0);
+            let _ = tree.insert(&key, i, i as u64);
         }
 
         for i in 2..=2 {
@@ -2520,7 +2491,7 @@ mod tests {
 
         // Insert a single key
         let key = VariableSizeKey::from_str("key1").unwrap();
-        tree.insert(&key, 1, 1, 0).unwrap();
+        tree.insert(&key, 1, 1).unwrap();
 
         // Remove the inserted key
         tree.remove(&key);
@@ -2540,16 +2511,15 @@ mod tests {
             let random_key: String = (0..10).map(|_| rng.sample(Alphanumeric) as char).collect();
             let key = VariableSizeKey::from_str(&random_key).unwrap();
             let value = rng.gen_range(1..100);
-            let ts = rng.gen_range(1..100);
-            tree.insert(&key, value, version, ts).unwrap();
-            inserted_data.push((key.to_slice().to_vec(), value, version, ts));
+            tree.insert(&key, value, version).unwrap();
+            inserted_data.push((key.to_slice().to_vec(), value, version));
         }
 
         // Iteration and verification
         let mut count = 0;
         let tree_iter = tree.iter();
-        for (key, value, version, ts) in tree_iter {
-            assert!(inserted_data.contains(&(key, *value, *version, *ts)));
+        for (key, value, version) in tree_iter {
+            assert!(inserted_data.contains(&(key, *value, *version)));
             count += 1;
         }
 
@@ -2565,37 +2535,31 @@ mod tests {
         let key1 = VariableSizeKey::from_str("test_key1").unwrap();
         let value1_1 = 10;
         let value1_2 = 20;
-        let ts1_1 = 100;
-        let ts1_2 = 200;
-        tree.insert(&key1, value1_1, 0, ts1_1).unwrap();
-        tree.insert(&key1, value1_2, 0, ts1_2).unwrap();
+        tree.insert(&key1, value1_1, 0).unwrap();
+        tree.insert(&key1, value1_2, 0).unwrap();
 
         let history1 = tree.get_version_history(&key1).unwrap();
         assert_eq!(history1.len(), 2);
 
-        let (retrieved_value1_1, v1_1, t1_1) = history1[0];
+        let (retrieved_value1_1, v1_1) = history1[0];
         assert_eq!(retrieved_value1_1, value1_1);
         assert_eq!(v1_1, 1);
-        assert_eq!(t1_1, ts1_1);
 
-        let (retrieved_value1_2, v1_2, t1_2) = history1[1];
+        let (retrieved_value1_2, v1_2) = history1[1];
         assert_eq!(retrieved_value1_2, value1_2);
         assert_eq!(v1_2, 2);
-        assert_eq!(t1_2, ts1_2);
 
         // Scenario 2: Insert values for different keys
         let key2 = VariableSizeKey::from_str("test_key2").unwrap();
         let value2 = 30;
-        let ts2 = 300;
-        tree.insert(&key2, value2, 0, ts2).unwrap();
+        tree.insert(&key2, value2, 0).unwrap();
 
         let history2 = tree.get_version_history(&key2).unwrap();
         assert_eq!(history2.len(), 1);
 
-        let (retrieved_value2, v2, t2) = history2[0];
+        let (retrieved_value2, v2) = history2[0];
         assert_eq!(retrieved_value2, value2);
         assert_eq!(v2, 3);
-        assert_eq!(t2, ts2);
 
         // Scenario 3: Ensure no history for a non-existent key
         let key3 = VariableSizeKey::from_str("non_existent_key").unwrap();
@@ -2607,14 +2571,11 @@ mod tests {
         let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
         let key = VariableSizeKey::from_str("test_key").unwrap();
         let value = 10;
-        let ts_insert = 100;
-        let ts_future = 200;
-        tree.insert(&key, value, 0, ts_insert).unwrap();
+        tree.insert(&key, value, 0).unwrap();
 
-        let (retrieved_value, version, ts) = tree.get_at_ts(&key, ts_future).unwrap();
+        let (retrieved_value, version) = tree.get_at_version(&key, 1).unwrap();
         assert_eq!(retrieved_value, value);
         assert_eq!(version, 1);
-        assert_eq!(ts, ts_insert);
     }
 
     #[test]
@@ -2623,91 +2584,89 @@ mod tests {
         let key = VariableSizeKey::from_str("test_key").unwrap();
         let value1 = 10;
         let value2 = 20;
-        let ts = 100;
-        tree.insert_unchecked(&key, value1, 1, ts).unwrap();
-        tree.insert_unchecked(&key, value2, 1, ts).unwrap();
+        tree.insert_unchecked(&key, value1, 1).unwrap();
+        tree.insert_unchecked(&key, value2, 2).unwrap();
 
-        let (retrieved_value, version, t) = tree.get_at_ts(&key, ts).unwrap();
+        let (retrieved_value, version) = tree.get_at_version(&key, 2).unwrap();
         assert_eq!(retrieved_value, value2);
         assert_eq!(version, 1);
-        assert_eq!(t, ts);
     }
 
     #[test]
     fn test_latest_by_version() {
         let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
         let key = VariableSizeKey::from_str("test_key").unwrap();
-        tree.insert_unchecked(&key, 10, 1, 100).unwrap();
-        tree.insert_unchecked(&key, 20, 2, 200).unwrap();
-        tree.insert_unchecked(&key, 30, 3, 300).unwrap();
+        tree.insert_unchecked(&key, 10, 1).unwrap();
+        tree.insert_unchecked(&key, 20, 2).unwrap();
+        tree.insert_unchecked(&key, 30, 3).unwrap();
 
         let query_type = QueryType::LatestByVersion(3);
         let result = tree.get_value_by_query(&key, query_type).unwrap();
-        assert_eq!(result, (30, 3, 300));
+        assert_eq!(result, (30, 3));
     }
 
     #[test]
     fn test_latest_by_ts() {
         let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
         let key = VariableSizeKey::from_str("test_key").unwrap();
-        tree.insert_unchecked(&key, 10, 1, 100).unwrap();
-        tree.insert_unchecked(&key, 20, 2, 200).unwrap();
-        tree.insert_unchecked(&key, 30, 3, 300).unwrap();
+        tree.insert_unchecked(&key, 10, 1).unwrap();
+        tree.insert_unchecked(&key, 20, 2).unwrap();
+        tree.insert_unchecked(&key, 30, 3).unwrap();
 
-        let query_type = QueryType::LatestByTs(300);
+        let query_type = QueryType::LatestByVersion(300);
         let result = tree.get_value_by_query(&key, query_type).unwrap();
-        assert_eq!(result, (30, 3, 300));
+        assert_eq!(result, (30, 3));
     }
 
     #[test]
     fn test_last_less_than_ts() {
         let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
         let key = VariableSizeKey::from_str("test_key").unwrap();
-        tree.insert_unchecked(&key, 10, 1, 100).unwrap();
-        tree.insert_unchecked(&key, 20, 2, 150).unwrap();
-        tree.insert_unchecked(&key, 30, 3, 200).unwrap();
+        tree.insert_unchecked(&key, 10, 1).unwrap();
+        tree.insert_unchecked(&key, 20, 2).unwrap();
+        tree.insert_unchecked(&key, 30, 3).unwrap();
 
-        let query_type = QueryType::LastLessThanTs(150);
+        let query_type = QueryType::LastLessThanVersion(150);
         let result = tree.get_value_by_query(&key, query_type).unwrap();
-        assert_eq!(result, (10, 1, 100));
+        assert_eq!(result, (10, 1));
     }
 
     #[test]
     fn test_last_less_or_equal_ts() {
         let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
         let key = VariableSizeKey::from_str("test_key").unwrap();
-        tree.insert_unchecked(&key, 10, 1, 100).unwrap();
-        tree.insert_unchecked(&key, 20, 2, 150).unwrap();
-        tree.insert_unchecked(&key, 30, 3, 200).unwrap();
+        tree.insert_unchecked(&key, 10, 1).unwrap();
+        tree.insert_unchecked(&key, 20, 2).unwrap();
+        tree.insert_unchecked(&key, 30, 3).unwrap();
 
-        let query_type = QueryType::LastLessOrEqualTs(150);
+        let query_type = QueryType::LastLessOrEqualVersion(150);
         let result = tree.get_value_by_query(&key, query_type).unwrap();
-        assert_eq!(result, (20, 2, 150));
+        assert_eq!(result, (20, 2));
     }
 
     #[test]
     fn test_first_greater_than_ts() {
         let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
         let key = VariableSizeKey::from_str("test_key").unwrap();
-        tree.insert_unchecked(&key, 10, 1, 100).unwrap();
-        tree.insert_unchecked(&key, 20, 2, 150).unwrap();
-        tree.insert_unchecked(&key, 30, 3, 200).unwrap();
+        tree.insert_unchecked(&key, 10, 1).unwrap();
+        tree.insert_unchecked(&key, 20, 2).unwrap();
+        tree.insert_unchecked(&key, 30, 3).unwrap();
 
-        let query_type = QueryType::FirstGreaterThanTs(150);
+        let query_type = QueryType::FirstGreaterThanVersion(150);
         let result = tree.get_value_by_query(&key, query_type).unwrap();
-        assert_eq!(result, (30, 3, 200));
+        assert_eq!(result, (30, 3));
     }
 
     #[test]
     fn test_first_greater_or_equal_ts() {
         let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
         let key = VariableSizeKey::from_str("test_key").unwrap();
-        tree.insert_unchecked(&key, 10, 1, 100).unwrap();
-        tree.insert_unchecked(&key, 20, 2, 150).unwrap();
-        tree.insert_unchecked(&key, 30, 3, 200).unwrap();
+        tree.insert_unchecked(&key, 10, 1).unwrap();
+        tree.insert_unchecked(&key, 20, 2).unwrap();
+        tree.insert_unchecked(&key, 30, 3).unwrap();
 
-        let query_type = QueryType::FirstGreaterOrEqualTs(150);
+        let query_type = QueryType::FirstGreaterOrEqualVersion(2);
         let result = tree.get_value_by_query(&key, query_type).unwrap();
-        assert_eq!(result, (20, 2, 150));
+        assert_eq!(result, (20, 2));
     }
 }
