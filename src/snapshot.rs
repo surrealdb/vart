@@ -3,18 +3,18 @@ use std::ops::RangeBounds;
 use std::sync::Arc;
 
 use crate::art::{Node, QueryType, Tree};
-use crate::iter::{query_keys_at_node, scan_node, Iter, Range, VersionedIter};
+use crate::iter::{query_keys_at_node, scan_node, Iter, Range};
 use crate::node::Version;
 use crate::KeyTrait;
 
 #[derive(Clone)]
 /// Represents a snapshot of the data within the Trie.
-pub struct Snapshot<P: KeyTrait, V: Clone> {
+pub struct Snapshot<P: KeyTrait, V: Clone + Ord> {
     pub(crate) ts: u64,
     pub(crate) root: Option<Arc<Node<P, V>>>,
 }
 
-impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
+impl<P: KeyTrait, V: Clone + Ord> Snapshot<P, V> {
     /// Creates a new Snapshot instance with the provided snapshot_id and root node.
     pub(crate) fn new(root: Option<Arc<Node<P, V>>>, ts: u64) -> Self {
         Snapshot { ts, root }
@@ -80,12 +80,12 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
     }
 
     pub fn iter(&self) -> Iter<P, V> {
-        Iter::new(self.root.as_ref())
+        Iter::new(self.root.as_ref(), false)
     }
 
     /// Returns an iterator over all versions of the key-value pairs within the Trie.
-    pub fn iter_with_versions(&self) -> VersionedIter<P, V> {
-        VersionedIter::new(self.root.as_ref())
+    pub fn iter_with_versions(&self) -> Iter<P, V> {
+        Iter::new(self.root.as_ref(), true)
     }
 
     /// Returns a range query iterator over the Trie.
@@ -220,7 +220,7 @@ mod tests {
         }
     }
 
-    fn count_items<P: KeyTrait, V: Clone>(reader: &mut Iter<P, V>) -> usize {
+    fn count_items<P: KeyTrait, V: Clone + Ord>(reader: &mut Iter<P, V>) -> usize {
         let mut len = 0;
         for _ in reader {
             len += 1;
