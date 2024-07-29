@@ -36,7 +36,7 @@ pub struct TwigNode<K: KeyTrait, V: Clone> {
 //      - If ts1 < ts2, then it must be that version1 < version2.
 // This ensures a consistent ordering of versions based on their timestamps.
 //
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord)]
 pub struct LeafValue<V: Clone> {
     pub(crate) value: V,
     pub(crate) version: u64,

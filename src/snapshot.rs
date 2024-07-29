@@ -9,12 +9,12 @@ use crate::KeyTrait;
 
 #[derive(Clone)]
 /// Represents a snapshot of the data within the Trie.
-pub struct Snapshot<P: KeyTrait, V: Clone + Ord> {
+pub struct Snapshot<P: KeyTrait, V: Clone> {
     pub(crate) ts: u64,
     pub(crate) root: Option<Arc<Node<P, V>>>,
 }
 
-impl<P: KeyTrait, V: Clone + Ord> Snapshot<P, V> {
+impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
     /// Creates a new Snapshot instance with the provided snapshot_id and root node.
     pub(crate) fn new(root: Option<Arc<Node<P, V>>>, ts: u64) -> Self {
         Snapshot { ts, root }
@@ -220,7 +220,7 @@ mod tests {
         }
     }
 
-    fn count_items<P: KeyTrait, V: Clone + Ord>(reader: &mut Iter<P, V>) -> usize {
+    fn count_items<P: KeyTrait, V: Clone>(reader: &mut Iter<P, V>) -> usize {
         let mut len = 0;
         for _ in reader {
             len += 1;

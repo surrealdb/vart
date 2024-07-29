@@ -39,11 +39,11 @@ const NODE256MIN: usize = NODE48MAX + 1;
 /// - `node_type`: The `NodeType` variant representing the type of the node, containing its
 ///                specific structure and associated data.
 ///
-pub struct Node<P: KeyTrait, V: Clone + Ord> {
+pub struct Node<P: KeyTrait, V: Clone> {
     pub(crate) node_type: NodeType<P, V>, // Type of the node
 }
 
-impl<P: KeyTrait, V: Clone + Ord> Version for Node<P, V> {
+impl<P: KeyTrait, V: Clone> Version for Node<P, V> {
     fn version(&self) -> u64 {
         match &self.node_type {
             NodeType::Twig(twig) => twig.version(),
@@ -86,7 +86,7 @@ pub enum QueryType {
 /// - `Node48(Node48<P, Node<P, V>>)`: Represents an inner node with 256 keys and 48 children.
 /// - `Node256(Node256<P, Node<P, V>>)`: Represents an inner node with 256 keys and 256 children.
 ///
-pub(crate) enum NodeType<P: KeyTrait, V: Clone + Ord> {
+pub(crate) enum NodeType<P: KeyTrait, V: Clone> {
     // Twig node of the adaptive radix trie
     Twig(TwigNode<P, V>),
     // Inner node of the adaptive radix trie
@@ -97,7 +97,7 @@ pub(crate) enum NodeType<P: KeyTrait, V: Clone + Ord> {
     Node256(Node256<P, Node<P, V>>),   // Node with 256 keys and 256 children
 }
 
-impl<P: KeyTrait, V: Clone + Ord> Node<P, V> {
+impl<P: KeyTrait, V: Clone> Node<P, V> {
     /// Creates a new Twig node with a given prefix, key, value, and version.
     ///
     /// Constructs a new Twig node using the provided prefix, key, and value. The version
@@ -862,7 +862,7 @@ impl<P: KeyTrait, V: Clone + Ord> Node<P, V> {
 ///
 /// - `root`: An optional shared reference (using `Rc`) to the root node of the tree.
 ///
-pub struct Tree<P: KeyTrait, V: Clone + Ord> {
+pub struct Tree<P: KeyTrait, V: Clone> {
     /// An optional shared reference to the root node of the tree.
     pub(crate) root: Option<Arc<Node<P, V>>>,
     pub size: usize,
@@ -878,7 +878,7 @@ pub struct KV<P, V> {
 // A type alias for a node reference.
 type NodeArc<P, V> = Arc<Node<P, V>>;
 
-impl<P: KeyTrait, V: Clone + Ord> KV<P, V> {
+impl<P: KeyTrait, V: Clone> KV<P, V> {
     pub fn new(key: P, value: V, version: u64, timestamp: u64) -> Self {
         KV {
             key,
@@ -889,7 +889,7 @@ impl<P: KeyTrait, V: Clone + Ord> KV<P, V> {
     }
 }
 
-impl<P: KeyTrait, V: Clone + Ord> NodeType<P, V> {
+impl<P: KeyTrait, V: Clone> NodeType<P, V> {
     fn clone(&self) -> Self {
         match self {
             // twig value not actually cloned
@@ -904,13 +904,13 @@ impl<P: KeyTrait, V: Clone + Ord> NodeType<P, V> {
 }
 
 // Default implementation for the Tree struct
-impl<P: KeyTrait, V: Clone + Ord> Default for Tree<P, V> {
+impl<P: KeyTrait, V: Clone> Default for Tree<P, V> {
     fn default() -> Self {
         Tree::new()
     }
 }
 
-impl<P: KeyTrait, V: Clone + Ord> Tree<P, V> {
+impl<P: KeyTrait, V: Clone> Tree<P, V> {
     pub fn new() -> Self {
         Tree {
             root: None,

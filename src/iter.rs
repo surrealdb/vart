@@ -3,16 +3,17 @@ use std::ops::RangeBounds;
 use std::sync::Arc;
 
 use crate::art::{Node, NodeType, QueryType};
+use crate::node::LeafValue;
 use crate::KeyTrait;
 
 type NodeIterator<'a, P, V> = Box<dyn DoubleEndedIterator<Item = (u8, &'a Arc<Node<P, V>>)> + 'a>;
 
 /// An iterator over the nodes in the Trie.
-struct NodeIter<'a, P: KeyTrait, V: Clone + Ord> {
+struct NodeIter<'a, P: KeyTrait, V: Clone> {
     node: NodeIterator<'a, P, V>,
 }
 
-impl<'a, P: KeyTrait, V: Clone + Ord> NodeIter<'a, P, V> {
+impl<'a, P: KeyTrait, V: Clone> NodeIter<'a, P, V> {
     /// Creates a new NodeIter instance.
     ///
     /// # Arguments
@@ -29,7 +30,7 @@ impl<'a, P: KeyTrait, V: Clone + Ord> NodeIter<'a, P, V> {
     }
 }
 
-impl<'a, P: KeyTrait, V: Clone + Ord> Iterator for NodeIter<'a, P, V> {
+impl<'a, P: KeyTrait, V: Clone> Iterator for NodeIter<'a, P, V> {
     type Item = (u8, &'a Arc<Node<P, V>>);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -37,14 +38,36 @@ impl<'a, P: KeyTrait, V: Clone + Ord> Iterator for NodeIter<'a, P, V> {
     }
 }
 
-impl<'a, P: KeyTrait, V: Clone + Ord> DoubleEndedIterator for NodeIter<'a, P, V> {
+impl<'a, P: KeyTrait, V: Clone> DoubleEndedIterator for NodeIter<'a, P, V> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.node.next_back()
     }
 }
 
+struct Leaf<'a, P: KeyTrait + 'a, V: Clone>(&'a P, &'a Arc<LeafValue<V>>);
+
+impl<'a, P: KeyTrait + 'a, V: Clone> PartialEq for Leaf<'a, P, V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<'a, P: KeyTrait + 'a, V: Clone> Eq for Leaf<'a, P, V> {}
+
+impl<'a, P: KeyTrait + 'a, V: Clone> PartialOrd for Leaf<'a, P, V> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a, P: KeyTrait + 'a, V: Clone> Ord for Leaf<'a, P, V> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(other.0)
+    }
+}
+
 /// An iterator over key-value pairs in the Trie.
-pub struct Iter<'a, P: KeyTrait + 'a, V: Clone + Ord> {
+pub struct Iter<'a, P: KeyTrait + 'a, V: Clone> {
     forward: ForwardIterState<'a, P, V>,
     last_forward_key: Option<&'a P>,
     backward: BackwardIterState<'a, P, V>,
@@ -52,7 +75,7 @@ pub struct Iter<'a, P: KeyTrait + 'a, V: Clone + Ord> {
     _marker: std::marker::PhantomData<P>,
 }
 
-impl<'a, P: KeyTrait + 'a, V: Clone + Ord> Iter<'a, P, V> {
+impl<'a, P: KeyTrait + 'a, V: Clone> Iter<'a, P, V> {
     /// Creates a new Iter instance.
     ///
     /// # Arguments
@@ -79,7 +102,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone + Ord> Iter<'a, P, V> {
     }
 }
 
-impl<'a, P: KeyTrait + 'a, V: Clone + Ord> Iterator for Iter<'a, P, V> {
+impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
     type Item = (Vec<u8>, &'a V, &'a u64, &'a u64);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -93,17 +116,10 @@ impl<'a, P: KeyTrait + 'a, V: Clone + Ord> Iterator for Iter<'a, P, V> {
                     if let NodeType::Twig(twig) = &other.1.node_type {
                         if self.forward.is_versioned {
                             for leaf in twig.iter() {
-                                self.forward.leafs.push_back((
-                                    &twig.key,
-                                    &leaf.value,
-                                    &leaf.version,
-                                    &leaf.ts,
-                                ));
+                                self.forward.leafs.push_back(Leaf(&twig.key, &leaf));
                             }
                         } else if let Some(v) = twig.get_latest_leaf() {
-                            self.forward
-                                .leafs
-                                .push_back((&twig.key, &v.value, &v.version, &v.ts));
+                            self.forward.leafs.push_back(Leaf(&twig.key, &v));
                         }
                         break;
                     } else {
@@ -120,7 +136,12 @@ impl<'a, P: KeyTrait + 'a, V: Clone + Ord> Iterator for Iter<'a, P, V> {
                 .zip(self.last_backward_key)
                 .map_or(true, |(k1, k2)| k1 < k2)
             {
-                Some((leaf.0.as_slice().to_vec(), leaf.1, leaf.2, leaf.3))
+                Some((
+                    leaf.0.as_slice().to_vec(),
+                    &leaf.1.value,
+                    &leaf.1.version,
+                    &leaf.1.ts,
+                ))
             } else {
                 self.forward.iters.clear();
                 self.forward.leafs.clear();
@@ -130,7 +151,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone + Ord> Iterator for Iter<'a, P, V> {
     }
 }
 
-impl<'a, P: KeyTrait + 'a, V: Clone + Ord> DoubleEndedIterator for Iter<'a, P, V> {
+impl<'a, P: KeyTrait + 'a, V: Clone> DoubleEndedIterator for Iter<'a, P, V> {
     fn next_back(&mut self) -> Option<Self::Item> {
         while let Some(node) = self.backward.iters.last_mut() {
             let e = node.next_back();
@@ -142,17 +163,10 @@ impl<'a, P: KeyTrait + 'a, V: Clone + Ord> DoubleEndedIterator for Iter<'a, P, V
                     if let NodeType::Twig(twig) = &other.1.node_type {
                         if self.backward.is_versioned {
                             for leaf in twig.iter() {
-                                self.backward.leafs.push((
-                                    &twig.key,
-                                    &leaf.value,
-                                    &leaf.version,
-                                    &leaf.ts,
-                                ));
+                                self.backward.leafs.push(Leaf(&twig.key, &leaf));
                             }
                         } else if let Some(v) = twig.get_latest_leaf() {
-                            self.backward
-                                .leafs
-                                .push((&twig.key, &v.value, &v.version, &v.ts));
+                            self.backward.leafs.push(Leaf(&twig.key, &v));
                         }
                         break;
                     } else {
@@ -169,7 +183,12 @@ impl<'a, P: KeyTrait + 'a, V: Clone + Ord> DoubleEndedIterator for Iter<'a, P, V
                 .zip(self.last_forward_key)
                 .map_or(true, |(k1, k2)| k1 > k2)
             {
-                Some((leaf.0.as_slice().to_vec(), leaf.1, leaf.2, leaf.3))
+                Some((
+                    leaf.0.as_slice().to_vec(),
+                    &leaf.1.value,
+                    &leaf.1.version,
+                    &leaf.1.ts,
+                ))
             } else {
                 self.backward.iters.clear();
                 self.backward.leafs.clear();
@@ -180,13 +199,13 @@ impl<'a, P: KeyTrait + 'a, V: Clone + Ord> DoubleEndedIterator for Iter<'a, P, V
 }
 
 /// An internal state for the Iter iterator.
-struct ForwardIterState<'a, P: KeyTrait + 'a, V: Clone + Ord> {
+struct ForwardIterState<'a, P: KeyTrait + 'a, V: Clone> {
     iters: Vec<NodeIter<'a, P, V>>,
-    leafs: VecDeque<(&'a P, &'a V, &'a u64, &'a u64)>,
+    leafs: VecDeque<Leaf<'a, P, V>>,
     is_versioned: bool,
 }
 
-impl<'a, P: KeyTrait + 'a, V: Clone + Ord> ForwardIterState<'a, P, V> {
+impl<'a, P: KeyTrait + 'a, V: Clone> ForwardIterState<'a, P, V> {
     /// Creates a new ForwardIterState instance.
     ///
     /// # Arguments
@@ -200,10 +219,10 @@ impl<'a, P: KeyTrait + 'a, V: Clone + Ord> ForwardIterState<'a, P, V> {
         if let NodeType::Twig(twig) = &node.node_type {
             if is_versioned {
                 for leaf in twig.iter() {
-                    leafs.push_back((&twig.key, &leaf.value, &leaf.version, &leaf.ts));
+                    leafs.push_back(Leaf(&twig.key, &leaf));
                 }
             } else if let Some(v) = twig.get_latest_leaf() {
-                leafs.push_back((&twig.key, &v.value, &v.version, &v.ts));
+                leafs.push_back(Leaf(&twig.key, &v));
             }
         } else {
             iters.push(NodeIter::new(node.iter()));
@@ -234,10 +253,10 @@ impl<'a, P: KeyTrait + 'a, V: Clone + Ord> ForwardIterState<'a, P, V> {
             if range.contains(&twig.key) {
                 if is_versioned {
                     for leaf in twig.iter() {
-                        leafs.push_back((&twig.key, &leaf.value, &leaf.version, &leaf.ts));
+                        leafs.push_back(Leaf(&twig.key, &leaf));
                     }
                 } else if let Some(v) = twig.get_latest_leaf() {
-                    leafs.push_back((&twig.key, &v.value, &v.version, &v.ts));
+                    leafs.push_back(Leaf(&twig.key, &v));
                 }
             }
         } else {
@@ -260,7 +279,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone + Ord> ForwardIterState<'a, P, V> {
         if let NodeType::Twig(twig) = &node.node_type {
             if range.contains(&twig.key) {
                 if let Some(v) = twig.get_leaf_by_query_ref(query_type) {
-                    leafs.push_back((&twig.key, &v.value, &v.version, &v.ts));
+                    leafs.push_back(Leaf(&twig.key, &v));
                 }
             }
         } else {
@@ -275,13 +294,13 @@ impl<'a, P: KeyTrait + 'a, V: Clone + Ord> ForwardIterState<'a, P, V> {
     }
 }
 
-struct BackwardIterState<'a, P: KeyTrait + 'a, V: Clone + Ord> {
+struct BackwardIterState<'a, P: KeyTrait + 'a, V: Clone> {
     iters: Vec<NodeIter<'a, P, V>>,
-    leafs: BinaryHeap<(&'a P, &'a V, &'a u64, &'a u64)>,
+    leafs: BinaryHeap<Leaf<'a, P, V>>,
     is_versioned: bool,
 }
 
-impl<'a, P: KeyTrait + 'a, V: Clone + Ord> BackwardIterState<'a, P, V> {
+impl<'a, P: KeyTrait + 'a, V: Clone> BackwardIterState<'a, P, V> {
     pub fn new(node: &'a Node<P, V>, is_versioned: bool) -> Self {
         let mut iters = Vec::new();
         let mut leafs = BinaryHeap::new();
@@ -289,10 +308,10 @@ impl<'a, P: KeyTrait + 'a, V: Clone + Ord> BackwardIterState<'a, P, V> {
         if let NodeType::Twig(twig) = &node.node_type {
             if is_versioned {
                 for leaf in twig.iter() {
-                    leafs.push((&twig.key, &leaf.value, &leaf.version, &leaf.ts));
+                    leafs.push(Leaf(&twig.key, &leaf));
                 }
             } else if let Some(v) = twig.get_latest_leaf() {
-                leafs.push((&twig.key, &v.value, &v.version, &v.ts));
+                leafs.push(Leaf(&twig.key, &v));
             }
         } else {
             iters.push(NodeIter::new(node.iter()));
@@ -314,13 +333,13 @@ impl<'a, P: KeyTrait + 'a, V: Clone + Ord> BackwardIterState<'a, P, V> {
     }
 }
 
-pub struct Range<'a, K: KeyTrait, V: Clone + Ord, R> {
+pub struct Range<'a, K: KeyTrait, V: Clone, R> {
     forward: ForwardIterState<'a, K, V>,
     range: R,
     is_versioned: bool,
 }
 
-impl<'a, K: KeyTrait, V: Clone + Ord, R> Range<'a, K, V, R>
+impl<'a, K: KeyTrait, V: Clone, R> Range<'a, K, V, R>
 where
     K: Ord,
     R: RangeBounds<K>,
@@ -360,7 +379,7 @@ where
     }
 }
 
-impl<'a, K: 'a + KeyTrait, V: Clone + Ord, R: RangeBounds<K>> Iterator for Range<'a, K, V, R> {
+impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K, V, R> {
     type Item = (Vec<u8>, &'a V, &'a u64, &'a u64);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -374,17 +393,10 @@ impl<'a, K: 'a + KeyTrait, V: Clone + Ord, R: RangeBounds<K>> Iterator for Range
                             // and add them to the leafs queue. Otherwise, add the latest version.
                             if self.is_versioned {
                                 for leaf in twig.iter() {
-                                    self.forward.leafs.push_back((
-                                        &twig.key,
-                                        &leaf.value,
-                                        &leaf.version,
-                                        &leaf.ts,
-                                    ));
+                                    self.forward.leafs.push_back(Leaf(&twig.key, &leaf));
                                 }
                             } else if let Some(v) = twig.get_latest_leaf() {
-                                self.forward
-                                    .leafs
-                                    .push_back((&twig.key, &v.value, &v.version, &v.ts));
+                                self.forward.leafs.push_back(Leaf(&twig.key, &v));
                             }
                             break;
                         } else {
@@ -404,10 +416,14 @@ impl<'a, K: 'a + KeyTrait, V: Clone + Ord, R: RangeBounds<K>> Iterator for Range
             }
         }
 
-        self.forward
-            .leafs
-            .pop_front()
-            .map(|leaf| (leaf.0.as_slice().to_vec(), leaf.1, leaf.2, leaf.3))
+        self.forward.leafs.pop_front().map(|leaf| {
+            (
+                leaf.0.as_slice().to_vec(),
+                &leaf.1.value,
+                &leaf.1.version,
+                &leaf.1.ts,
+            )
+        })
     }
 }
 
@@ -418,7 +434,7 @@ pub(crate) fn scan_node<K, V, R>(
 ) -> Vec<(Vec<u8>, V)>
 where
     K: KeyTrait,
-    V: Clone + Ord,
+    V: Clone,
     R: RangeBounds<K>,
 {
     iterate(node, range, query_type, true)
@@ -433,8 +449,8 @@ pub(crate) fn query_keys_at_node<K, V, R>(
     query_type: QueryType,
 ) -> Vec<Vec<u8>>
 where
-    K: KeyTrait + Ord,
-    V: Clone + Ord,
+    K: KeyTrait,
+    V: Clone,
     R: RangeBounds<K>,
 {
     iterate(node, range, query_type, false)
@@ -451,7 +467,7 @@ fn iterate<K, V, R>(
 ) -> Vec<(Vec<u8>, Option<V>)>
 where
     K: KeyTrait,
-    V: Clone + Ord,
+    V: Clone,
     R: RangeBounds<K>,
 {
     let mut results = Vec::new();
@@ -494,7 +510,7 @@ where
     for leaf in forward.leafs {
         let key = leaf.0.as_slice().to_vec();
         let value = if include_values {
-            Some(leaf.1.clone())
+            Some(leaf.1.value.clone())
         } else {
             None
         };
