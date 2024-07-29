@@ -36,7 +36,7 @@ pub struct TwigNode<K: KeyTrait, V: Clone> {
 //      - If ts1 < ts2, then it must be that version1 < version2.
 // This ensures a consistent ordering of versions based on their timestamps.
 //
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord)]
 pub struct LeafValue<V: Clone> {
     pub(crate) value: V,
     pub(crate) version: u64,
@@ -160,7 +160,7 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         self.version = self.version(); // Update LeafNode's version
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Arc<LeafValue<V>>> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Arc<LeafValue<V>>> {
         self.values.iter()
     }
 }
@@ -378,7 +378,7 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> FlatNode<P, N, WIDTH> {
     }
 
     #[inline]
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (u8, &Arc<N>)> {
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = (u8, &Arc<N>)> {
         self.keys
             .iter()
             .zip(self.children.iter())
@@ -567,7 +567,7 @@ impl<P: KeyTrait, N: Version> Node48<P, N> {
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (u8, &Arc<N>)> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (u8, &Arc<N>)> {
         self.keys
             .iter()
             .enumerate()
@@ -724,7 +724,7 @@ impl<P: KeyTrait, N: Version> Node256<P, N> {
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (u8, &Arc<N>)> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (u8, &Arc<N>)> {
         self.children
             .iter()
             .enumerate()

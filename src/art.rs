@@ -3,7 +3,7 @@ use std::cmp::min;
 use std::ops::RangeBounds;
 use std::sync::Arc;
 
-use crate::iter::{Iter, Range, VersionedIter};
+use crate::iter::{Iter, Range};
 use crate::node::{FlatNode, LeafValue, Node256, Node48, NodeTrait, TwigNode, Version};
 use crate::snapshot::Snapshot;
 use crate::{KeyTrait, TrieError};
@@ -836,7 +836,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     /// Returns a boxed iterator that yields tuples containing keys and references to child nodes.
     ///
     #[allow(dead_code)]
-    pub fn iter(&self) -> Box<dyn Iterator<Item = (u8, &Arc<Self>)> + '_> {
+    pub fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = (u8, &Arc<Self>)> + '_> {
         match &self.node_type {
             NodeType::Node1(n) => Box::new(n.iter()),
             NodeType::Node4(n) => Box::new(n.iter()),
@@ -865,6 +865,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 pub struct Tree<P: KeyTrait, V: Clone> {
     /// An optional shared reference to the root node of the tree.
     pub(crate) root: Option<Arc<Node<P, V>>>,
+    pub size: usize,
 }
 
 pub struct KV<P, V> {
@@ -911,7 +912,10 @@ impl<P: KeyTrait, V: Clone> Default for Tree<P, V> {
 
 impl<P: KeyTrait, V: Clone> Tree<P, V> {
     pub fn new() -> Self {
-        Tree { root: None }
+        Tree {
+            root: None,
+            size: 0,
+        }
     }
 
     fn insert_common(
@@ -949,6 +953,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         };
 
         self.root = Some(new_root);
+        self.size += 1;
         Ok(old_node)
     }
 
@@ -1045,6 +1050,8 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                 }
             }
 
+            self.size += 1;
+
             // Update new_version if necessary
             if t > new_version {
                 new_version = t;
@@ -1108,6 +1115,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         // Update the root and return the deletion status.
         if is_deleted {
             self.root = new_root;
+            self.size -= 1;
         }
         is_deleted
     }
@@ -1164,15 +1172,15 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// Returns an `Iter` instance that iterates over the key-value pairs in the Trie.
     ///
     pub fn iter(&self) -> Iter<P, V> {
-        Iter::new(self.root.as_ref())
+        Iter::new(self.root.as_ref(), false)
     }
 
     /// Creates a versioned iterator over the Trie's key-value pairs.
     ///
     /// This function creates and returns an iterator that can be used to traverse all the versions
     /// for all the key-value pairs stored in the Trie. The iterator starts from the root of the Trie.
-    pub fn iter_with_versions(&self) -> VersionedIter<P, V> {
-        VersionedIter::new(self.root.as_ref())
+    pub fn iter_with_versions(&self) -> Iter<P, V> {
+        Iter::new(self.root.as_ref(), true)
     }
 
     /// Returns an iterator over a range of key-value pairs within the Trie.
@@ -1235,6 +1243,10 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     pub fn get_value_by_query(&self, key: &P, query_type: QueryType) -> Option<(V, u64, u64)> {
         let root = self.root.as_ref()?;
         Node::get_recurse(root, key, query_type)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.size == 0
     }
 }
 
