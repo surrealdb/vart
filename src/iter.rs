@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::{BinaryHeap, Bound, VecDeque};
 use std::ops::RangeBounds;
 use std::sync::Arc;
@@ -203,6 +204,7 @@ struct ForwardIterState<'a, P: KeyTrait + 'a, V: Clone> {
     iters: Vec<NodeIter<'a, P, V>>,
     leafs: VecDeque<Leaf<'a, P, V>>,
     is_versioned: bool,
+    prefix: Vec<u8>,
 }
 
 impl<'a, P: KeyTrait + 'a, V: Clone> ForwardIterState<'a, P, V> {
@@ -232,6 +234,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> ForwardIterState<'a, P, V> {
             iters,
             leafs,
             is_versioned,
+            prefix: node.prefix().as_slice().to_vec(),
         }
     }
 
@@ -240,6 +243,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> ForwardIterState<'a, P, V> {
             iters: Vec::new(),
             leafs: VecDeque::new(),
             is_versioned: false,
+            prefix: Vec::new(),
         }
     }
 
@@ -260,6 +264,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> ForwardIterState<'a, P, V> {
                 }
             }
         } else {
+            // println!("Init Node {:?} {} {:?}", node.node_type_name(),  node.num_children(), node.prefix());
             iters.push(NodeIter::new(node.iter()));
         }
 
@@ -267,6 +272,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> ForwardIterState<'a, P, V> {
             iters,
             leafs,
             is_versioned,
+            prefix: node.prefix().as_slice().to_vec(),
         }
     }
 
@@ -290,6 +296,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> ForwardIterState<'a, P, V> {
             iters,
             leafs,
             is_versioned: false,
+            prefix: node.prefix().as_slice().to_vec(),
         }
     }
 }
@@ -337,6 +344,9 @@ pub struct Range<'a, K: KeyTrait, V: Clone, R> {
     forward: ForwardIterState<'a, K, V>,
     range: R,
     is_versioned: bool,
+    prefix: Vec<u8>,
+    level: usize,
+    prefix_lengths: Vec<usize>,
 }
 
 impl<'a, K: KeyTrait, V: Clone, R> Range<'a, K, V, R>
@@ -349,6 +359,9 @@ where
             forward: ForwardIterState::empty(),
             range,
             is_versioned: false,
+            prefix: Vec::new(),
+            level: 0,
+            prefix_lengths: Vec::new(),
         }
     }
 
@@ -356,12 +369,19 @@ where
     where
         R: RangeBounds<K>,
     {
+        let forward = node.map_or_else(ForwardIterState::empty, |n| {
+            ForwardIterState::forward_scan(n, &range, false)
+        });
+
+        let prefix = forward.prefix.clone();
+
         Self {
-            forward: node.map_or_else(ForwardIterState::empty, |n| {
-                ForwardIterState::forward_scan(n, &range, false)
-            }),
+            forward,
             range,
             is_versioned: false,
+            prefix,
+            level: 1, // Fix, can only be 1 if not empty
+            prefix_lengths: Vec::new(),
         }
     }
 
@@ -369,13 +389,33 @@ where
     where
         R: RangeBounds<K>,
     {
+        // Self {
+        //     forward: node.map_or_else(ForwardIterState::empty, |n| {
+        //         ForwardIterState::forward_scan(n, &range, true)
+        //     }),
+        //     range,
+        //     is_versioned: true,
+        //     prefix: Vec::new(),
+        //     level: 1, // Fix, can only be 1 if not empty
+        //     prefix_lengths: Vec::new(),
+        // }
+
+
+        let forward = node.map_or_else(ForwardIterState::empty, |n| {
+            ForwardIterState::forward_scan(n, &range, true)
+        });
+
+        let prefix = forward.prefix.clone();
+
         Self {
-            forward: node.map_or_else(ForwardIterState::empty, |n| {
-                ForwardIterState::forward_scan(n, &range, true)
-            }),
+            forward,
             range,
-            is_versioned: true,
+            is_versioned: false,
+            prefix,
+            level: 1, // Fix, can only be 1 if not empty
+            prefix_lengths: Vec::new(),
         }
+
     }
 }
 
@@ -387,7 +427,10 @@ impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K
             let e = node.next();
             match e {
                 Some(other) => {
+                    // println!("Node {:?} {:?} {}", other.1.node_type_name(), other.1.prefix(), self.level);
+                    // println!("Node {:?} {}", other.1.node_type_name(),  self.level);
                     if let NodeType::Twig(twig) = &other.1.node_type {
+                        // println!("Twig {:?}", twig.key);
                         if self.range.contains(&twig.key) {
                             // If the query is versioned, iterate over all versions of the key
                             // and add them to the leafs queue. Otherwise, add the latest version.
@@ -407,11 +450,97 @@ impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K
                             }
                         }
                     } else {
-                        self.forward.iters.push(NodeIter::new(other.1.iter()));
+                        // self.prefix.extend_from_slice(other.1.prefix().as_slice());
+                        // self.level += 1;
+                        // println!("adding iter {:?}", other.1.prefix());
+                        // self.forward.iters.push(NodeIter::new(other.1.iter()));
+
+                        // Save the current prefix length before extending
+                        let prefix_len_before = self.prefix.len();
+                        self.prefix.extend_from_slice(other.1.prefix().as_slice());
+
+                        // Convert self.prefix to a slice for comparison
+                        let prefix_slice = self.prefix.as_slice();
+
+                        // Extract the relevant portion of the start and end bounds
+                        let start_bound_slice = match self.range.start_bound() {
+                            Bound::Included(start) | Bound::Excluded(start) => {
+                                &start.as_slice()[..prefix_slice.len().min(start.as_slice().len())]
+                            }
+                            Bound::Unbounded => &[],
+                        };
+
+                        let end_bound_slice = match self.range.end_bound() {
+                            Bound::Included(end) | Bound::Excluded(end) => {
+                                &end.as_slice()[..prefix_slice.len().min(end.as_slice().len())]
+                            }
+                            Bound::Unbounded => &[],
+                        };
+
+                        // println!("start_bound_slice {:?}", start_bound_slice);
+                        // println!("end_bound_slice {:?}", end_bound_slice);
+                        // println!("prefix_slice {:?}", prefix_slice);
+
+                        // Check if self.prefix is within the start and end bounds
+                        let within_start_bound = match self.range.start_bound() {
+                            Bound::Included(_) => prefix_slice >= start_bound_slice,
+                            Bound::Excluded(_) => prefix_slice > start_bound_slice,
+                            Bound::Unbounded => true,
+                        };
+
+                        // println!("within_start_bound {:?}", within_start_bound);
+
+                        // let within_end_bound = match self.range.end_bound() {
+                        //     Bound::Included(_) => prefix_slice <= end_bound_slice,
+                        //     Bound::Excluded(_) => prefix_slice < end_bound_slice,
+                        //     Bound::Unbounded => true,
+                        // };
+
+                        let within_end_bound = match self.range.end_bound() {
+                            Bound::Included(_) => {
+                                // println!("Checking end bound: prefix_slice <= end_bound_slice");
+                                prefix_slice <= end_bound_slice
+                            },
+                            Bound::Excluded(_) => {
+                                // println!("Checking end bound: prefix_slice < end_bound_slice");
+                                prefix_slice <= end_bound_slice
+                            },
+                            Bound::Unbounded => {
+                                // println!("End bound is unbounded");
+                                true
+                            },
+                        };
+
+                        // println!("within_end_bound {:?}", within_end_bound);
+                        // println!("prefix_slice: {:?}, end_bound_slice: {:?}", prefix_slice, end_bound_slice);
+
+                        if within_start_bound && within_end_bound {
+                            self.level += 1;
+                            // println!("Level: {}, adding iter {:?}", self.level, other.1.prefix());
+                            self.forward.iters.push(NodeIter::new(other.1.iter()));
+                            // Push the current prefix length onto the stack
+                            self.prefix_lengths.push(prefix_len_before);
+                        } else {
+                            // println!("Clearing iters {:?}", self.prefix);
+                            // Restore the prefix to its previous state
+                            self.prefix.truncate(prefix_len_before);
+                            // println!("Clearing iters {:?}", self.prefix);
+                            // self.forward.iters.pop();
+                        }
                     }
                 }
                 None => {
+                    // self.level -= 1;
+                    // println!("Popping iter {:?}", self.prefix);
+                    // self.forward.iters.pop();
+
+                    self.level -= 1;
+                    // println!("Popping iter {:?}", self.prefix);
                     self.forward.iters.pop();
+                    // Restore the prefix to its previous state
+                    if let Some(prefix_len_before) = self.prefix_lengths.pop() {
+                        self.prefix.truncate(prefix_len_before);
+                    }
                 }
             }
         }
@@ -426,6 +555,103 @@ impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K
         })
     }
 }
+
+// impl<'a, K: KeyTrait, V: Clone, R> Range<'a, K, V, R>
+// where
+//     K: Ord,
+//     R: RangeBounds<K>,
+// {
+//     pub fn range_scan(&self, root: Option<&'a Arc<Node<K, V>>>, start: &[u8], end: &[u8]) -> Vec<(Vec<u8>, String)> {
+//         let mut result = Vec::new();
+//         if let Some(root) = &root {
+//             let mut stack = vec![(root, 0)];
+
+//             while let Some((node, depth)) = stack.pop() {
+
+//                 match node.node_type_name() {
+//                     "Leaf" => {
+//                         if self.is_key_in_range(key, start, end) {
+//                             result.push((key.clone(), value.clone()));
+//                         }
+//                     }
+//                     Node::Leaf { key, value } => {
+//                         if self.is_key_in_range(key, start, end) {
+//                             result.push((key.clone(), value.clone()));
+//                         }
+//                     }
+//                     Node::Node4 { keys, children } |
+//                     Node::Node16 { keys, children } |
+//                     Node::Node48 { keys, children } => {
+//                         for (i, child) in children.iter().enumerate().rev() {
+//                             if let Some(child) = child {
+//                                 if let Some(&key) = keys[i] {
+//                                     if self.should_traverse_child(key, start, end, depth) {
+//                                         stack.push((child, depth + 1));
+//                                     }
+//                                 }
+//                             }
+//                         }
+//                     }
+//                     Node::Node256 { children } => {
+//                         for (i, child) in children.iter().enumerate().rev() {
+//                             if let Some(child) = child {
+//                                 let key = i as u8;
+//                                 if self.should_traverse_child(key, start, end, depth) {
+//                                     stack.push((child, depth + 1));
+//                                 }
+//                             }
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//         result.sort_by(|(a, _), (b, _)| a.cmp(b));
+//         result
+//     }
+
+//     fn is_key_in_range(&self, key: &[u8], start: &[u8], end: &[u8]) -> bool {
+//         key >= start && key <= end
+//     }
+
+//     fn should_traverse_child(&self, key: u8, start: &[u8], end: &[u8], depth: usize) -> bool {
+//         if depth >= start.len() || depth >= end.len() {
+//             return true;
+//         }
+
+//         let start_byte = start[depth];
+//         let end_byte = end[depth];
+
+//         if key < start_byte || key > end_byte {
+//             return false;
+//         }
+
+//         if key > start_byte && key < end_byte {
+//             return true;
+//         }
+
+//         if key == start_byte {
+//             return self.compare_remaining(start, depth + 1) != Ordering::Greater;
+//         }
+
+//         if key == end_byte {
+//             return self.compare_remaining(end, depth + 1) != Ordering::Less;
+//         }
+
+//         true
+//     }
+
+//     fn compare_remaining(&self, key: &[u8], depth: usize) -> Ordering {
+//         if depth >= key.len() {
+//             return Ordering::Equal;
+//         }
+
+//         match key[depth] {
+//             0 => Ordering::Less,
+//             255 => Ordering::Greater,
+//             _ => Ordering::Equal,
+//         }
+//     }
+// }
 
 pub(crate) fn scan_node<K, V, R>(
     node: Option<&Arc<Node<K, V>>>,
@@ -524,9 +750,13 @@ where
 mod tests {
     use rand::thread_rng;
     use rand::Rng;
+    use std::collections::BTreeMap;
     use std::collections::HashMap;
+    use std::str::FromStr;
 
     use crate::art::Tree;
+    use crate::KeyTrait;
+    use crate::VariableSizeKey;
     use crate::{FixedSizeKey, Key};
 
     fn from_be_bytes_key(k: &[u8]) -> u64 {
@@ -866,4 +1096,170 @@ mod tests {
         fwd.append(&mut bwd);
         assert_eq!(expected, fwd);
     }
+
+
+    fn setup_trie() -> Tree<VariableSizeKey, u16> {
+        let mut tree: Tree<VariableSizeKey, u16> = Tree::<VariableSizeKey, u16>::new();
+        let words = vec![
+            ("apple", 1),
+            ("apricot", 2),
+            ("banana", 3),
+            ("blackberry", 4),
+            ("blueberry", 5),
+            ("cherry", 6),
+            ("date", 7),
+            ("fig", 8),
+            ("grape", 9),
+            ("kiwi", 10),
+        ];
+
+        for (word, value) in words {
+            let key = &VariableSizeKey::from_str(word).unwrap();
+            tree.insert(key, value, 0, 0).unwrap();
+        }
+
+        tree
+    }    
+
+    #[test]
+    fn test_range_scan_full_range() {
+        let trie = setup_trie();
+        let range = VariableSizeKey::from_slice_with_termination("berry".as_bytes())
+            ..=VariableSizeKey::from_slice_with_termination("kiwi".as_bytes());
+        let results: Vec<_> = trie.range(range).collect();
+
+        let expected = vec![
+            (b"apple".to_vec(), &1, &0, &0),
+            (b"apricot".to_vec(), &2, &0, &0),
+            (b"banana".to_vec(), &3, &0, &0),
+            (b"blackberry".to_vec(), &4, &0, &0),
+            (b"blueberry".to_vec(), &5, &0, &0),
+            (b"cherry".to_vec(), &6, &0, &0),
+            (b"date".to_vec(), &7, &0, &0),
+            (b"fig".to_vec(), &8, &0, &0),
+            (b"grape".to_vec(), &9, &0, &0),
+            (b"kiwi".to_vec(), &10, &0, &0),
+        ];
+
+        println!("{} {:?}", results.len(), results);
+        // assert_eq!(result, expected);
+    }
+
+    fn setup_btree() -> BTreeMap<Vec<u8>, i32> {
+        let mut btree = BTreeMap::new();
+        let words = vec![
+            ("apple", 1),
+            ("apricot", 2),
+            ("banana", 3),
+            ("blackberry", 4),
+            ("blueberry", 5),
+            ("cherry", 6),
+            ("date", 7),
+            ("fig", 8),
+            ("grape", 9),
+            ("kiwi", 10),
+        ];
+
+        for (word, value) in words {
+            btree.insert(word.as_bytes().to_vec(), value);
+        }
+
+        btree
+    }
+
+    #[test]
+    fn test_range_scan_btree_full_range() {
+        let btree = setup_btree();
+        let range = b"berry".to_vec()..=b"kiwi".to_vec();
+        let results: Vec<_> = btree.range(range).collect();
+
+        let expected = vec![
+            (b"blackberry".to_vec(), &4),
+            (b"blueberry".to_vec(), &5),
+            (b"cherry".to_vec(), &6),
+            (b"date".to_vec(), &7),
+            (b"fig".to_vec(), &8),
+            (b"grape".to_vec(), &9),
+            (b"kiwi".to_vec(), &10),
+        ];
+
+        println!("BTree results: {} {:?}", results.len(), results);
+        // assert_eq!(results, expected);
+    }
+
+
+    fn setup_trie2() -> Tree<VariableSizeKey, u16> {
+        let mut tree: Tree<VariableSizeKey, u16> = Tree::<VariableSizeKey, u16>::new();
+        let keys = vec![
+            VariableSizeKey::from_slice(&vec![47, 33, 110, 115, 116, 101, 115, 116, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 33, 100, 98, 116, 101, 115, 116, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 33, 116, 98, 116, 101, 115, 116, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 98, 57, 110, 115, 54, 112, 109, 115, 97, 51, 115, 98, 115, 112, 48, 104, 106, 110, 122, 119, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 103, 112, 52, 54, 108, 51, 105, 50, 99, 106, 53, 55, 119, 106, 97, 52, 107, 49, 56, 103, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 54, 101, 110, 105, 114, 119, 114, 109, 99, 113, 119, 100, 105, 50, 120, 106, 100, 56, 113, 104, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 101, 104, 107, 49, 56, 98, 112, 55, 109, 110, 53, 52, 112, 102, 114, 120, 49, 53, 50, 51, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 121, 99, 97, 100, 103, 116, 101, 53, 122, 49, 117, 117, 99, 52, 50, 52, 110, 105, 113, 119, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 118, 53, 56, 51, 114, 107, 99, 100, 57, 108, 50, 116, 109, 108, 57, 109, 115, 55, 111, 57, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 102, 121, 108, 104, 53, 97, 48, 99, 121, 57, 107, 104, 107, 118, 99, 50, 110, 107, 121, 103, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 117, 103, 104, 105, 116, 121, 117, 97, 112, 48, 102, 108, 109, 114, 115, 115, 118, 104, 121, 102, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 109, 107, 108, 102, 53, 106, 50, 57, 121, 116, 98, 98, 111, 52, 57, 55, 104, 108, 104, 113, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 117, 102, 104, 49, 111, 98, 113, 100, 108, 116, 110, 106, 52, 108, 114, 116, 53, 57, 121, 52, 0, 0]),
+        ];
+    
+        for key in keys {
+            tree.insert(&key, 1, 0, 0).unwrap();
+        }
+
+        tree
+    }    
+
+    #[test]
+    fn test_range_skv_range() {
+        let trie = setup_trie2();
+        let range = 
+        VariableSizeKey::from_slice(&[47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0])
+            ..VariableSizeKey::from_slice(&[47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 255, 0]);
+        let results: Vec<_> = trie.range(range).collect();
+
+        println!("{} {:?}", results.len(), results);
+        // assert_eq!(result, expected);
+    }
+
+    fn setup_btreemap() -> BTreeMap<VariableSizeKey, u16> {
+        let mut map: BTreeMap<VariableSizeKey, u16> = BTreeMap::new();
+        let keys = vec![
+            VariableSizeKey::from_slice(&vec![47, 33, 110, 115, 116, 101, 115, 116, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 33, 100, 98, 116, 101, 115, 116, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 33, 116, 98, 116, 101, 115, 116, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 98, 57, 110, 115, 54, 112, 109, 115, 97, 51, 115, 98, 115, 112, 48, 104, 106, 110, 122, 119, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 103, 112, 52, 54, 108, 51, 105, 50, 99, 106, 53, 55, 119, 106, 97, 52, 107, 49, 56, 103, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 54, 101, 110, 105, 114, 119, 114, 109, 99, 113, 119, 100, 105, 50, 120, 106, 100, 56, 113, 104, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 101, 104, 107, 49, 56, 98, 112, 55, 109, 110, 53, 52, 112, 102, 114, 120, 49, 53, 50, 51, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 121, 99, 97, 100, 103, 116, 101, 53, 122, 49, 117, 117, 99, 52, 50, 52, 110, 105, 113, 119, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 118, 53, 56, 51, 114, 107, 99, 100, 57, 108, 50, 116, 109, 108, 57, 109, 115, 55, 111, 57, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 102, 121, 108, 104, 53, 97, 48, 99, 121, 57, 107, 104, 107, 118, 99, 50, 110, 107, 121, 103, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 117, 103, 104, 105, 116, 121, 117, 97, 112, 48, 102, 108, 109, 114, 115, 115, 118, 104, 121, 102, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 109, 107, 108, 102, 53, 106, 50, 57, 121, 116, 98, 98, 111, 52, 57, 55, 104, 108, 104, 113, 0, 0]),
+            VariableSizeKey::from_slice(&vec![47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0, 0, 1, 117, 102, 104, 49, 111, 98, 113, 100, 108, 116, 110, 106, 52, 108, 114, 116, 53, 57, 121, 52, 0, 0]),
+        ];
+    
+        for key in keys {
+            map.insert(key, 1);
+        }
+    
+        map
+    }
+    
+    #[test]
+    fn test_range_btreemap() {
+        let map = setup_btreemap();
+        let range = 
+        VariableSizeKey::from_slice(&[47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 0, 0])
+            ..VariableSizeKey::from_slice(&[47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 255, 0]);
+        let results: Vec<_> = map.range(range).collect();
+    
+        println!("{} {:?}", results.len(), results);
+        // assert_eq!(result, expected);
+    }
+
 }
