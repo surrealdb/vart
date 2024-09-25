@@ -1008,7 +1008,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 
         for kv in kv_pairs {
             let k = kv.key.clone(); // Clone the key
-            // println!("key: {:?} {}", k, kv.version);
+                                    // println!("key: {:?} {}", k, kv.version);
             let v = kv.value.clone(); // Clone the value
             let mut t = kv.version;
 
@@ -1925,7 +1925,7 @@ mod tests {
     fn range_seq_u16() {
         let mut tree: Tree<FixedSizeKey<16>, u16> = Tree::<FixedSizeKey<16>, u16>::new();
 
-        let max = u16::MAX/2;
+        let max = u16::MAX;
         // Insertion
         for i in 0..=max {
             let key: FixedSizeKey<16> = i.into();
@@ -1933,7 +1933,7 @@ mod tests {
         }
 
         let mut len = 0usize;
-        let start_key: FixedSizeKey<16> = 32768u16.into();
+        let start_key: FixedSizeKey<16> = 0u8.into();
         let end_key: FixedSizeKey<16> = max.into();
 
         for _ in tree.range(start_key..=end_key) {
