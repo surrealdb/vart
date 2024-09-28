@@ -263,7 +263,6 @@ impl<'a, P: KeyTrait + 'a, V: Clone> ForwardIterState<'a, P, V> {
                 }
             }
         } else {
-            // println!("Init Node {:?} {} {:?}", node.node_type_name(),  node.num_children(), node.prefix());
             iters.push(NodeIter::new(node.iter()));
         }
 
@@ -594,6 +593,8 @@ mod tests {
     use rand::Rng;
     use std::collections::BTreeMap;
     use std::collections::HashMap;
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
     use std::str::FromStr;
 
     use crate::art::Tree;
@@ -970,9 +971,6 @@ mod tests {
         let results: Vec<_> = trie.range(range).collect();
 
         let expected = vec![
-            // (b"apple".to_vec(), &1, &0, &0),
-            // (b"apricot".to_vec(), &2, &0, &0),
-            // (b"banana".to_vec(), &3, &0, &0),
             (b"blackberry\0".to_vec(), &4, &4, &0),
             (b"blueberry\0".to_vec(), &5, &5, &0),
             (b"cherry\0".to_vec(), &6, &6, &0),
@@ -986,10 +984,10 @@ mod tests {
         assert_eq!(results, expected);
     }
 
-    fn setup_btree() -> BTreeMap<Vec<u8>, i32> {
+    fn setup_btree() -> BTreeMap<Vec<u8>, u16> {
         let mut btree = BTreeMap::new();
         let words = vec![
-            ("apple", 1),
+            ("apple", 1u16),
             ("apricot", 2),
             ("banana", 3),
             ("blackberry", 4),
@@ -1009,112 +1007,149 @@ mod tests {
     }
 
     #[test]
-    fn test_range_scan_btree_full_range() {
+    fn test_full_scan() {
+        let trie = setup_trie();
         let btree = setup_btree();
-        let range = b"berry".to_vec()..=b"kiwi".to_vec();
-        let results: Vec<_> = btree.range(range).map(|(k, v)| (k.clone(), *v)).collect();
 
-        let expected = vec![
-            (b"blackberry".to_vec(), 4),
-            (b"blueberry".to_vec(), 5),
-            (b"cherry".to_vec(), 6),
-            (b"date".to_vec(), 7),
-            (b"fig".to_vec(), 8),
-            (b"grape".to_vec(), 9),
-            (b"kiwi".to_vec(), 10),
-        ];
+        let range_start = VariableSizeKey::from_slice_with_termination("berry".as_bytes());
+        let range_end = VariableSizeKey::from_slice_with_termination("kiwi".as_bytes());
+        let trie_results: Vec<_> = trie.range(range_start..=range_end).collect();
 
-        assert_eq!(results, expected);
-    }
+        let btree_range = b"berry".to_vec()..=b"kiwi".to_vec();
+        let btree_results: Vec<_> = btree
+            .range(btree_range)
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
 
-    fn setup_trie2() -> Tree<VariableSizeKey, u16> {
-        let mut tree: Tree<VariableSizeKey, u16> = Tree::<VariableSizeKey, u16>::new();
-        let keys = vec![
-            VariableSizeKey::from_slice(&[47, 33, 110, 115, 116, 101, 115, 116, 0, 0]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 33, 100, 98, 116, 101, 115, 116, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 33, 116, 98, 116, 101,
-                115, 116, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 98, 57, 110, 115, 54, 112, 109, 115, 97, 51, 115, 98, 115, 112,
-                48, 104, 106, 110, 122, 119, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 103, 112, 52, 54, 108, 51, 105, 50, 99, 106, 53, 55, 119, 106,
-                97, 52, 107, 49, 56, 103, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 54, 101, 110, 105, 114, 119, 114, 109, 99, 113, 119, 100, 105,
-                50, 120, 106, 100, 56, 113, 104, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 101, 104, 107, 49, 56, 98, 112, 55, 109, 110, 53, 52, 112, 102,
-                114, 120, 49, 53, 50, 51, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 121, 99, 97, 100, 103, 116, 101, 53, 122, 49, 117, 117, 99, 52,
-                50, 52, 110, 105, 113, 119, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 118, 53, 56, 51, 114, 107, 99, 100, 57, 108, 50, 116, 109, 108,
-                57, 109, 115, 55, 111, 57, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 102, 121, 108, 104, 53, 97, 48, 99, 121, 57, 107, 104, 107, 118,
-                99, 50, 110, 107, 121, 103, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 117, 103, 104, 105, 116, 121, 117, 97, 112, 48, 102, 108, 109,
-                114, 115, 115, 118, 104, 121, 102, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 109, 107, 108, 102, 53, 106, 50, 57, 121, 116, 98, 98, 111, 52,
-                57, 55, 104, 108, 104, 113, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 117, 102, 104, 49, 111, 98, 113, 100, 108, 116, 110, 106, 52,
-                108, 114, 116, 53, 57, 121, 52, 0, 0,
-            ]),
-        ];
+        let trie_expected: Vec<_> = trie_results
+            .iter()
+            .map(|(k, v, _, _)| {
+                let key_without_last_byte = &k[..k.len() - 1];
+                (key_without_last_byte.to_vec(), **v)
+            })
+            .collect();
 
-        for key in keys {
-            tree.insert(&key, 1, 0, 0).unwrap();
-        }
-
-        tree
+        assert_eq!(trie_expected, btree_results);
     }
 
     #[test]
-    fn test_range_skv_range() {
-        let trie = setup_trie2();
-        let range = VariableSizeKey::from_slice(&[
-            47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0,
-            42, 0, 0,
-        ])
-            ..VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 255, 0,
-            ]);
-        let results: Vec<_> = trie.range(range).collect();
+    fn test_range_scan_large_words() {
+        let mut trie: Tree<VariableSizeKey, u16> = Tree::<VariableSizeKey, u16>::new();
+        let mut btree = BTreeMap::new();
 
-        println!("{} {:?}", results.len(), results);
-        // assert_eq!(result, expected);
+        // Insert a large number of words
+        for i in 0..10000 {
+            let word = format!("word{:05}", i);
+            let key = &VariableSizeKey::from_str(&word).unwrap();
+            trie.insert(key, i as u16, 0, 0).unwrap();
+            btree.insert(word.as_bytes().to_vec(), i as u16);
+        }
+
+        // Define a range within the dataset
+        let range_start = VariableSizeKey::from_slice_with_termination("word05000".as_bytes());
+        let range_end = VariableSizeKey::from_slice_with_termination("word05999".as_bytes());
+        let trie_results: Vec<_> = trie.range(range_start..=range_end).collect();
+
+        let btree_range = b"word05000".to_vec()..=b"word05999".to_vec();
+        let btree_results: Vec<_> = btree
+            .range(btree_range)
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+
+        let trie_expected: Vec<_> = trie_results
+            .iter()
+            .map(|(k, v, _, _)| {
+                let key_without_last_byte = &k[..k.len() - 1];
+                (key_without_last_byte.to_vec(), **v)
+            })
+            .collect();
+
+        assert_eq!(trie_expected, btree_results);
     }
 
-    fn setup_btreemap() -> BTreeMap<VariableSizeKey, u16> {
+    fn load_words() -> Vec<String> {
+        let file = File::open("testdata/words.txt").expect("Unable to open words.txt");
+        let reader = BufReader::new(file);
+        reader.lines().map(|line| line.unwrap()).collect()
+    }
+
+    #[test]
+    fn test_range_scan_dictionary() {
+        let mut trie: Tree<VariableSizeKey, u16> = Tree::<VariableSizeKey, u16>::new();
+        let mut btree = BTreeMap::new();
+
+        // Load words from the dictionary
+        let words = load_words();
+
+        // Insert all words into both the trie and the BTreeMap
+        for (i, word) in words.iter().enumerate() {
+            let key = &VariableSizeKey::from_str(word).unwrap();
+            trie.insert(key, i as u16, 0, 0).unwrap();
+            btree.insert(word.as_bytes().to_vec(), i as u16);
+        }
+
+        // Define different types of range scans
+        let range_tests = vec![
+            ("a", "z"),           // Full range
+            ("apple", "banana"),  // Partial range
+            ("zzz", "zzzz"),      // Empty range
+            ("apple", "apple"),   // Single element range
+            ("a", "apple"),       // Edge case: start at the beginning
+            ("kiwi", "z"),        // Edge case: end at the last element
+            ("banana", "banana"), // Single element range
+            ("apple", "apricot"), // Partial range within close keys
+            ("fig", "grape"),     // Partial range in the middle
+        ];
+
+        for (start, end) in range_tests {
+            let range_start = VariableSizeKey::from_slice_with_termination(start.as_bytes());
+            let range_end = VariableSizeKey::from_slice_with_termination(end.as_bytes());
+            let trie_results: Vec<_> = trie.range(range_start..=range_end).collect();
+
+            let btree_range = start.as_bytes().to_vec()..=end.as_bytes().to_vec();
+            let btree_results: Vec<_> = btree
+                .range(btree_range)
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+
+            let trie_expected: Vec<_> = trie_results
+                .iter()
+                .map(|(k, v, _, _)| {
+                    let key_without_last_byte = &k[..k.len() - 1];
+                    (key_without_last_byte.to_vec(), **v)
+                })
+                .collect();
+
+            assert_eq!(
+                trie_expected, btree_results,
+                "Range scan from {} to {} failed",
+                start, end
+            );
+        }
+    }
+
+    #[test]
+    fn test_range_scan_empty_range() {
+        let trie = setup_trie();
+        let btree = setup_btree();
+
+        let range_start = VariableSizeKey::from_slice_with_termination("zzz".as_bytes());
+        let range_end = VariableSizeKey::from_slice_with_termination("zzzz".as_bytes());
+        let trie_results: Vec<_> = trie.range(range_start..=range_end).collect();
+
+        let btree_range = b"zzz".to_vec()..=b"zzzz".to_vec();
+        let btree_results: Vec<_> = btree
+            .range(btree_range)
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+
+        assert!(trie_results.is_empty());
+        assert!(btree_results.is_empty());
+    }
+
+    // simulate an insert operation in surrealdb insert statement
+    fn setup_trie_and_btreemap() -> (Tree<VariableSizeKey, u16>, BTreeMap<VariableSizeKey, u16>) {
+        let mut tree: Tree<VariableSizeKey, u16> = Tree::<VariableSizeKey, u16>::new();
         let mut map: BTreeMap<VariableSizeKey, u16> = BTreeMap::new();
         let keys = vec![
             VariableSizeKey::from_slice(&[47, 33, 110, 115, 116, 101, 115, 116, 0, 0]),
@@ -1177,16 +1212,20 @@ mod tests {
             ]),
         ];
 
+        for key in &keys {
+            tree.insert(key, 1, 0, 0).unwrap();
+        }
+
         for key in keys {
             map.insert(key, 1);
         }
 
-        map
+        (tree, map)
     }
 
     #[test]
-    fn test_range_btreemap() {
-        let map = setup_btreemap();
+    fn test_trie_vs_btreemap_range_scan_in_sdb_insert() {
+        let (trie, map) = setup_trie_and_btreemap();
         let range = VariableSizeKey::from_slice(&[
             47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0,
             42, 0, 0,
@@ -1195,9 +1234,22 @@ mod tests {
                 47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
                 0, 42, 255, 0,
             ]);
-        let results: Vec<_> = map.range(range).collect();
+        let trie_results: Vec<_> = trie.range(range.clone()).collect();
+        let map_results: Vec<_> = map.range(range).collect();
 
-        println!("{} {:?}", results.len(), results);
-        // assert_eq!(result, expected);
+        let trie_expected: Vec<_> = trie_results
+            .iter()
+            .map(|(k, v, _, _)| (k.to_vec(), **v))
+            .collect();
+
+        let map_expected: Vec<_> = map_results
+            .iter()
+            .map(|(k, v)| (k.as_slice().to_vec(), **v))
+            .collect();
+
+        assert_eq!(
+            trie_expected, map_expected,
+            "Range scan results do not match between Trie and BTreeMap"
+        );
     }
 }
