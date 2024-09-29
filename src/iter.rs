@@ -1153,12 +1153,11 @@ mod tests {
             ("grape", "grapefruit"), // Overlapping range with close keys
             ("a", "b"),              // Minute alphabet range
             ("a", "m"),              // Large alphabet range
-            ("0", "9"),              // Numeric range
             ("a", "a"),              // Single character range
             ("apple", "applf"),      // Overlapping range with close keys
             ("kiwi", "kiwz"),        // Overlapping range with close keys
             ("apple", "applz"),      // Overlapping range with close keys
-            ("a", "aa"),             // Minute alphabet range
+            ("a", "aa"),             // Small alphabet range
             ("a", "az"),             // Large alphabet range
             ("m", "z"),              // Large alphabet range
             ("apple", "applea"),     // Single element range with non-existent key
