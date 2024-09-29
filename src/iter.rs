@@ -1168,25 +1168,45 @@ mod tests {
         for (start, end) in range_tests {
             let range_start = VariableSizeKey::from_slice_with_termination(start.as_bytes());
             let range_end = VariableSizeKey::from_slice_with_termination(end.as_bytes());
-            let trie_results: Vec<_> = trie.range(range_start..=range_end).collect();
 
-            let btree_range = start.as_bytes().to_vec()..=end.as_bytes().to_vec();
-            let btree_results: Vec<_> = btree
-                .range(btree_range)
+            // Inclusive-Inclusive
+            let trie_results_incl_incl: Vec<_> = trie
+                .range(range_start.clone()..=range_end.clone())
+                .collect();
+            let btree_results_incl_incl: Vec<_> = btree
+                .range(start.as_bytes().to_vec()..=end.as_bytes().to_vec())
                 .map(|(k, v)| (k.clone(), *v))
                 .collect();
-
-            let trie_expected: Vec<_> = trie_results
+            let trie_expected_incl_incl: Vec<_> = trie_results_incl_incl
                 .iter()
                 .map(|(k, v, _, _)| {
                     let key_without_last_byte = &k[..k.len() - 1];
                     (key_without_last_byte.to_vec(), **v)
                 })
                 .collect();
-
             assert_eq!(
-                trie_expected, btree_results,
-                "Range scan from {} to {} failed",
+                trie_expected_incl_incl, btree_results_incl_incl,
+                "Inclusive-Inclusive range scan from {} to {} failed",
+                start, end
+            );
+
+            // Inclusive-Exclusive
+            let trie_results_incl_excl: Vec<_> =
+                trie.range(range_start.clone()..range_end.clone()).collect();
+            let btree_results_incl_excl: Vec<_> = btree
+                .range(start.as_bytes().to_vec()..end.as_bytes().to_vec())
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            let trie_expected_incl_excl: Vec<_> = trie_results_incl_excl
+                .iter()
+                .map(|(k, v, _, _)| {
+                    let key_without_last_byte = &k[..k.len() - 1];
+                    (key_without_last_byte.to_vec(), **v)
+                })
+                .collect();
+            assert_eq!(
+                trie_expected_incl_excl, btree_results_incl_excl,
+                "Inclusive-Exclusive range scan from {} to {} failed",
                 start, end
             );
         }
