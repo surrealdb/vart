@@ -3,7 +3,7 @@ use std::ops::RangeBounds;
 use std::sync::Arc;
 
 use crate::art::{Node, NodeType, QueryType};
-use crate::node::LeafValue;
+use crate::node::{LeafValue, TwigNode};
 use crate::KeyTrait;
 
 type NodeIterator<'a, P, V> = Box<dyn DoubleEndedIterator<Item = (u8, &'a Arc<Node<P, V>>)> + 'a>;
@@ -398,6 +398,96 @@ where
             prefix_lengths: Vec::new(),
         }
     }
+
+    #[inline]
+    fn handle_twig(&mut self, twig: &'a TwigNode<K, V>) {
+        if self.is_versioned {
+            for leaf in twig.iter() {
+                self.forward.leafs.push_back(Leaf(&twig.key, leaf));
+            }
+        } else if let Some(v) = twig.get_latest_leaf() {
+            self.forward.leafs.push_back(Leaf(&twig.key, v));
+        }
+    }
+}
+
+#[inline]
+fn is_key_out_of_range<K: KeyTrait, R>(range: &R, key: &K) -> bool
+where
+    R: RangeBounds<K>,
+{
+    match range.end_bound() {
+        Bound::Included(k) => key > k,
+        Bound::Excluded(k) => key >= k,
+        Bound::Unbounded => false,
+    }
+}
+
+fn handle_non_twig_node<'a, K, V, R>(
+    prefix: &mut Vec<u8>,
+    prefix_lengths: &mut Vec<usize>,
+    range: &R,
+    node: &'a Arc<Node<K, V>>,
+    iters: &mut Vec<NodeIter<'a, K, V>>,
+) where
+    K: KeyTrait + 'a,
+    R: RangeBounds<K>,
+    V: Clone + 'a,
+{
+    let prefix_len_before = prefix.len();
+    prefix.extend_from_slice(node.prefix().as_slice());
+
+    let prefix_slice = prefix.as_slice();
+    let prefix_len_after = prefix_slice.len();
+
+    let start_bound_slice = get_bound_slice(range.start_bound(), prefix_len_after);
+    let end_bound_slice = get_bound_slice(range.end_bound(), prefix_len_after);
+
+    if is_slice_within_bounds(prefix_slice, start_bound_slice, end_bound_slice, range) {
+        iters.push(NodeIter::new(node.iter()));
+        prefix_lengths.push(prefix_len_before);
+    } else {
+        prefix.truncate(prefix_len_before);
+    }
+}
+
+#[inline]
+fn get_bound_slice<K>(bound: Bound<&K>, prefix_len: usize) -> &[u8]
+where
+    K: KeyTrait,
+{
+    match bound {
+        Bound::Included(bound) | Bound::Excluded(bound) => {
+            &bound.as_slice()[..prefix_len.min(bound.as_slice().len())]
+        }
+        Bound::Unbounded => &[],
+    }
+}
+
+#[inline]
+fn is_slice_within_bounds<K, R>(
+    prefix_slice: &[u8],
+    start_bound_slice: &[u8],
+    end_bound_slice: &[u8],
+    range: &R,
+) -> bool
+where
+    K: KeyTrait,
+    R: RangeBounds<K>,
+{
+    let within_start_bound = match range.start_bound() {
+        Bound::Included(_) => prefix_slice >= start_bound_slice,
+        Bound::Excluded(_) => prefix_slice > start_bound_slice,
+        Bound::Unbounded => true,
+    };
+
+    let within_end_bound = match range.end_bound() {
+        Bound::Included(_) => prefix_slice <= end_bound_slice,
+        Bound::Excluded(_) => prefix_slice <= end_bound_slice,
+        Bound::Unbounded => true,
+    };
+
+    within_start_bound && within_end_bound
 }
 
 impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K, V, R> {
@@ -405,80 +495,28 @@ impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(node) = self.forward.iters.last_mut() {
-            let e = node.next();
-            match e {
-                Some(other) => {
-                    if let NodeType::Twig(twig) = &other.1.node_type {
-                        if self.range.contains(&twig.key) {
-                            // If the query is versioned, iterate over all versions of the key
-                            // and add them to the leafs queue. Otherwise, add the latest version.
-                            if self.is_versioned {
-                                for leaf in twig.iter() {
-                                    self.forward.leafs.push_back(Leaf(&twig.key, leaf));
-                                }
-                            } else if let Some(v) = twig.get_latest_leaf() {
-                                self.forward.leafs.push_back(Leaf(&twig.key, v));
-                            }
-                            break;
-                        } else {
-                            match self.range.end_bound() {
-                                Bound::Included(k) if &twig.key > k => self.forward.iters.clear(),
-                                Bound::Excluded(k) if &twig.key >= k => self.forward.iters.clear(),
-                                _ => {}
-                            }
-                        }
-                    } else {
-                        // Save the current prefix length before extending
-                        let prefix_len_before = self.prefix.len();
-                        self.prefix.extend_from_slice(other.1.prefix().as_slice());
-
-                        // Convert self.prefix to a slice for comparison
-                        let prefix_slice = self.prefix.as_slice();
-
-                        // Extract the relevant portion of the start and end bounds
-                        let start_bound_slice = match self.range.start_bound() {
-                            Bound::Included(start) | Bound::Excluded(start) => {
-                                &start.as_slice()[..prefix_slice.len().min(start.as_slice().len())]
-                            }
-                            Bound::Unbounded => &[],
-                        };
-
-                        let end_bound_slice = match self.range.end_bound() {
-                            Bound::Included(end) | Bound::Excluded(end) => {
-                                &end.as_slice()[..prefix_slice.len().min(end.as_slice().len())]
-                            }
-                            Bound::Unbounded => &[],
-                        };
-
-                        // Check if self.prefix is within the start and end bounds
-                        let within_start_bound = match self.range.start_bound() {
-                            Bound::Included(_) => prefix_slice >= start_bound_slice,
-                            Bound::Excluded(_) => prefix_slice > start_bound_slice,
-                            Bound::Unbounded => true,
-                        };
-
-                        let within_end_bound = match self.range.end_bound() {
-                            Bound::Included(_) => prefix_slice <= end_bound_slice,
-                            Bound::Excluded(_) => prefix_slice <= end_bound_slice,
-                            Bound::Unbounded => true,
-                        };
-
-                        if within_start_bound && within_end_bound {
-                            self.forward.iters.push(NodeIter::new(other.1.iter()));
-                            // Push the current prefix length onto the stack
-                            self.prefix_lengths.push(prefix_len_before);
-                        } else {
-                            // Restore the prefix to its previous state
-                            self.prefix.truncate(prefix_len_before);
-                        }
+            if let Some(other) = node.next() {
+                if let NodeType::Twig(twig) = &other.1.node_type {
+                    if self.range.contains(&twig.key) {
+                        self.handle_twig(twig);
+                        break;
+                    } else if is_key_out_of_range(&self.range, &twig.key) {
+                        self.forward.iters.clear();
                     }
+                } else {
+                    handle_non_twig_node(
+                        &mut self.prefix,
+                        &mut self.prefix_lengths,
+                        &self.range,
+                        other.1,
+                        &mut self.forward.iters,
+                    );
                 }
-                None => {
-                    self.forward.iters.pop();
-                    // Restore the prefix to its previous state
-                    if let Some(prefix_len_before) = self.prefix_lengths.pop() {
-                        self.prefix.truncate(prefix_len_before);
-                    }
+            } else {
+                self.forward.iters.pop();
+                // Restore the prefix to its previous state
+                if let Some(prefix_len_before) = self.prefix_lengths.pop() {
+                    self.prefix.truncate(prefix_len_before);
                 }
             }
         }
@@ -560,58 +598,24 @@ where
                                 results.push((key, None));
                             }
                         }
-                    } else {
+                    } else if is_key_out_of_range(&range, &twig.key) {
                         // stop iteration if the range end is exceeded
-                        match range.end_bound() {
-                            Bound::Included(k) if &twig.key > k => forward.iters.clear(),
-                            Bound::Excluded(k) if &twig.key >= k => forward.iters.clear(),
-                            _ => {}
-                        }
+                        forward.iters.clear()
                     }
                 } else {
-                    let prefix_len_before = prefix.len();
-                    prefix.extend_from_slice(other.1.prefix().as_slice());
-
-                    let prefix_slice = prefix.as_slice();
-
-                    let start_bound_slice = match range.start_bound() {
-                        Bound::Included(start) | Bound::Excluded(start) => {
-                            &start.as_slice()[..prefix_slice.len().min(start.as_slice().len())]
-                        }
-                        Bound::Unbounded => &[],
-                    };
-
-                    let end_bound_slice = match range.end_bound() {
-                        Bound::Included(end) | Bound::Excluded(end) => {
-                            &end.as_slice()[..prefix_slice.len().min(end.as_slice().len())]
-                        }
-                        Bound::Unbounded => &[],
-                    };
-
-                    let within_start_bound = match range.start_bound() {
-                        Bound::Included(_) => prefix_slice >= start_bound_slice,
-                        Bound::Excluded(_) => prefix_slice > start_bound_slice,
-                        Bound::Unbounded => true,
-                    };
-
-                    let within_end_bound = match range.end_bound() {
-                        Bound::Included(_) => prefix_slice <= end_bound_slice,
-                        Bound::Excluded(_) => prefix_slice <= end_bound_slice,
-                        Bound::Unbounded => true,
-                    };
-
-                    // Push the iterator if it is not a leaf node
-                    if within_start_bound && within_end_bound {
-                        forward.iters.push(NodeIter::new(other.1.iter()));
-                        prefix_lengths.push(prefix_len_before);
-                    } else {
-                        prefix.truncate(prefix_len_before);
-                    }
+                    handle_non_twig_node(
+                        &mut prefix,
+                        &mut prefix_lengths,
+                        &range,
+                        other.1,
+                        &mut forward.iters,
+                    );
                 }
             }
             None => {
                 // Pop the iterator if no more elements
                 forward.iters.pop();
+                // Restore the prefix to its previous state
                 if let Some(prefix_len_before) = prefix_lengths.pop() {
                     prefix.truncate(prefix_len_before);
                 }

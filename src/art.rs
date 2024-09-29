@@ -1008,7 +1008,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 
         for kv in kv_pairs {
             let k = kv.key.clone(); // Clone the key
-                                    // println!("key: {:?} {}", k, kv.version);
             let v = kv.value.clone(); // Clone the value
             let mut t = kv.version;
 
