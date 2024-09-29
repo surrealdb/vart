@@ -542,39 +542,85 @@ where
         ForwardIterState::scan_at(n, &range, query_type)
     });
 
+    let mut prefix = forward.prefix.clone();
+    let mut prefix_lengths = Vec::new();
+
     while let Some(node) = forward.iters.last_mut() {
-        if let Some((_, res)) = node.next() {
-            if let NodeType::Twig(twig) = &res.node_type {
-                if range.contains(&twig.key) {
-                    // Iterate through leaves of the twig
-                    if let Some(leaf) = twig.get_leaf_by_query(query_type) {
-                        let key = twig.key.as_slice().to_vec();
-                        if include_values {
-                            results.push((key, Some(leaf.value.clone())));
-                        } else {
-                            results.push((key, None));
+        let e = node.next();
+        match e {
+            Some(other) => {
+                if let NodeType::Twig(twig) = &other.1.node_type {
+                    if range.contains(&twig.key) {
+                        // Iterate through leaves of the twig
+                        if let Some(leaf) = twig.get_leaf_by_query(query_type) {
+                            let key = twig.key.as_slice().to_vec();
+                            if include_values {
+                                results.push((key, Some(leaf.value.clone())));
+                            } else {
+                                results.push((key, None));
+                            }
+                        }
+                    } else {
+                        // stop iteration if the range end is exceeded
+                        match range.end_bound() {
+                            Bound::Included(k) if &twig.key > k => forward.iters.clear(),
+                            Bound::Excluded(k) if &twig.key >= k => forward.iters.clear(),
+                            _ => {}
                         }
                     }
                 } else {
-                    // stop iteration if the range end is exceeded
-                    match range.end_bound() {
-                        Bound::Included(k) if &twig.key > k => forward.iters.clear(),
-                        Bound::Excluded(k) if &twig.key >= k => forward.iters.clear(),
-                        _ => {}
+                    let prefix_len_before = prefix.len();
+                    prefix.extend_from_slice(other.1.prefix().as_slice());
+
+                    let prefix_slice = prefix.as_slice();
+
+                    let start_bound_slice = match range.start_bound() {
+                        Bound::Included(start) | Bound::Excluded(start) => {
+                            &start.as_slice()[..prefix_slice.len().min(start.as_slice().len())]
+                        }
+                        Bound::Unbounded => &[],
+                    };
+
+                    let end_bound_slice = match range.end_bound() {
+                        Bound::Included(end) | Bound::Excluded(end) => {
+                            &end.as_slice()[..prefix_slice.len().min(end.as_slice().len())]
+                        }
+                        Bound::Unbounded => &[],
+                    };
+
+                    let within_start_bound = match range.start_bound() {
+                        Bound::Included(_) => prefix_slice >= start_bound_slice,
+                        Bound::Excluded(_) => prefix_slice > start_bound_slice,
+                        Bound::Unbounded => true,
+                    };
+
+                    let within_end_bound = match range.end_bound() {
+                        Bound::Included(_) => prefix_slice <= end_bound_slice,
+                        Bound::Excluded(_) => prefix_slice <= end_bound_slice,
+                        Bound::Unbounded => true,
+                    };
+
+                    // Push the iterator if it is not a leaf node
+                    if within_start_bound && within_end_bound {
+                        forward.iters.push(NodeIter::new(other.1.iter()));
+                        prefix_lengths.push(prefix_len_before);
+                    } else {
+                        prefix.truncate(prefix_len_before);
                     }
                 }
-            } else {
-                // Push the iterator if it is not a leaf node
-                forward.iters.push(NodeIter::new(res.iter()));
             }
-        } else {
-            // Pop the iterator if no more elements
-            forward.iters.pop();
+            None => {
+                // Pop the iterator if no more elements
+                forward.iters.pop();
+                if let Some(prefix_len_before) = prefix_lengths.pop() {
+                    prefix.truncate(prefix_len_before);
+                }
+            }
         }
     }
 
     // Iterate over all leafs in forward.leafs and append them to results
-    for leaf in forward.leafs {
+    while let Some(leaf) = forward.leafs.pop_front() {
         let key = leaf.0.as_slice().to_vec();
         let value = if include_values {
             Some(leaf.1.value.clone())
@@ -1090,15 +1136,34 @@ mod tests {
 
         // Define different types of range scans
         let range_tests = vec![
-            ("a", "z"),           // Full range
-            ("apple", "banana"),  // Partial range
-            ("zzz", "zzzz"),      // Empty range
-            ("apple", "apple"),   // Single element range
-            ("a", "apple"),       // Edge case: start at the beginning
-            ("kiwi", "z"),        // Edge case: end at the last element
-            ("banana", "banana"), // Single element range
-            ("apple", "apricot"), // Partial range within close keys
-            ("fig", "grape"),     // Partial range in the middle
+            ("a", "z"),              // Full range
+            ("apple", "banana"),     // Partial range
+            ("zzz", "zzzz"),         // Empty range
+            ("apple", "apple"),      // Single element range
+            ("a", "apple"),          // Edge case: start at the beginning
+            ("kiwi", "z"),           // Edge case: end at the last element
+            ("banana", "banana"),    // Single element range
+            ("apple", "apricot"),    // Partial range within close keys
+            ("fig", "grape"),        // Partial range in the middle
+            ("ap", "apz"),           // Prefix range
+            ("apricot", "apricot"),  // Single element range with non-existent key
+            ("apple", "apples"),     // Overlapping range
+            ("Apple", "apple"),      // Mixed case sensitivity
+            ("banana", "bananas"),   // Overlapping range with non-existent key
+            ("grape", "grapefruit"), // Overlapping range with close keys
+            ("a", "b"),              // Minute alphabet range
+            ("a", "m"),              // Large alphabet range
+            ("0", "9"),              // Numeric range
+            ("a", "a"),              // Single character range
+            ("apple", "applf"),      // Overlapping range with close keys
+            ("kiwi", "kiwz"),        // Overlapping range with close keys
+            ("apple", "applz"),      // Overlapping range with close keys
+            ("a", "aa"),             // Minute alphabet range
+            ("a", "az"),             // Large alphabet range
+            ("m", "z"),              // Large alphabet range
+            ("apple", "applea"),     // Single element range with non-existent key
+            ("apple", "applez"),     // Overlapping range with close keys
+            ("kiwi", "kiwib"),       // Overlapping range with close keys
         ];
 
         for (start, end) in range_tests {
@@ -1126,25 +1191,6 @@ mod tests {
                 start, end
             );
         }
-    }
-
-    #[test]
-    fn test_range_scan_empty_range() {
-        let trie = setup_trie();
-        let btree = setup_btree();
-
-        let range_start = VariableSizeKey::from_slice_with_termination("zzz".as_bytes());
-        let range_end = VariableSizeKey::from_slice_with_termination("zzzz".as_bytes());
-        let trie_results: Vec<_> = trie.range(range_start..=range_end).collect();
-
-        let btree_range = b"zzz".to_vec()..=b"zzzz".to_vec();
-        let btree_results: Vec<_> = btree
-            .range(btree_range)
-            .map(|(k, v)| (k.clone(), *v))
-            .collect();
-
-        assert!(trie_results.is_empty());
-        assert!(btree_results.is_empty());
     }
 
     // simulate an insert operation in surrealdb insert statement
