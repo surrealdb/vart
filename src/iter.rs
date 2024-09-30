@@ -1321,4 +1321,161 @@ mod tests {
             "Range scan results do not match between Trie and BTreeMap"
         );
     }
+
+    #[test]
+    fn test_range_scan_with_random_words_and_ranges() {
+        let mut trie: Tree<VariableSizeKey, u16> = Tree::<VariableSizeKey, u16>::new();
+        let mut btree = BTreeMap::new();
+
+        // Generate random words
+        let words = generate_random_words(10000, 10..20);
+
+        // Insert all words into both the trie and the BTreeMap
+        for (i, word) in words.iter().enumerate() {
+            let key = &VariableSizeKey::from_str(word).unwrap();
+            trie.insert(key, i as u16, 0, 0).unwrap();
+            btree.insert(word.as_bytes().to_vec(), i as u16);
+        }
+
+        // Generate random range tests
+        let range_tests = generate_random_ranges(&words, 100);
+
+        for (start, end) in range_tests {
+            let range_start = VariableSizeKey::from_slice_with_termination(start.as_bytes());
+            let range_end = VariableSizeKey::from_slice_with_termination(end.as_bytes());
+
+            // Inclusive-Inclusive
+            let trie_results_incl_incl: Vec<_> = trie
+                .range(range_start.clone()..=range_end.clone())
+                .collect();
+            let btree_results_incl_incl: Vec<_> = btree
+                .range(start.as_bytes().to_vec()..=end.as_bytes().to_vec())
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            let trie_expected_incl_incl: Vec<_> = trie_results_incl_incl
+                .iter()
+                .map(|(k, v, _, _)| {
+                    let key_without_last_byte = &k[..k.len() - 1];
+                    (key_without_last_byte.to_vec(), **v)
+                })
+                .collect();
+            assert_eq!(
+                trie_expected_incl_incl, btree_results_incl_incl,
+                "Inclusive-Inclusive range scan from {} to {} failed",
+                start, end
+            );
+
+            // Inclusive-Exclusive
+            let trie_results_incl_excl: Vec<_> =
+                trie.range(range_start.clone()..range_end.clone()).collect();
+            let btree_results_incl_excl: Vec<_> = btree
+                .range(start.as_bytes().to_vec()..end.as_bytes().to_vec())
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            let trie_expected_incl_excl: Vec<_> = trie_results_incl_excl
+                .iter()
+                .map(|(k, v, _, _)| {
+                    let key_without_last_byte = &k[..k.len() - 1];
+                    (key_without_last_byte.to_vec(), **v)
+                })
+                .collect();
+            assert_eq!(
+                trie_expected_incl_excl, btree_results_incl_excl,
+                "Inclusive-Exclusive range scan from {} to {} failed",
+                start, end
+            );
+        }
+    }
+
+    fn generate_random_words(count: usize, length_range: std::ops::Range<usize>) -> Vec<String> {
+        let mut rng = rand::thread_rng();
+        (0..count)
+            .map(|_| {
+                let length = rng.gen_range(length_range.clone());
+                (0..length)
+                    .map(|_| (rng.gen_range(b'a'..=b'z') as char))
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn generate_random_ranges(words: &[String], count: usize) -> Vec<(String, String)> {
+        let mut rng = rand::thread_rng();
+        (0..count)
+            .map(|_| {
+                let start = &words[rng.gen_range(0..words.len())];
+                let end = &words[rng.gen_range(0..words.len())];
+                if start < end {
+                    (start.clone(), end.clone())
+                } else {
+                    (end.clone(), start.clone())
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_range_scan_dictionary_with_random_ranges() {
+        let mut trie: Tree<VariableSizeKey, u16> = Tree::<VariableSizeKey, u16>::new();
+        let mut btree = BTreeMap::new();
+
+        // Load words from the dictionary
+        let words = load_words();
+
+        // Insert all words into both the trie and the BTreeMap
+        for (i, word) in words.iter().enumerate() {
+            let key = &VariableSizeKey::from_str(word).unwrap();
+            trie.insert(key, i as u16, 0, 0).unwrap();
+            btree.insert(word.as_bytes().to_vec(), i as u16);
+        }
+
+        // Generate random range tests
+        let range_tests = generate_random_ranges(&words, 100);
+
+        for (start, end) in range_tests {
+            let range_start = VariableSizeKey::from_slice_with_termination(start.as_bytes());
+            let range_end = VariableSizeKey::from_slice_with_termination(end.as_bytes());
+
+            // Inclusive-Inclusive
+            let trie_results_incl_incl: Vec<_> = trie
+                .range(range_start.clone()..=range_end.clone())
+                .collect();
+            let btree_results_incl_incl: Vec<_> = btree
+                .range(start.as_bytes().to_vec()..=end.as_bytes().to_vec())
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            let trie_expected_incl_incl: Vec<_> = trie_results_incl_incl
+                .iter()
+                .map(|(k, v, _, _)| {
+                    let key_without_last_byte = &k[..k.len() - 1];
+                    (key_without_last_byte.to_vec(), **v)
+                })
+                .collect();
+            assert_eq!(
+                trie_expected_incl_incl, btree_results_incl_incl,
+                "Inclusive-Inclusive range scan from {} to {} failed",
+                start, end
+            );
+
+            // Inclusive-Exclusive
+            let trie_results_incl_excl: Vec<_> =
+                trie.range(range_start.clone()..range_end.clone()).collect();
+            let btree_results_incl_excl: Vec<_> = btree
+                .range(start.as_bytes().to_vec()..end.as_bytes().to_vec())
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            let trie_expected_incl_excl: Vec<_> = trie_results_incl_excl
+                .iter()
+                .map(|(k, v, _, _)| {
+                    let key_without_last_byte = &k[..k.len() - 1];
+                    (key_without_last_byte.to_vec(), **v)
+                })
+                .collect();
+            assert_eq!(
+                trie_expected_incl_excl, btree_results_incl_excl,
+                "Inclusive-Exclusive range scan from {} to {} failed",
+                start, end
+            );
+        }
+    }
 }
