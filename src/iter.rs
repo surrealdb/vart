@@ -1221,64 +1221,19 @@ mod tests {
         let mut tree: Tree<VariableSizeKey, u16> = Tree::<VariableSizeKey, u16>::new();
         let mut map: BTreeMap<VariableSizeKey, u16> = BTreeMap::new();
         let keys = vec![
-            VariableSizeKey::from_slice(&[47, 33, 110, 115, 116, 101, 115, 116, 0, 0]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 33, 100, 98, 116, 101, 115, 116, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 33, 116, 98, 116, 101,
-                115, 116, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 98, 57, 110, 115, 54, 112, 109, 115, 97, 51, 115, 98, 115, 112,
-                48, 104, 106, 110, 122, 119, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 103, 112, 52, 54, 108, 51, 105, 50, 99, 106, 53, 55, 119, 106,
-                97, 52, 107, 49, 56, 103, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 54, 101, 110, 105, 114, 119, 114, 109, 99, 113, 119, 100, 105,
-                50, 120, 106, 100, 56, 113, 104, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 101, 104, 107, 49, 56, 98, 112, 55, 109, 110, 53, 52, 112, 102,
-                114, 120, 49, 53, 50, 51, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 121, 99, 97, 100, 103, 116, 101, 53, 122, 49, 117, 117, 99, 52,
-                50, 52, 110, 105, 113, 119, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 118, 53, 56, 51, 114, 107, 99, 100, 57, 108, 50, 116, 109, 108,
-                57, 109, 115, 55, 111, 57, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 102, 121, 108, 104, 53, 97, 48, 99, 121, 57, 107, 104, 107, 118,
-                99, 50, 110, 107, 121, 103, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 117, 103, 104, 105, 116, 121, 117, 97, 112, 48, 102, 108, 109,
-                114, 115, 115, 118, 104, 121, 102, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 109, 107, 108, 102, 53, 106, 50, 57, 121, 116, 98, 98, 111, 52,
-                57, 55, 104, 108, 104, 113, 0, 0,
-            ]),
-            VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 0, 0, 0, 1, 117, 102, 104, 49, 111, 98, 113, 100, 108, 116, 110, 106, 52,
-                108, 114, 116, 53, 57, 121, 52, 0, 0,
-            ]),
+            VariableSizeKey::from_string(&"/!nstest".to_string()),
+            VariableSizeKey::from_string(&"/*test!dbtest".to_string()),
+            VariableSizeKey::from_string(&"/*test*test!tbtest".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*b9ns6pmsa3sbsp0hjnzw".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*gp46l3i2cj57wja4k18g".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*6enirwrmcqwdi2xjd8qh".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*ehk18bp7mn54pfrx1523".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*ycadgte5z1uuc424niqw".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*v583rkcd9l2tml9ms7o9".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*fylh5a0cy9khkvc2nkyg".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*ughityuap0flmrssvhyf".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*mklf5j29ytbbo497hlhq".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*ufh1obqdltnj4lrt59y4".to_string()),
         ];
 
         for key in &keys {
@@ -1295,14 +1250,9 @@ mod tests {
     #[test]
     fn test_trie_vs_btreemap_range_scan_in_sdb_insert() {
         let (trie, map) = setup_trie_and_btreemap();
-        let range = VariableSizeKey::from_slice(&[
-            47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0,
-            42, 0, 0,
-        ])
-            ..VariableSizeKey::from_slice(&[
-                47, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116, 0, 42, 116, 101, 115, 116,
-                0, 42, 255, 0,
-            ]);
+        let range = VariableSizeKey::from_string(&"/*test*test*test*".to_string())
+            ..VariableSizeKey::from_string(&"/*test*test*test*�".to_string());
+
         let trie_results: Vec<_> = trie.range(range.clone()).collect();
         let map_results: Vec<_> = map.range(range).collect();
 
