@@ -596,7 +596,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             NodeType::Node16(_) => "Node16".to_string(),
             NodeType::Node48(_) => "Node48".to_string(),
             NodeType::Node256(_) => "Node256".to_string(),
-            NodeType::Twig(_) => "twig".to_string(),
+            NodeType::Twig(_) => "Twig".to_string(),
         }
     }
 

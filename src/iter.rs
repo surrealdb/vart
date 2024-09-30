@@ -3,7 +3,7 @@ use std::ops::RangeBounds;
 use std::sync::Arc;
 
 use crate::art::{Node, NodeType, QueryType};
-use crate::node::LeafValue;
+use crate::node::{LeafValue, TwigNode};
 use crate::KeyTrait;
 
 type NodeIterator<'a, P, V> = Box<dyn DoubleEndedIterator<Item = (u8, &'a Arc<Node<P, V>>)> + 'a>;
@@ -203,6 +203,7 @@ struct ForwardIterState<'a, P: KeyTrait + 'a, V: Clone> {
     iters: Vec<NodeIter<'a, P, V>>,
     leafs: VecDeque<Leaf<'a, P, V>>,
     is_versioned: bool,
+    prefix: Vec<u8>,
 }
 
 impl<'a, P: KeyTrait + 'a, V: Clone> ForwardIterState<'a, P, V> {
@@ -232,6 +233,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> ForwardIterState<'a, P, V> {
             iters,
             leafs,
             is_versioned,
+            prefix: node.prefix().as_slice().to_vec(),
         }
     }
 
@@ -240,6 +242,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> ForwardIterState<'a, P, V> {
             iters: Vec::new(),
             leafs: VecDeque::new(),
             is_versioned: false,
+            prefix: Vec::new(),
         }
     }
 
@@ -267,6 +270,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> ForwardIterState<'a, P, V> {
             iters,
             leafs,
             is_versioned,
+            prefix: node.prefix().as_slice().to_vec(),
         }
     }
 
@@ -290,6 +294,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> ForwardIterState<'a, P, V> {
             iters,
             leafs,
             is_versioned: false,
+            prefix: node.prefix().as_slice().to_vec(),
         }
     }
 }
@@ -337,6 +342,8 @@ pub struct Range<'a, K: KeyTrait, V: Clone, R> {
     forward: ForwardIterState<'a, K, V>,
     range: R,
     is_versioned: bool,
+    prefix: Vec<u8>,
+    prefix_lengths: Vec<usize>,
 }
 
 impl<'a, K: KeyTrait, V: Clone, R> Range<'a, K, V, R>
@@ -349,6 +356,8 @@ where
             forward: ForwardIterState::empty(),
             range,
             is_versioned: false,
+            prefix: Vec::new(),
+            prefix_lengths: Vec::new(),
         }
     }
 
@@ -356,12 +365,18 @@ where
     where
         R: RangeBounds<K>,
     {
+        let forward = node.map_or_else(ForwardIterState::empty, |n| {
+            ForwardIterState::forward_scan(n, &range, false)
+        });
+
+        let prefix = forward.prefix.clone();
+
         Self {
-            forward: node.map_or_else(ForwardIterState::empty, |n| {
-                ForwardIterState::forward_scan(n, &range, false)
-            }),
+            forward,
             range,
             is_versioned: false,
+            prefix,
+            prefix_lengths: Vec::new(),
         }
     }
 
@@ -369,14 +384,110 @@ where
     where
         R: RangeBounds<K>,
     {
+        let forward = node.map_or_else(ForwardIterState::empty, |n| {
+            ForwardIterState::forward_scan(n, &range, true)
+        });
+
+        let prefix = forward.prefix.clone();
+
         Self {
-            forward: node.map_or_else(ForwardIterState::empty, |n| {
-                ForwardIterState::forward_scan(n, &range, true)
-            }),
+            forward,
             range,
             is_versioned: true,
+            prefix,
+            prefix_lengths: Vec::new(),
         }
     }
+
+    #[inline]
+    fn handle_twig(&mut self, twig: &'a TwigNode<K, V>) {
+        if self.is_versioned {
+            for leaf in twig.iter() {
+                self.forward.leafs.push_back(Leaf(&twig.key, leaf));
+            }
+        } else if let Some(v) = twig.get_latest_leaf() {
+            self.forward.leafs.push_back(Leaf(&twig.key, v));
+        }
+    }
+}
+
+#[inline]
+fn is_key_out_of_range<K: KeyTrait, R>(range: &R, key: &K) -> bool
+where
+    R: RangeBounds<K>,
+{
+    match range.end_bound() {
+        Bound::Included(k) => key > k,
+        Bound::Excluded(k) => key >= k,
+        Bound::Unbounded => false,
+    }
+}
+
+fn handle_non_twig_node<'a, K, V, R>(
+    prefix: &mut Vec<u8>,
+    prefix_lengths: &mut Vec<usize>,
+    range: &R,
+    node: &'a Arc<Node<K, V>>,
+    iters: &mut Vec<NodeIter<'a, K, V>>,
+) where
+    K: KeyTrait + 'a,
+    R: RangeBounds<K>,
+    V: Clone + 'a,
+{
+    let prefix_len_before = prefix.len();
+    prefix.extend_from_slice(node.prefix().as_slice());
+
+    let prefix_slice = prefix.as_slice();
+    let prefix_len_after = prefix_slice.len();
+
+    let start_bound_slice = get_bound_slice(range.start_bound(), prefix_len_after);
+    let end_bound_slice = get_bound_slice(range.end_bound(), prefix_len_after);
+
+    if is_slice_within_bounds(prefix_slice, start_bound_slice, end_bound_slice, range) {
+        iters.push(NodeIter::new(node.iter()));
+        prefix_lengths.push(prefix_len_before);
+    } else {
+        prefix.truncate(prefix_len_before);
+    }
+}
+
+#[inline]
+fn get_bound_slice<K>(bound: Bound<&K>, prefix_len: usize) -> &[u8]
+where
+    K: KeyTrait,
+{
+    match bound {
+        Bound::Included(bound) | Bound::Excluded(bound) => {
+            &bound.as_slice()[..prefix_len.min(bound.as_slice().len())]
+        }
+        Bound::Unbounded => &[],
+    }
+}
+
+#[inline]
+fn is_slice_within_bounds<K, R>(
+    prefix_slice: &[u8],
+    start_bound_slice: &[u8],
+    end_bound_slice: &[u8],
+    range: &R,
+) -> bool
+where
+    K: KeyTrait,
+    R: RangeBounds<K>,
+{
+    let within_start_bound = match range.start_bound() {
+        Bound::Included(_) => prefix_slice >= start_bound_slice,
+        Bound::Excluded(_) => prefix_slice > start_bound_slice,
+        Bound::Unbounded => true,
+    };
+
+    let within_end_bound = match range.end_bound() {
+        Bound::Included(_) => prefix_slice <= end_bound_slice,
+        Bound::Excluded(_) => prefix_slice <= end_bound_slice,
+        Bound::Unbounded => true,
+    };
+
+    within_start_bound && within_end_bound
 }
 
 impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K, V, R> {
@@ -384,34 +495,28 @@ impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(node) = self.forward.iters.last_mut() {
-            let e = node.next();
-            match e {
-                Some(other) => {
-                    if let NodeType::Twig(twig) = &other.1.node_type {
-                        if self.range.contains(&twig.key) {
-                            // If the query is versioned, iterate over all versions of the key
-                            // and add them to the leafs queue. Otherwise, add the latest version.
-                            if self.is_versioned {
-                                for leaf in twig.iter() {
-                                    self.forward.leafs.push_back(Leaf(&twig.key, leaf));
-                                }
-                            } else if let Some(v) = twig.get_latest_leaf() {
-                                self.forward.leafs.push_back(Leaf(&twig.key, v));
-                            }
-                            break;
-                        } else {
-                            match self.range.end_bound() {
-                                Bound::Included(k) if &twig.key > k => self.forward.iters.clear(),
-                                Bound::Excluded(k) if &twig.key >= k => self.forward.iters.clear(),
-                                _ => {}
-                            }
-                        }
-                    } else {
-                        self.forward.iters.push(NodeIter::new(other.1.iter()));
+            if let Some(other) = node.next() {
+                if let NodeType::Twig(twig) = &other.1.node_type {
+                    if self.range.contains(&twig.key) {
+                        self.handle_twig(twig);
+                        break;
+                    } else if is_key_out_of_range(&self.range, &twig.key) {
+                        self.forward.iters.clear();
                     }
+                } else {
+                    handle_non_twig_node(
+                        &mut self.prefix,
+                        &mut self.prefix_lengths,
+                        &self.range,
+                        other.1,
+                        &mut self.forward.iters,
+                    );
                 }
-                None => {
-                    self.forward.iters.pop();
+            } else {
+                self.forward.iters.pop();
+                // Restore the prefix to its previous state
+                if let Some(prefix_len_before) = self.prefix_lengths.pop() {
+                    self.prefix.truncate(prefix_len_before);
                 }
             }
         }
@@ -475,39 +580,51 @@ where
         ForwardIterState::scan_at(n, &range, query_type)
     });
 
+    let mut prefix = forward.prefix.clone();
+    let mut prefix_lengths = Vec::new();
+
     while let Some(node) = forward.iters.last_mut() {
-        if let Some((_, res)) = node.next() {
-            if let NodeType::Twig(twig) = &res.node_type {
-                if range.contains(&twig.key) {
-                    // Iterate through leaves of the twig
-                    if let Some(leaf) = twig.get_leaf_by_query(query_type) {
-                        let key = twig.key.as_slice().to_vec();
-                        if include_values {
-                            results.push((key, Some(leaf.value.clone())));
-                        } else {
-                            results.push((key, None));
+        let e = node.next();
+        match e {
+            Some(other) => {
+                if let NodeType::Twig(twig) = &other.1.node_type {
+                    if range.contains(&twig.key) {
+                        // Iterate through leaves of the twig
+                        if let Some(leaf) = twig.get_leaf_by_query(query_type) {
+                            let key = twig.key.as_slice().to_vec();
+                            if include_values {
+                                results.push((key, Some(leaf.value.clone())));
+                            } else {
+                                results.push((key, None));
+                            }
                         }
+                    } else if is_key_out_of_range(&range, &twig.key) {
+                        // stop iteration if the range end is exceeded
+                        forward.iters.clear()
                     }
                 } else {
-                    // stop iteration if the range end is exceeded
-                    match range.end_bound() {
-                        Bound::Included(k) if &twig.key > k => forward.iters.clear(),
-                        Bound::Excluded(k) if &twig.key >= k => forward.iters.clear(),
-                        _ => {}
-                    }
+                    handle_non_twig_node(
+                        &mut prefix,
+                        &mut prefix_lengths,
+                        &range,
+                        other.1,
+                        &mut forward.iters,
+                    );
                 }
-            } else {
-                // Push the iterator if it is not a leaf node
-                forward.iters.push(NodeIter::new(res.iter()));
             }
-        } else {
-            // Pop the iterator if no more elements
-            forward.iters.pop();
+            None => {
+                // Pop the iterator if no more elements
+                forward.iters.pop();
+                // Restore the prefix to its previous state
+                if let Some(prefix_len_before) = prefix_lengths.pop() {
+                    prefix.truncate(prefix_len_before);
+                }
+            }
         }
     }
 
     // Iterate over all leafs in forward.leafs and append them to results
-    for leaf in forward.leafs {
+    while let Some(leaf) = forward.leafs.pop_front() {
         let key = leaf.0.as_slice().to_vec();
         let value = if include_values {
             Some(leaf.1.value.clone())
@@ -524,9 +641,15 @@ where
 mod tests {
     use rand::thread_rng;
     use rand::Rng;
+    use std::collections::BTreeMap;
     use std::collections::HashMap;
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+    use std::str::FromStr;
 
     use crate::art::Tree;
+
+    use crate::VariableSizeKey;
     use crate::{FixedSizeKey, Key};
 
     fn from_be_bytes_key(k: &[u8]) -> u64 {
@@ -865,5 +988,444 @@ mod tests {
         bwd.reverse();
         fwd.append(&mut bwd);
         assert_eq!(expected, fwd);
+    }
+
+    fn setup_trie() -> Tree<VariableSizeKey, u16> {
+        let mut tree: Tree<VariableSizeKey, u16> = Tree::<VariableSizeKey, u16>::new();
+        let words = vec![
+            ("apple", 1),
+            ("apricot", 2),
+            ("banana", 3),
+            ("blackberry", 4),
+            ("blueberry", 5),
+            ("cherry", 6),
+            ("date", 7),
+            ("fig", 8),
+            ("grape", 9),
+            ("kiwi", 10),
+        ];
+
+        for (word, value) in words {
+            let key = &VariableSizeKey::from_str(word).unwrap();
+            tree.insert(key, value, 0, 0).unwrap();
+        }
+
+        tree
+    }
+
+    #[test]
+    fn test_range_scan_full_range() {
+        let trie = setup_trie();
+        let range = VariableSizeKey::from_slice_with_termination("berry".as_bytes())
+            ..=VariableSizeKey::from_slice_with_termination("kiwi".as_bytes());
+        let results: Vec<_> = trie.range(range).collect();
+
+        let expected = vec![
+            (b"blackberry\0".to_vec(), &4, &4, &0),
+            (b"blueberry\0".to_vec(), &5, &5, &0),
+            (b"cherry\0".to_vec(), &6, &6, &0),
+            (b"date\0".to_vec(), &7, &7, &0),
+            (b"fig\0".to_vec(), &8, &8, &0),
+            (b"grape\0".to_vec(), &9, &9, &0),
+            (b"kiwi\0".to_vec(), &10, &10, &0),
+        ];
+
+        println!("{} {:?}", results.len(), results);
+        assert_eq!(results, expected);
+    }
+
+    fn setup_btree() -> BTreeMap<Vec<u8>, u16> {
+        let mut btree = BTreeMap::new();
+        let words = vec![
+            ("apple", 1u16),
+            ("apricot", 2),
+            ("banana", 3),
+            ("blackberry", 4),
+            ("blueberry", 5),
+            ("cherry", 6),
+            ("date", 7),
+            ("fig", 8),
+            ("grape", 9),
+            ("kiwi", 10),
+        ];
+
+        for (word, value) in words {
+            btree.insert(word.as_bytes().to_vec(), value);
+        }
+
+        btree
+    }
+
+    #[test]
+    fn test_full_scan() {
+        let trie = setup_trie();
+        let btree = setup_btree();
+
+        let range_start = VariableSizeKey::from_slice_with_termination("berry".as_bytes());
+        let range_end = VariableSizeKey::from_slice_with_termination("kiwi".as_bytes());
+        let trie_results: Vec<_> = trie.range(range_start..=range_end).collect();
+
+        let btree_range = b"berry".to_vec()..=b"kiwi".to_vec();
+        let btree_results: Vec<_> = btree
+            .range(btree_range)
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+
+        let trie_expected: Vec<_> = trie_results
+            .iter()
+            .map(|(k, v, _, _)| {
+                let key_without_last_byte = &k[..k.len() - 1];
+                (key_without_last_byte.to_vec(), **v)
+            })
+            .collect();
+
+        assert_eq!(trie_expected, btree_results);
+    }
+
+    #[test]
+    fn test_range_scan_large_words() {
+        let mut trie: Tree<VariableSizeKey, u16> = Tree::<VariableSizeKey, u16>::new();
+        let mut btree = BTreeMap::new();
+
+        // Insert a large number of words
+        for i in 0..10000 {
+            let word = format!("word{:05}", i);
+            let key = &VariableSizeKey::from_str(&word).unwrap();
+            trie.insert(key, i as u16, 0, 0).unwrap();
+            btree.insert(word.as_bytes().to_vec(), i as u16);
+        }
+
+        // Define a range within the dataset
+        let range_start = VariableSizeKey::from_slice_with_termination("word05000".as_bytes());
+        let range_end = VariableSizeKey::from_slice_with_termination("word05999".as_bytes());
+        let trie_results: Vec<_> = trie.range(range_start..=range_end).collect();
+
+        let btree_range = b"word05000".to_vec()..=b"word05999".to_vec();
+        let btree_results: Vec<_> = btree
+            .range(btree_range)
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+
+        let trie_expected: Vec<_> = trie_results
+            .iter()
+            .map(|(k, v, _, _)| {
+                let key_without_last_byte = &k[..k.len() - 1];
+                (key_without_last_byte.to_vec(), **v)
+            })
+            .collect();
+
+        assert_eq!(trie_expected, btree_results);
+    }
+
+    fn load_words() -> Vec<String> {
+        let file = File::open("testdata/words.txt").expect("Unable to open words.txt");
+        let reader = BufReader::new(file);
+        reader.lines().map(|line| line.unwrap()).collect()
+    }
+
+    #[test]
+    fn test_range_scan_dictionary() {
+        let mut trie: Tree<VariableSizeKey, u16> = Tree::<VariableSizeKey, u16>::new();
+        let mut btree = BTreeMap::new();
+
+        // Load words from the dictionary
+        let words = load_words();
+
+        // Insert all words into both the trie and the BTreeMap
+        for (i, word) in words.iter().enumerate() {
+            let key = &VariableSizeKey::from_str(word).unwrap();
+            trie.insert(key, i as u16, 0, 0).unwrap();
+            btree.insert(word.as_bytes().to_vec(), i as u16);
+        }
+
+        // Define different types of range scans
+        let range_tests = vec![
+            ("a", "z"),              // Full range
+            ("apple", "banana"),     // Partial range
+            ("zzz", "zzzz"),         // Empty range
+            ("apple", "apple"),      // Single element range
+            ("a", "apple"),          // Edge case: start at the beginning
+            ("kiwi", "z"),           // Edge case: end at the last element
+            ("banana", "banana"),    // Single element range
+            ("apple", "apricot"),    // Partial range within close keys
+            ("fig", "grape"),        // Partial range in the middle
+            ("ap", "apz"),           // Prefix range
+            ("apricot", "apricot"),  // Single element range with non-existent key
+            ("apple", "apples"),     // Overlapping range
+            ("Apple", "apple"),      // Mixed case sensitivity
+            ("banana", "bananas"),   // Overlapping range with non-existent key
+            ("grape", "grapefruit"), // Overlapping range with close keys
+            ("a", "b"),              // Minute alphabet range
+            ("a", "m"),              // Large alphabet range
+            ("a", "a"),              // Single character range
+            ("apple", "applf"),      // Overlapping range with close keys
+            ("kiwi", "kiwz"),        // Overlapping range with close keys
+            ("apple", "applz"),      // Overlapping range with close keys
+            ("a", "aa"),             // Small alphabet range
+            ("a", "az"),             // Large alphabet range
+            ("m", "z"),              // Large alphabet range
+            ("apple", "applea"),     // Single element range with non-existent key
+            ("apple", "applez"),     // Overlapping range with close keys
+            ("kiwi", "kiwib"),       // Overlapping range with close keys
+        ];
+
+        for (start, end) in range_tests {
+            let range_start = VariableSizeKey::from_slice_with_termination(start.as_bytes());
+            let range_end = VariableSizeKey::from_slice_with_termination(end.as_bytes());
+
+            // Inclusive-Inclusive
+            let trie_results_incl_incl: Vec<_> = trie
+                .range(range_start.clone()..=range_end.clone())
+                .collect();
+            let btree_results_incl_incl: Vec<_> = btree
+                .range(start.as_bytes().to_vec()..=end.as_bytes().to_vec())
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            let trie_expected_incl_incl: Vec<_> = trie_results_incl_incl
+                .iter()
+                .map(|(k, v, _, _)| {
+                    let key_without_last_byte = &k[..k.len() - 1];
+                    (key_without_last_byte.to_vec(), **v)
+                })
+                .collect();
+            assert_eq!(
+                trie_expected_incl_incl, btree_results_incl_incl,
+                "Inclusive-Inclusive range scan from {} to {} failed",
+                start, end
+            );
+
+            // Inclusive-Exclusive
+            let trie_results_incl_excl: Vec<_> =
+                trie.range(range_start.clone()..range_end.clone()).collect();
+            let btree_results_incl_excl: Vec<_> = btree
+                .range(start.as_bytes().to_vec()..end.as_bytes().to_vec())
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            let trie_expected_incl_excl: Vec<_> = trie_results_incl_excl
+                .iter()
+                .map(|(k, v, _, _)| {
+                    let key_without_last_byte = &k[..k.len() - 1];
+                    (key_without_last_byte.to_vec(), **v)
+                })
+                .collect();
+            assert_eq!(
+                trie_expected_incl_excl, btree_results_incl_excl,
+                "Inclusive-Exclusive range scan from {} to {} failed",
+                start, end
+            );
+        }
+    }
+
+    // simulate an insert operation in surrealdb insert statement
+    fn setup_trie_and_btreemap() -> (Tree<VariableSizeKey, u16>, BTreeMap<VariableSizeKey, u16>) {
+        let mut tree: Tree<VariableSizeKey, u16> = Tree::<VariableSizeKey, u16>::new();
+        let mut map: BTreeMap<VariableSizeKey, u16> = BTreeMap::new();
+        let keys = vec![
+            VariableSizeKey::from_string(&"/!nstest".to_string()),
+            VariableSizeKey::from_string(&"/*test!dbtest".to_string()),
+            VariableSizeKey::from_string(&"/*test*test!tbtest".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*b9ns6pmsa3sbsp0hjnzw".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*gp46l3i2cj57wja4k18g".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*6enirwrmcqwdi2xjd8qh".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*ehk18bp7mn54pfrx1523".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*ycadgte5z1uuc424niqw".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*v583rkcd9l2tml9ms7o9".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*fylh5a0cy9khkvc2nkyg".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*ughityuap0flmrssvhyf".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*mklf5j29ytbbo497hlhq".to_string()),
+            VariableSizeKey::from_string(&"/*test*test*test*ufh1obqdltnj4lrt59y4".to_string()),
+        ];
+
+        for key in &keys {
+            tree.insert(key, 1, 0, 0).unwrap();
+        }
+
+        for key in keys {
+            map.insert(key, 1);
+        }
+
+        (tree, map)
+    }
+
+    #[test]
+    fn test_trie_vs_btreemap_range_scan_in_sdb_insert() {
+        let (trie, map) = setup_trie_and_btreemap();
+        let range = VariableSizeKey::from_string(&"/*test*test*test*".to_string())
+            ..VariableSizeKey::from_string(&"/*test*test*test*�".to_string());
+
+        let trie_results: Vec<_> = trie.range(range.clone()).collect();
+        let map_results: Vec<_> = map.range(range).collect();
+
+        let trie_expected: Vec<_> = trie_results
+            .iter()
+            .map(|(k, v, _, _)| (k.to_vec(), **v))
+            .collect();
+
+        let map_expected: Vec<_> = map_results
+            .iter()
+            .map(|(k, v)| (k.as_slice().to_vec(), **v))
+            .collect();
+
+        assert_eq!(
+            trie_expected, map_expected,
+            "Range scan results do not match between Trie and BTreeMap"
+        );
+    }
+
+    #[test]
+    fn test_range_scan_with_random_words_and_ranges() {
+        let mut trie: Tree<VariableSizeKey, u16> = Tree::<VariableSizeKey, u16>::new();
+        let mut btree = BTreeMap::new();
+
+        // Generate random words
+        let words = generate_random_words(10000, 10..20);
+
+        // Insert all words into both the trie and the BTreeMap
+        for (i, word) in words.iter().enumerate() {
+            let key = &VariableSizeKey::from_str(word).unwrap();
+            trie.insert(key, i as u16, 0, 0).unwrap();
+            btree.insert(word.as_bytes().to_vec(), i as u16);
+        }
+
+        // Generate random range tests
+        let range_tests = generate_random_ranges(&words, 100);
+
+        for (start, end) in range_tests {
+            let range_start = VariableSizeKey::from_slice_with_termination(start.as_bytes());
+            let range_end = VariableSizeKey::from_slice_with_termination(end.as_bytes());
+
+            // Inclusive-Inclusive
+            let trie_results_incl_incl: Vec<_> = trie
+                .range(range_start.clone()..=range_end.clone())
+                .collect();
+            let btree_results_incl_incl: Vec<_> = btree
+                .range(start.as_bytes().to_vec()..=end.as_bytes().to_vec())
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            let trie_expected_incl_incl: Vec<_> = trie_results_incl_incl
+                .iter()
+                .map(|(k, v, _, _)| {
+                    let key_without_last_byte = &k[..k.len() - 1];
+                    (key_without_last_byte.to_vec(), **v)
+                })
+                .collect();
+            assert_eq!(
+                trie_expected_incl_incl, btree_results_incl_incl,
+                "Inclusive-Inclusive range scan from {} to {} failed",
+                start, end
+            );
+
+            // Inclusive-Exclusive
+            let trie_results_incl_excl: Vec<_> =
+                trie.range(range_start.clone()..range_end.clone()).collect();
+            let btree_results_incl_excl: Vec<_> = btree
+                .range(start.as_bytes().to_vec()..end.as_bytes().to_vec())
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            let trie_expected_incl_excl: Vec<_> = trie_results_incl_excl
+                .iter()
+                .map(|(k, v, _, _)| {
+                    let key_without_last_byte = &k[..k.len() - 1];
+                    (key_without_last_byte.to_vec(), **v)
+                })
+                .collect();
+            assert_eq!(
+                trie_expected_incl_excl, btree_results_incl_excl,
+                "Inclusive-Exclusive range scan from {} to {} failed",
+                start, end
+            );
+        }
+    }
+
+    fn generate_random_words(count: usize, length_range: std::ops::Range<usize>) -> Vec<String> {
+        let mut rng = rand::thread_rng();
+        (0..count)
+            .map(|_| {
+                let length = rng.gen_range(length_range.clone());
+                (0..length)
+                    .map(|_| (rng.gen_range(b'a'..=b'z') as char))
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn generate_random_ranges(words: &[String], count: usize) -> Vec<(String, String)> {
+        let mut rng = rand::thread_rng();
+        (0..count)
+            .map(|_| {
+                let start = &words[rng.gen_range(0..words.len())];
+                let end = &words[rng.gen_range(0..words.len())];
+                if start < end {
+                    (start.clone(), end.clone())
+                } else {
+                    (end.clone(), start.clone())
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_range_scan_dictionary_with_random_ranges() {
+        let mut trie: Tree<VariableSizeKey, u16> = Tree::<VariableSizeKey, u16>::new();
+        let mut btree = BTreeMap::new();
+
+        // Load words from the dictionary
+        let words = load_words();
+
+        // Insert all words into both the trie and the BTreeMap
+        for (i, word) in words.iter().enumerate() {
+            let key = &VariableSizeKey::from_str(word).unwrap();
+            trie.insert(key, i as u16, 0, 0).unwrap();
+            btree.insert(word.as_bytes().to_vec(), i as u16);
+        }
+
+        // Generate random range tests
+        let range_tests = generate_random_ranges(&words, 100);
+
+        for (start, end) in range_tests {
+            let range_start = VariableSizeKey::from_slice_with_termination(start.as_bytes());
+            let range_end = VariableSizeKey::from_slice_with_termination(end.as_bytes());
+
+            // Inclusive-Inclusive
+            let trie_results_incl_incl: Vec<_> = trie
+                .range(range_start.clone()..=range_end.clone())
+                .collect();
+            let btree_results_incl_incl: Vec<_> = btree
+                .range(start.as_bytes().to_vec()..=end.as_bytes().to_vec())
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            let trie_expected_incl_incl: Vec<_> = trie_results_incl_incl
+                .iter()
+                .map(|(k, v, _, _)| {
+                    let key_without_last_byte = &k[..k.len() - 1];
+                    (key_without_last_byte.to_vec(), **v)
+                })
+                .collect();
+            assert_eq!(
+                trie_expected_incl_incl, btree_results_incl_incl,
+                "Inclusive-Inclusive range scan from {} to {} failed",
+                start, end
+            );
+
+            // Inclusive-Exclusive
+            let trie_results_incl_excl: Vec<_> =
+                trie.range(range_start.clone()..range_end.clone()).collect();
+            let btree_results_incl_excl: Vec<_> = btree
+                .range(start.as_bytes().to_vec()..end.as_bytes().to_vec())
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            let trie_expected_incl_excl: Vec<_> = trie_results_incl_excl
+                .iter()
+                .map(|(k, v, _, _)| {
+                    let key_without_last_byte = &k[..k.len() - 1];
+                    (key_without_last_byte.to_vec(), **v)
+                })
+                .collect();
+            assert_eq!(
+                trie_expected_incl_excl, btree_results_incl_excl,
+                "Inclusive-Exclusive range scan from {} to {} failed",
+                start, end
+            );
+        }
     }
 }
