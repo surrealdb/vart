@@ -638,7 +638,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         commit_version: u64,
         ts: u64,
         depth: usize,
-    ) -> (NodeArc<P, V>, Option<V>) {
+    ) -> NodeArc<P, V> {
         // Obtain the current node's prefix and its length.
         let cur_node_prefix = cur_node.prefix().clone();
         let cur_node_prefix_len = cur_node.prefix().len();
@@ -660,21 +660,9 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         if let NodeType::Twig(ref twig) = &cur_node.node_type {
             if is_prefix_match && cur_node_prefix.len() == key_prefix.len() {
                 let new_twig = twig.insert(value, commit_version, ts);
-                if let Some(old_val) = twig.get_leaf_by_version(commit_version) {
-                    return (
-                        Arc::new(Node {
-                            node_type: NodeType::Twig(new_twig),
-                        }),
-                        Some(old_val.value.clone()),
-                    );
-                } else {
-                    return (
-                        Arc::new(Node {
-                            node_type: NodeType::Twig(new_twig),
-                        }),
-                        None,
-                    );
-                }
+                return Arc::new(Node {
+                    node_type: NodeType::Twig(new_twig),
+                });
             }
         }
 
@@ -694,14 +682,14 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 ts,
             );
             n4 = n4.add_child(k1, old_node).add_child(k2, new_twig);
-            return (Arc::new(n4), None);
+            return Arc::new(n4);
         }
 
         // Continue the insertion process by finding or creating the appropriate child node for the next character.
         let k = key_prefix[longest_common_prefix];
         let child_for_key = cur_node.find_child(k);
         if let Some(child) = child_for_key {
-            let (new_child, old_value) = Node::insert_recurse(
+            let new_child = Node::insert_recurse(
                 child,
                 key,
                 value,
@@ -710,7 +698,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 depth + longest_common_prefix,
             );
             let new_node = cur_node.replace_child(k, new_child);
-            return (Arc::new(new_node), old_value);
+            return Arc::new(new_node);
         }
 
         // If no child exists for the key's character, create a new Twig node and add it as a child.
@@ -722,7 +710,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             ts,
         );
         let new_node = cur_node.add_child(k, new_twig);
-        (Arc::new(new_node), None)
+        Arc::new(new_node)
     }
 
     /// Removes a key recursively from the node and its children.
@@ -925,20 +913,17 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         version: u64,
         ts: u64,
         check_version: bool,
-    ) -> Result<Option<V>, TrieError> {
-        let (new_root, old_node) = match &self.root {
+    ) -> Result<(), TrieError> {
+        let new_root = match &self.root {
             None => {
                 let commit_version = if version == 0 { 1 } else { version };
-                (
-                    Arc::new(Node::new_twig(
-                        key.as_slice().into(),
-                        key.as_slice().into(),
-                        value,
-                        commit_version,
-                        ts,
-                    )),
-                    None,
-                )
+                Arc::new(Node::new_twig(
+                    key.as_slice().into(),
+                    key.as_slice().into(),
+                    value,
+                    commit_version,
+                    ts,
+                ))
             }
             Some(root) => {
                 let curr_version = root.version();
@@ -954,7 +939,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 
         self.root = Some(new_root);
         self.size += 1;
-        Ok(old_node)
+        Ok(())
     }
 
     /// Inserts a new key-value pair with the specified version into the Trie.
@@ -978,13 +963,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     ///
     /// Returns an error if the given version is older than the root's current version.
     ///
-    pub fn insert(
-        &mut self,
-        key: &P,
-        value: V,
-        version: u64,
-        ts: u64,
-    ) -> Result<Option<V>, TrieError> {
+    pub fn insert(&mut self, key: &P, value: V, version: u64, ts: u64) -> Result<(), TrieError> {
         self.insert_common(key, value, version, ts, true)
     }
 
@@ -994,7 +973,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         value: V,
         version: u64,
         ts: u64,
-    ) -> Result<Option<V>, TrieError> {
+    ) -> Result<(), TrieError> {
         self.insert_common(key, value, version, ts, false)
     }
 
@@ -1038,7 +1017,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                     )))
                 }
                 Some(root) => {
-                    let (new_node, _) = Node::insert_recurse(
+                    let new_node = Node::insert_recurse(
                         root,
                         &new_kv.key,
                         new_kv.value,
@@ -1368,12 +1347,19 @@ mod tests {
         // First insertion
         let key = VariableSizeKey::from_str("abc").unwrap();
         let value = 1;
-        let result = tree.insert(&key, value, 0, 0).expect("Failed to insert");
-        assert!(result.is_none());
+        tree.insert(&key, value, 0, 0).expect("Failed to insert");
+        let (val, version, ts) = tree.get(&key, 0).unwrap();
+        assert!(val == value);
+        assert!(version == 1);
+        assert!(ts == 0);
 
         // Second insertion (duplicate)
-        let result = tree.insert(&key, value, 0, 0).expect("Failed to insert");
-        assert!(result.is_some());
+        let value = 2;
+        tree.insert(&key, value, 0, 0).expect("Failed to insert");
+        let (val, version, ts) = tree.get(&key, 0).unwrap();
+        assert!(val == value);
+        assert!(version == 2);
+        assert!(ts == 0);
     }
 
     // Inserting a single value into the tree and removing it should result in a nil tree root.
