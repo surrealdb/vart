@@ -1004,7 +1004,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         check_version: bool,
     ) -> Result<(), TrieError> {
         let curr_version = self.version();
-        let mut new_version = 0;
 
         for kv in kv_pairs {
             let k = kv.key.clone(); // Clone the key
@@ -1051,11 +1050,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
             }
 
             self.size += 1;
-
-            // Update new_version if necessary
-            if t > new_version {
-                new_version = t;
-            }
         }
 
         Ok(())
