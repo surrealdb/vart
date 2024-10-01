@@ -986,12 +986,10 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         let mut new_version = 0;
 
         for kv in kv_pairs {
-            let k = kv.key.clone(); // Clone the key
-            let v = kv.value.clone(); // Clone the value
             let mut t = kv.version;
 
             if t == 0 {
-                // Zero-valued timestamps are associated with current time plus one
+                // Zero-valued versions are associated with current version plus one
                 t = curr_version + 1;
             } else if check_version && (curr_version >= kv.version) {
                 return Err(TrieError::VersionIsOld);
@@ -999,8 +997,8 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 
             // Create a new KV instance
             let new_kv = KV {
-                key: k,
-                value: v,
+                key: &kv.key,
+                value: kv.value.clone(),
                 version: t,
                 ts: kv.ts,
             };
@@ -1019,7 +1017,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                 Some(root) => {
                     let new_node = Node::insert_recurse(
                         root,
-                        &new_kv.key,
+                        new_kv.key,
                         new_kv.value,
                         new_kv.version,
                         new_kv.ts,
