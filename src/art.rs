@@ -856,26 +856,8 @@ pub struct Tree<P: KeyTrait, V: Clone> {
     pub size: usize,
 }
 
-pub struct KV<P, V> {
-    pub key: P,
-    pub value: V,
-    pub version: u64,
-    pub ts: u64,
-}
-
 // A type alias for a node reference.
 type NodeArc<P, V> = Arc<Node<P, V>>;
-
-impl<P: KeyTrait, V: Clone> KV<P, V> {
-    pub fn new(key: P, value: V, version: u64, timestamp: u64) -> Self {
-        KV {
-            key,
-            value,
-            version,
-            ts: timestamp,
-        }
-    }
-}
 
 impl<P: KeyTrait, V: Clone> NodeType<P, V> {
     fn clone(&self) -> Self {
@@ -930,7 +912,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                 let mut commit_version = version;
                 if version == 0 {
                     commit_version = curr_version + 1;
-                } else if check_version && curr_version >= version {
+                } else if check_version && curr_version > version {
                     return Err(TrieError::VersionIsOld);
                 }
                 Node::insert_recurse(root, key, value, commit_version, ts, 0)
@@ -948,6 +930,10 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// the previous value associated with the key is returned. The version `ts` is used to
     /// ensure proper ordering of values for versioning.
     ///
+    /// This method ensures that the `version` provided if equal to or greater than the
+    /// current version of the tree. If strictly greater guarantee is required, then
+    /// the caller is responsible for enforcing it.
+    ///
     /// # Arguments
     ///
     /// * `key`: A reference to the key to be inserted.
@@ -956,8 +942,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     ///
     /// # Returns
     ///
-    /// Returns `Ok(None)` if the key did not exist previously. If the key already existed,
-    /// `Ok(Some(old_value))` is returned, where `old_value` is the previous value associated with the key.
+    /// Returns `Ok(())` on success.
     ///
     /// # Errors
     ///
@@ -975,61 +960,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         ts: u64,
     ) -> Result<(), TrieError> {
         self.insert_common(key, value, version, ts, false)
-    }
-
-    pub fn bulk_insert(
-        &mut self,
-        kv_pairs: &[KV<P, V>],
-        check_version: bool,
-    ) -> Result<(), TrieError> {
-        let curr_version = self.version();
-
-        for kv in kv_pairs {
-            let mut t = kv.version;
-
-            if t == 0 {
-                // Zero-valued versions are associated with current version plus one
-                t = curr_version + 1;
-            } else if check_version && (curr_version >= kv.version) {
-                return Err(TrieError::VersionIsOld);
-            }
-
-            // Create a new KV instance
-            let new_kv = KV {
-                key: &kv.key,
-                value: kv.value.clone(),
-                version: t,
-                ts: kv.ts,
-            };
-
-            // Insert the new KV instance using the insert function
-            match &self.root {
-                None => {
-                    self.root = Some(Arc::new(Node::new_twig(
-                        new_kv.key.as_slice().into(),
-                        new_kv.key.as_slice().into(),
-                        new_kv.value,
-                        new_kv.version,
-                        new_kv.ts,
-                    )))
-                }
-                Some(root) => {
-                    let new_node = Node::insert_recurse(
-                        root,
-                        new_kv.key,
-                        new_kv.value,
-                        new_kv.version,
-                        new_kv.ts,
-                        0,
-                    );
-                    self.root = Some(new_node)
-                }
-            }
-
-            self.size += 1;
-        }
-
-        Ok(())
     }
 
     pub(crate) fn remove_from_node(
@@ -1227,7 +1157,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Tree, KV};
+    use super::Tree;
     use crate::art::QueryType;
     use crate::{FixedSizeKey, VariableSizeKey};
     use rand::{thread_rng, Rng};
@@ -1752,21 +1682,6 @@ mod tests {
     }
 
     #[test]
-    fn timed_insertion_update_equal_to_root_version() {
-        let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
-
-        let key1 = VariableSizeKey::from_str("key_1").unwrap();
-        let key2 = VariableSizeKey::from_str("key_2").unwrap();
-
-        // Initial insertion
-        assert!(tree.insert(&key1, 1, 10, 0).is_ok());
-        let initial_version = tree.version();
-
-        // Attempt update with version equal to root's version
-        assert!(tree.insert(&key2, 1, initial_version, 0).is_err());
-    }
-
-    #[test]
     fn timed_deletion_check_root_ts() {
         let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
         let key1 = VariableSizeKey::from_str("key_1").unwrap();
@@ -1948,68 +1863,6 @@ mod tests {
     }
 
     #[test]
-    fn bulk_insert() {
-        let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
-        let curr_version = tree.version();
-        // Create a vector of KV<P, V>
-        let kv_pairs = vec![
-            KV {
-                key: VariableSizeKey::from_str("key_1").unwrap(),
-                value: 1,
-                version: 0,
-                ts: 0,
-            },
-            KV {
-                key: VariableSizeKey::from_str("key_2").unwrap(),
-                value: 1,
-                version: 2,
-                ts: 0,
-            },
-            KV {
-                key: VariableSizeKey::from_str("key_3").unwrap(),
-                value: 1,
-                version: curr_version + 1,
-                ts: 0,
-            },
-            KV {
-                key: VariableSizeKey::from_str("key_4").unwrap(),
-                value: 1,
-                version: curr_version + 1,
-                ts: 0,
-            },
-            KV {
-                key: VariableSizeKey::from_str("key_5").unwrap(),
-                value: 1,
-                version: curr_version + 2,
-                ts: 0,
-            },
-            KV {
-                key: VariableSizeKey::from_str("key_6").unwrap(),
-                value: 1,
-                version: 0,
-                ts: 0,
-            },
-        ];
-
-        assert!(tree.bulk_insert(&kv_pairs, true).is_ok());
-        assert!(tree.version() == curr_version + 2);
-
-        for kv in kv_pairs {
-            let (val, version, _) = tree.get(&kv.key, 0).unwrap();
-            assert_eq!(val, kv.value);
-            if kv.version == 0 {
-                assert_eq!(version, curr_version + 1);
-            } else {
-                assert_eq!(version, kv.version);
-            }
-        }
-        assert!(tree
-            .insert(&VariableSizeKey::from_str("key_7").unwrap(), 1, 0, 0)
-            .is_ok());
-        assert!(tree.version() == curr_version + 3);
-    }
-
-    #[test]
     fn insert_and_remove() {
         let mut tree = Tree::<VariableSizeKey, i32>::new();
         let version = 0;
@@ -2155,68 +2008,6 @@ mod tests {
     #[test]
     fn test_insert_remove_and_verify_keys_large_random() {
         insert_remove_and_verify_keys(generate_random_keys(1000)); // Generate 1000 random keys
-    }
-
-    #[test]
-    fn test_bulk_insert_with_mixed_versions() {
-        let mut tree = Tree::<VariableSizeKey, i32>::new();
-        let curr_version = tree.version();
-        let kv_pairs = vec![
-            KV::new(VariableSizeKey::from_str("key_1").unwrap(), 1, 0, 0), // Version 0, should adopt curr_version + 1
-            KV::new(
-                VariableSizeKey::from_str("key_2").unwrap(),
-                2,
-                curr_version + 1,
-                0,
-            ), // Explicit version
-            KV::new(VariableSizeKey::from_str("key_3").unwrap(), 3, 0, 0), // Version 0, should adopt curr_version + 1
-        ];
-
-        assert!(tree.bulk_insert(&kv_pairs, true).is_ok());
-        assert_eq!(tree.version(), curr_version + 1);
-
-        // Verify each key's version and value
-        for kv in kv_pairs {
-            let (val, version, _) = tree.get(&kv.key, 0).unwrap();
-            assert_eq!(val, kv.value);
-            assert_eq!(version, curr_version + 1);
-        }
-    }
-
-    #[test]
-    fn test_bulk_insert_version_conflict() {
-        let mut tree = Tree::<VariableSizeKey, i32>::new();
-        let curr_version = tree.version();
-        // Insert a key with a future version
-        assert!(tree
-            .insert(
-                &VariableSizeKey::from_str("key_0").unwrap(),
-                0,
-                curr_version + 2,
-                0
-            )
-            .is_ok());
-        let curr_version = tree.version();
-
-        let kv_pairs = vec![
-            KV::new(
-                VariableSizeKey::from_str("key_1").unwrap(),
-                1,
-                curr_version,
-                0,
-            ), // Version conflict, older than current
-            KV::new(
-                VariableSizeKey::from_str("key_2").unwrap(),
-                2,
-                curr_version + 1,
-                0,
-            ), // Correct version
-        ];
-
-        // Expecting an error due to version conflict
-        assert!(tree.bulk_insert(&kv_pairs, true).is_err());
-        // Verify tree version hasn't changed due to failed insert
-        assert_eq!(tree.version(), curr_version);
     }
 
     #[test]
@@ -2426,17 +2217,10 @@ mod tests {
         let insert_words = ["test3", "test1", "test5", "test4", "test2"];
 
         // Insert keys into the tree
-        let entries: Vec<KV<VariableSizeKey, i32>> = insert_words
-            .iter()
-            .map(|word| KV {
-                key: VariableSizeKey::from_str(word).unwrap(),
-                value: 1,
-                version: 1,
-                ts: 1,
-            })
-            .collect();
-
-        tree.bulk_insert(&entries, false).unwrap();
+        for word in &insert_words {
+            tree.insert(&VariableSizeKey::from_str(word).unwrap(), 1, 1, 1)
+                .unwrap()
+        }
 
         // Define a range that encompasses all keys
         let range = VariableSizeKey::from_slice_with_termination("test1".as_bytes())
