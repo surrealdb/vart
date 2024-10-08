@@ -121,6 +121,10 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
             match e {
                 None => {
                     self.forward.iters.pop();
+                    // Restore the prefix to its previous state
+                    if let Some(prefix_len_before) = self.prefix_lengths.pop() {
+                        self.prefix.truncate(prefix_len_before);
+                    }
                 }
                 Some(other) => {
                     let key: P = self
@@ -141,7 +145,10 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
                         }
                         break;
                     } else {
+                        let prefix_len_before = self.prefix.len();
+                        self.prefix.extend_from_slice(other.1.prefix().as_slice());
                         self.forward.iters.push(NodeIter::new(other.1.iter()));
+                        self.prefix_lengths.push(prefix_len_before);
                     }
                 }
             }

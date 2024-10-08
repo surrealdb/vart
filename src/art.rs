@@ -2307,7 +2307,7 @@ mod tests {
         let mut inserted_data = Vec::new();
 
         // Generate and insert random keys with versions
-        for version in 1u64..=100 {
+        for version in 1u64..=1000 {
             let random_key: String = (0..10).map(|_| rng.sample(Alphanumeric) as char).collect();
             let key = VariableSizeKey::from_str(&random_key).unwrap();
             let value = rng.gen_range(1..100);
