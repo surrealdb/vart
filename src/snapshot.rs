@@ -32,7 +32,6 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
             None => {
                 self.root = Some(Arc::new(Node::new_twig(
                     key.as_slice().into(),
-                    key.as_slice().into(),
                     value,
                     self.ts,
                     ts,

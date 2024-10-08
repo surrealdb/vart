@@ -23,7 +23,6 @@ pub trait Version {
 #[derive(Clone)]
 pub struct TwigNode<K: KeyTrait, V: Clone> {
     pub(crate) prefix: K,
-    pub(crate) key: K,
     pub(crate) values: Vec<Arc<LeafValue<V>>>,
     pub(crate) version: u64, // Version for the twig node
 }
@@ -50,10 +49,9 @@ impl<V: Clone> LeafValue<V> {
 }
 
 impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
-    pub fn new(prefix: K, key: K) -> Self {
+    pub fn new(prefix: K) -> Self {
         TwigNode {
             prefix,
-            key,
             values: Vec::new(),
             version: 0,
         }
@@ -113,7 +111,6 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
 
         TwigNode {
             prefix: self.prefix.clone(),
-            key: self.key.clone(),
             values: new_values,
             version: new_version,
         }
@@ -1142,17 +1139,13 @@ mod tests {
         let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
 
         // Prepare some child nodes
-        let mut twig1 =
-            TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        let mut twig1 = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone());
         twig1.version = 5;
-        let mut twig2 =
-            TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        let mut twig2 = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone());
         twig2.version = 10;
-        let mut twig3 =
-            TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        let mut twig3 = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone());
         twig3.version = 3;
-        let mut twig4 =
-            TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
+        let mut twig4 = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone());
         twig4.version = 7;
 
         let mut parent = FlatNode {
@@ -1177,7 +1170,7 @@ mod tests {
     fn twig_insert() {
         let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
 
-        let node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix);
 
         let new_node = node.insert(42, 123, 0);
         assert_eq!(node.values.len(), 0);
@@ -1190,7 +1183,7 @@ mod tests {
     fn twig_insert_mut() {
         let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
 
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix);
 
         node.insert_mut(42, 123, 0);
         assert_eq!(node.values.len(), 1);
@@ -1201,7 +1194,7 @@ mod tests {
     #[test]
     fn twig_get_latest_leaf() {
         let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix);
         node.insert_mut(42, 123, 0);
         node.insert_mut(43, 124, 1);
         let latest_leaf = node.get_latest_leaf();
@@ -1211,7 +1204,7 @@ mod tests {
     #[test]
     fn twig_get_latest_value() {
         let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix);
         node.insert_mut(42, 123, 0);
         node.insert_mut(43, 124, 1);
         let latest_value = node.get_latest_value();
@@ -1221,7 +1214,7 @@ mod tests {
     #[test]
     fn twig_get_leaf_by_version() {
         let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix);
         node.insert_mut(42, 123, 0);
         node.insert_mut(43, 124, 1);
         let leaf = node.get_leaf_by_version(123);
@@ -1233,7 +1226,7 @@ mod tests {
     #[test]
     fn twig_iter() {
         let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix);
         node.insert_mut(42, 123, 0);
         node.insert_mut(43, 124, 1);
         let mut iter = node.iter();
@@ -1311,7 +1304,7 @@ mod tests {
     #[test]
     fn twig_get_leaf_by_ts() {
         let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix);
         // Inserting leaves with different timestamps
         node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
@@ -1332,7 +1325,7 @@ mod tests {
     #[test]
     fn test_get_leaf_by_version() {
         let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix);
         node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
@@ -1352,7 +1345,7 @@ mod tests {
     #[test]
     fn test_get_leaf_by_ts() {
         let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix);
         node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
@@ -1372,7 +1365,7 @@ mod tests {
     #[test]
     fn test_get_all_versions() {
         let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix);
         node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
@@ -1385,7 +1378,7 @@ mod tests {
     #[test]
     fn test_last_less_than_ts() {
         let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix);
         node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
@@ -1405,7 +1398,7 @@ mod tests {
     #[test]
     fn test_last_less_or_equal_ts() {
         let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix);
         node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
@@ -1425,7 +1418,7 @@ mod tests {
     #[test]
     fn test_first_greater_than_ts() {
         let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix);
         node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
@@ -1445,7 +1438,7 @@ mod tests {
     #[test]
     fn test_first_greater_or_equal_ts() {
         let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix);
         node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 

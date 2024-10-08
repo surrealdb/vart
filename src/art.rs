@@ -115,9 +115,9 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     /// Returns a new `Node` instance with a Twig node containing the provided key, value, and version.
     ///
     #[inline]
-    pub(crate) fn new_twig(prefix: P, key: P, value: V, version: u64, ts: u64) -> Node<P, V> {
+    pub(crate) fn new_twig(prefix: P, value: V, version: u64, ts: u64) -> Node<P, V> {
         // Create a new TwigNode instance using the provided prefix and key.
-        let mut twig = TwigNode::new(prefix, key);
+        let mut twig = TwigNode::new(prefix);
 
         // Insert the provided value into the TwigNode along with the version.
         twig.insert_mut(value, version, ts);
@@ -676,7 +676,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             let k2 = key_prefix[longest_common_prefix];
             let new_twig = Node::new_twig(
                 key_prefix[longest_common_prefix..].into(),
-                key.as_slice().into(),
                 value,
                 commit_version,
                 ts,
@@ -704,7 +703,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         // If no child exists for the key's character, create a new Twig node and add it as a child.
         let new_twig = Node::new_twig(
             key_prefix[longest_common_prefix..].into(),
-            key.as_slice().into(),
             value,
             commit_version,
             ts,
@@ -900,7 +898,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
             None => {
                 let commit_version = if version == 0 { 1 } else { version };
                 Arc::new(Node::new_twig(
-                    key.as_slice().into(),
                     key.as_slice().into(),
                     value,
                     commit_version,
