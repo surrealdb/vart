@@ -8,7 +8,7 @@ use crate::{art::QueryType, KeyTrait};
 
 pub trait NodeTrait<N> {
     fn clone(&self) -> Self;
-    fn add_child(&self, key: u8, node: N) -> Self;
+    fn add_child(&mut self, key: u8, node: N);
     fn find_child(&self, key: u8) -> Option<&Arc<N>>;
     fn delete_child(&self, key: u8) -> Self;
     fn num_children(&self) -> usize;
@@ -409,16 +409,12 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N
         new_node
     }
 
-    fn add_child(&self, key: u8, node: N) -> Self {
-        let mut new_node = self.clone();
+    fn add_child(&mut self, key: u8, node: N) {
         let idx = self.find_pos(key).expect("node is full");
 
         // Update the version if the new child has a greater version
-        new_node.update_if_newer(node.version());
-
-        // Convert the node to Arc<N> and insert it
-        new_node.insert_child(idx, key, Arc::new(node));
-        new_node
+        self.update_if_newer(node.version());
+        self.insert_child(idx, key, Arc::new(node));
     }
 
     fn find_child(&self, key: u8) -> Option<&Arc<N>> {
@@ -597,14 +593,10 @@ impl<P: KeyTrait, N: Version> NodeTrait<N> for Node48<P, N> {
         new_node
     }
 
-    fn add_child(&self, key: u8, node: N) -> Self {
-        let mut new_node = self.clone();
-
+    fn add_child(&mut self, key: u8, node: N) {
         // Update the version if the new child has a greater version
-        new_node.update_if_newer(node.version());
-
-        new_node.insert_child(key, Arc::new(node));
-        new_node
+        self.update_if_newer(node.version());
+        self.insert_child(key, Arc::new(node));
     }
 
     fn delete_child(&self, key: u8) -> Self {
@@ -752,14 +744,10 @@ impl<P: KeyTrait, N: Version> NodeTrait<N> for Node256<P, N> {
     }
 
     #[inline]
-    fn add_child(&self, key: u8, node: N) -> Self {
-        let mut new_node = self.clone();
-
+    fn add_child(&mut self, key: u8, node: N) {
         // Update the version if the new child has a greater version
-        new_node.update_if_newer(node.version());
-
-        new_node.insert_child(key, Arc::new(node));
-        new_node
+        self.update_if_newer(node.version());
+        self.insert_child(key, Arc::new(node));
     }
 
     #[inline]
@@ -817,7 +805,7 @@ mod tests {
 
     fn node_test<N: NodeTrait<usize>>(mut node: N, size: usize) {
         for i in 0..size {
-            node = node.add_child(i as u8, i);
+            node.add_child(i as u8, i);
         }
 
         for i in 0..size {
@@ -859,7 +847,7 @@ mod tests {
         // Resize from 16 to 4
         let mut node = FlatNode::<FixedSizeKey<8>, usize, 16>::new(dummy_prefix.clone());
         for i in 0..4 {
-            node = node.add_child(i as u8, i);
+            node.add_child(i as u8, i);
         }
 
         let resized: FlatNode<FixedSizeKey<8>, usize, 4> = node.resize();
@@ -871,12 +859,12 @@ mod tests {
         // Resize from 4 to 16
         let mut node = FlatNode::<FixedSizeKey<8>, usize, 4>::new(dummy_prefix.clone());
         for i in 0..4 {
-            node = node.add_child(i as u8, i);
+            node.add_child(i as u8, i);
         }
         let mut resized: FlatNode<FixedSizeKey<8>, usize, 16> = node.resize();
         assert_eq!(resized.num_children, 4);
         for i in 4..16 {
-            resized = resized.add_child(i as u8, i);
+            resized.add_child(i as u8, i);
         }
         assert_eq!(resized.num_children, 16);
         for i in 0..16 {
@@ -886,7 +874,7 @@ mod tests {
         // Resize from 16 to 48
         let mut node = FlatNode::<FixedSizeKey<8>, usize, 16>::new(dummy_prefix.clone());
         for i in 0..16 {
-            node = node.add_child(i as u8, i);
+            node.add_child(i as u8, i);
         }
 
         let resized = node.grow();
@@ -897,10 +885,10 @@ mod tests {
 
         // Additional test for adding and deleting children
         let mut node = FlatNode::<FixedSizeKey<8>, usize, 4>::new(dummy_prefix);
-        node = node.add_child(1, 1);
-        node = node.add_child(2, 2);
-        node = node.add_child(3, 3);
-        node = node.add_child(4, 4);
+        node.add_child(1, 1);
+        node.add_child(2, 2);
+        node.add_child(3, 3);
+        node.add_child(4, 4);
         assert_eq!(node.num_children(), 4);
         assert_eq!(node.find_child(1), Some(&1.into()));
         assert_eq!(node.find_child(2), Some(&2.into()));
@@ -922,7 +910,7 @@ mod tests {
         // Create and test Node48
         let mut n48 = Node48::<FixedSizeKey<8>, u8>::new(dummy_prefix.clone());
         for i in 0..48 {
-            n48 = n48.add_child(i, i);
+            n48.add_child(i, i);
         }
         for i in 0..48 {
             assert_eq!(n48.find_child(i), Some(&i.into()));
@@ -937,7 +925,7 @@ mod tests {
         // Resize from 48 to 16
         let mut node = Node48::<FixedSizeKey<8>, u8>::new(dummy_prefix.clone());
         for i in 0..18 {
-            node = node.add_child(i, i);
+            node.add_child(i, i);
         }
         assert_eq!(node.num_children(), 18);
         node = node.delete_child(0);
@@ -953,7 +941,7 @@ mod tests {
         // Resize from 48 to 4
         let mut node = Node48::<FixedSizeKey<8>, u8>::new(dummy_prefix.clone());
         for i in 0..4 {
-            node = node.add_child(i, i);
+            node.add_child(i, i);
         }
         let resized = node.shrink::<4>();
         assert_eq!(resized.num_children, 4);
@@ -964,7 +952,7 @@ mod tests {
         // Resize from 48 to 256
         let mut node = Node48::<FixedSizeKey<8>, u8>::new(dummy_prefix);
         for i in 0..48 {
-            node = node.add_child(i, i);
+            node.add_child(i, i);
         }
 
         let resized = node.grow();
@@ -985,7 +973,7 @@ mod tests {
 
         let mut n256 = Node256::new(dummy_prefix.clone());
         for i in 0..255 {
-            n256 = n256.add_child(i, i);
+            n256.add_child(i, i);
             assert_eq!(n256.find_child(i), Some(&i.into()));
             n256 = n256.delete_child(i);
             assert_eq!(n256.find_child(i), None);
@@ -994,7 +982,7 @@ mod tests {
         // resize from 256 to 48
         let mut node = Node256::new(dummy_prefix);
         for i in 0..48 {
-            node = node.add_child(i, i);
+            node.add_child(i, i);
         }
 
         let resized = node.shrink();
@@ -1039,7 +1027,7 @@ mod tests {
         // Add a new child with a larger version (15), parent's version should update to 15
         let mut child5 = FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
         child5.version = 15;
-        parent = parent.add_child(3, child5);
+        parent.add_child(3, child5);
         assert_eq!(parent.version(), 15);
 
         // Delete the child with the largest version, parent's version should update to next max (10)
@@ -1098,7 +1086,7 @@ mod tests {
 
         // Add children to parent
         for (i, child) in children.iter().enumerate() {
-            parent = parent.add_child(i as u8, child.clone());
+            parent.add_child(i as u8, child.clone());
         }
         // The maximum version among children is (WIDTH - 1), so after calling update_version,
         // the parent's version should be updated to (WIDTH - 1).
@@ -1126,7 +1114,7 @@ mod tests {
 
         // Add children to parent
         for (i, child) in children.iter().enumerate() {
-            parent = parent.add_child(i as u8, child.clone());
+            parent.add_child(i as u8, child.clone());
         }
 
         // The maximum version among children is (WIDTH - 1), so after calling update_version,
@@ -1249,7 +1237,7 @@ mod tests {
         // Create and test flatnode
         let mut node = FlatNode::<FixedSizeKey<8>, usize, 4>::new(dummy_prefix.clone());
         for i in 0..4 {
-            node = node.add_child(i as u8, i);
+            node.add_child(i as u8, i);
         }
 
         for child in node.iter() {
@@ -1259,7 +1247,7 @@ mod tests {
         // Create and test Node48
         let mut n48 = Node48::<FixedSizeKey<8>, u8>::new(dummy_prefix.clone());
         for i in 0..48 {
-            n48 = n48.add_child(i, i);
+            n48.add_child(i, i);
         }
 
         for child in n48.iter() {
@@ -1269,7 +1257,7 @@ mod tests {
         // Create and test Node256
         let mut n256 = Node256::new(dummy_prefix);
         for i in 0..255 {
-            n256 = n256.add_child(i, i);
+            n256.add_child(i, i);
         }
 
         for child in n256.iter() {
@@ -1288,10 +1276,10 @@ mod tests {
         let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
 
         let mut node4 = FlatNode::<FixedSizeKey<8>, usize, 4>::new(dummy_prefix.clone());
-        node4 = node4.add_child(4, 1);
-        node4 = node4.add_child(2, 1);
-        node4 = node4.add_child(1, 1);
-        node4 = node4.add_child(0, 1);
+        node4.add_child(4, 1);
+        node4.add_child(2, 1);
+        node4.add_child(1, 1);
+        node4.add_child(0, 1);
 
         // verify the order of keys as [0, 1, 2, 4]
         assert_eq!(node4.keys, [0, 1, 2, 4]);
@@ -1302,7 +1290,7 @@ mod tests {
         let mut values: Vec<u8> = (0..16).collect();
         values.shuffle(&mut rng);
         for value in values {
-            node16 = node16.add_child(value, 1);
+            node16.add_child(value, 1);
         }
         // Verify the keys have been inserted in order
         assert_eq!(node16.keys, *(0..16).collect::<Vec<u8>>());
