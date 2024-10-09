@@ -190,61 +190,66 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     ///
     #[inline]
     fn add_child(&self, key: u8, child: Node<P, V>) -> Self {
-        let mut cloned_node = match &self.node_type {
-            NodeType::Node1(n) => Self {
-                node_type: NodeType::Node1(n.clone()),
-            },
-            NodeType::Node4(n) => Self {
-                node_type: NodeType::Node4(n.clone()),
-            },
-            NodeType::Node16(n) => Self {
-                node_type: NodeType::Node16(n.clone()),
-            },
-            NodeType::Node48(n) => Self {
-                node_type: NodeType::Node48(n.clone()),
-            },
-            NodeType::Node256(n) => Self {
-                node_type: NodeType::Node256(n.clone()),
-            },
-            NodeType::Twig(_) => panic!("Unexpected Twig node encountered in add_child()"),
+        let cloned_node = if self.is_full() {
+            self.grow()
+        } else {
+            match &self.node_type {
+                NodeType::Node1(n) => Self {
+                    node_type: NodeType::Node1(n.clone()),
+                },
+                NodeType::Node4(n) => Self {
+                    node_type: NodeType::Node4(n.clone()),
+                },
+                NodeType::Node16(n) => Self {
+                    node_type: NodeType::Node16(n.clone()),
+                },
+                NodeType::Node48(n) => Self {
+                    node_type: NodeType::Node48(n.clone()),
+                },
+                NodeType::Node256(n) => Self {
+                    node_type: NodeType::Node256(n.clone()),
+                },
+                NodeType::Twig(_) => panic!("Unexpected Twig node encountered in add_child()"),
+            }
         };
 
-        if cloned_node.is_full() {
-            cloned_node.grow();
-        }
-
-        match &cloned_node.node_type {
-            NodeType::Node1(n) => {
+        match cloned_node.node_type {
+            NodeType::Node1(mut n) => {
                 // Add the child node to the Node1 instance.
-                let node = NodeType::Node1(n.add_child(key, child));
+                n.add_child(key, child);
+                let node = NodeType::Node1(n);
 
                 // Create a new Node instance with the updated NodeType.
                 Self { node_type: node }
             }
-            NodeType::Node4(n) => {
+            NodeType::Node4(mut n) => {
                 // Add the child node to the Node4 instance.
-                let node = NodeType::Node4(n.add_child(key, child));
+                n.add_child(key, child);
+                let node = NodeType::Node4(n);
 
                 // Create a new Node instance with the updated NodeType.
                 Self { node_type: node }
             }
-            NodeType::Node16(n) => {
+            NodeType::Node16(mut n) => {
                 // Add the child node to the Node16 instance.
-                let node = NodeType::Node16(n.add_child(key, child));
+                n.add_child(key, child);
+                let node = NodeType::Node16(n);
 
                 // Create a new Node instance with the updated NodeType.
                 Self { node_type: node }
             }
-            NodeType::Node48(n) => {
+            NodeType::Node48(mut n) => {
                 // Add the child node to the Node48 instance.
-                let node = NodeType::Node48(n.add_child(key, child));
+                n.add_child(key, child);
+                let node = NodeType::Node48(n);
 
                 // Create a new Node instance with the updated NodeType.
                 Self { node_type: node }
             }
-            NodeType::Node256(n) => {
+            NodeType::Node256(mut n) => {
                 // Add the child node to the Node256 instance.
-                let node = NodeType::Node256(n.add_child(key, child));
+                n.add_child(key, child);
+                let node = NodeType::Node256(n);
 
                 // Create a new Node instance with the updated NodeType.
                 Self { node_type: node }
@@ -263,33 +268,30 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     /// ArtNodes of type NODE48 will grow to NODE256.
     /// ArtNodes of type NODE256 will not grow, as they are the biggest type of ArtNodes
     #[inline]
-    fn grow(&mut self) {
-        match &mut self.node_type {
+    fn grow(&self) -> Self {
+        let node_type = match &self.node_type {
             NodeType::Node1(n) => {
                 // Grow a Node4 to a Node16 by resizing.
-                let n4 = NodeType::Node4(n.resize());
-                self.node_type = n4;
+                NodeType::Node4(n.resize())
             }
             NodeType::Node4(n) => {
                 // Grow a Node4 to a Node16 by resizing.
-                let n16 = NodeType::Node16(n.resize());
-                self.node_type = n16;
+                NodeType::Node16(n.resize())
             }
             NodeType::Node16(n) => {
                 // Grow a Node16 to a Node48 by performing growth.
-                let n48 = NodeType::Node48(n.grow());
-                self.node_type = n48;
+                NodeType::Node48(n.grow())
             }
             NodeType::Node48(n) => {
                 // Grow a Node48 to a Node256 by performing growth.
-                let n256 = NodeType::Node256(n.grow());
-                self.node_type = n256;
+                NodeType::Node256(n.grow())
             }
             NodeType::Node256 { .. } => {
                 panic!("Node256 cannot be grown further");
             }
             NodeType::Twig(_) => panic!("Unexpected Twig node encountered in grow()"),
-        }
+        };
+        Self { node_type }
     }
 
     /// Recursively searches for a child node with the specified key.
