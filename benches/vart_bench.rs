@@ -151,6 +151,56 @@ pub fn seq_get(c: &mut Criterion) {
     group.finish();
 }
 
+pub fn iter_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("iter_benchmark");
+
+    group.throughput(Throughput::Elements(1));
+    {
+        let size = 1_000_000;
+        let mut tree = Tree::<FixedSizeKey<16>, _>::new();
+        for i in 0..size as u64 {
+            tree.insert(&i.into(), i, 0, 0).unwrap();
+        }
+        group.bench_with_input(BenchmarkId::new("art", size), &size, |b, _size| {
+            b.iter(|| {
+                let count = criterion::black_box(tree.iter()).count();
+                assert_eq!(
+                    count, size as usize,
+                    "Not all items are present in the tree"
+                );
+            })
+        });
+    }
+
+    group.finish();
+}
+
+pub fn range_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("range_benchmark");
+
+    group.throughput(Throughput::Elements(1));
+    {
+        let size = 1_000_000;
+        let mut tree = Tree::<FixedSizeKey<16>, _>::new();
+        for i in 0..size as u64 {
+            tree.insert(&i.into(), i, 0, 0).unwrap();
+        }
+        group.bench_with_input(BenchmarkId::new("art", size), &size, |b, _size| {
+            let start_key: FixedSizeKey<16> = 0u16.into();
+            let end_key: FixedSizeKey<16> = ((size - 1) as u16).into();
+            b.iter(|| {
+                let count = criterion::black_box(tree.range(&start_key..=&end_key)).count();
+                assert_eq!(
+                    count, size as usize,
+                    "Not all items are present in the tree"
+                );
+            })
+        });
+    }
+
+    group.finish();
+}
+
 fn gen_keys(l1_prefix: usize, l2_prefix: usize, suffix: usize) -> Vec<String> {
     let mut keys = Vec::new();
     let chars: Vec<char> = ('a'..='z').collect();
@@ -177,4 +227,12 @@ fn gen_keys(l1_prefix: usize, l2_prefix: usize, suffix: usize) -> Vec<String> {
 criterion_group!(delete_benches, seq_delete, rand_delete);
 criterion_group!(insert_benches, seq_insert, rand_insert);
 criterion_group!(read_benches, seq_get, rand_get, rand_get_str);
-criterion_main!(insert_benches, read_benches);
+criterion_group!(iter_benches, iter_benchmark);
+criterion_group!(range_benches, range_benchmark);
+criterion_main!(
+    insert_benches,
+    read_benches,
+    delete_benches,
+    iter_benches,
+    range_benches
+);

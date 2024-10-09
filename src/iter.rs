@@ -105,6 +105,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iter<'a, P, V> {
 impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
     type Item = (Vec<u8>, &'a V, &'a u64, &'a u64);
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(node) = self.forward.iters.last_mut() {
             let e = node.next();
@@ -493,6 +494,7 @@ where
 impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K, V, R> {
     type Item = (Vec<u8>, &'a V, &'a u64, &'a u64);
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(node) = self.forward.iters.last_mut() {
             if let Some(other) = node.next() {
