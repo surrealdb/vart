@@ -19,11 +19,17 @@ keywords = [
 
 [dependencies]
 
+[dev-dependencies]
+rand = "0.8.5"
+criterion = "0.5.1"
+divan = "0.1.14"
+
 [[bench]]
 name = "vart_bench"
 path = "benches/vart_bench.rs"
 harness = false
 
-[dev-dependencies]
-rand = "0.8.5"
-criterion = "0.5.1"
+[[bench]]
+name = "allocs"
+path = "benches/allocs.rs"
+harness = false
