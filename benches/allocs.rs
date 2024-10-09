@@ -10,7 +10,7 @@ fn main() {
     divan::main();
 }
 
-const COUNTS: &[usize] = &[10_000, 100_000, 1_000_000];
+const COUNTS: &[usize] = &[1_000_000];
 
 #[divan::bench(
     args = COUNTS,
