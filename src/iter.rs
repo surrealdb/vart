@@ -72,6 +72,7 @@ pub struct Iter<'a, P: KeyTrait + 'a, V: Clone> {
     _marker: std::marker::PhantomData<P>,
     prefix: Vec<u8>,
     prefix_lengths: Vec<usize>,
+    key_buffer: Vec<u8>,
 }
 
 impl<'a, P: KeyTrait + 'a, V: Clone> Iter<'a, P, V> {
@@ -91,6 +92,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iter<'a, P, V> {
                     _marker: Default::default(),
                     prefix,
                     prefix_lengths: Vec::new(),
+                    key_buffer: Vec::new(),
                 }
             }
             None => Self {
@@ -98,6 +100,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iter<'a, P, V> {
                 _marker: Default::default(),
                 prefix: Vec::new(),
                 prefix_lengths: Vec::new(),
+                key_buffer: Vec::new(),
             },
         }
     }
@@ -106,6 +109,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iter<'a, P, V> {
 impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
     type Item = (Vec<u8>, &'a V, &'a u64, &'a u64);
 
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(node) = self.forward.iters.last_mut() {
             let e = node.next();
@@ -118,14 +122,12 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
                     }
                 }
                 Some(other) => {
-                    let key: P = self
-                        .prefix
-                        .iter()
-                        .chain(other.1.prefix().as_slice().iter())
-                        .copied()
-                        .collect::<Vec<u8>>()
-                        .as_slice()
-                        .into();
+                    // Reuse the key buffer to avoid allocations
+                    self.key_buffer.clear();
+                    self.key_buffer.extend_from_slice(&self.prefix);
+                    self.key_buffer
+                        .extend_from_slice(other.1.prefix().as_slice());
+                    let key: P = self.key_buffer.as_slice().into();
                     if let NodeType::Twig(twig) = &other.1.node_type {
                         if self.forward.is_versioned {
                             for leaf in twig.iter() {
@@ -266,6 +268,7 @@ pub struct Range<'a, K: KeyTrait, V: Clone, R> {
     is_versioned: bool,
     prefix: Vec<u8>,
     prefix_lengths: Vec<usize>,
+    key_buffer: Vec<u8>,
 }
 
 impl<'a, K: KeyTrait, V: Clone, R> Range<'a, K, V, R>
@@ -280,6 +283,7 @@ where
             is_versioned: false,
             prefix: Vec::new(),
             prefix_lengths: Vec::new(),
+            key_buffer: Vec::new(),
         }
     }
 
@@ -299,6 +303,7 @@ where
             is_versioned: false,
             prefix,
             prefix_lengths: Vec::new(),
+            key_buffer: Vec::new(),
         }
     }
 
@@ -318,6 +323,7 @@ where
             is_versioned: true,
             prefix,
             prefix_lengths: Vec::new(),
+            key_buffer: Vec::new(),
         }
     }
 }
@@ -404,17 +410,17 @@ where
 impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K, V, R> {
     type Item = (Vec<u8>, &'a V, &'a u64, &'a u64);
 
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(node) = self.forward.iters.last_mut() {
             if let Some(other) = node.next() {
-                let key: K = self
-                    .prefix
-                    .iter()
-                    .chain(other.1.prefix().as_slice().iter())
-                    .copied()
-                    .collect::<Vec<u8>>()
-                    .as_slice()
-                    .into();
+                // Reuse the key buffer to avoid allocations
+                self.key_buffer.clear();
+                self.key_buffer.extend_from_slice(&self.prefix);
+                self.key_buffer
+                    .extend_from_slice(other.1.prefix().as_slice());
+                let key: K = self.key_buffer.as_slice().into();
+
                 if let NodeType::Twig(twig) = &other.1.node_type {
                     if self.range.contains(&key) {
                         if self.is_versioned {
@@ -508,18 +514,18 @@ where
 
     let mut prefix = forward.prefix.clone();
     let mut prefix_lengths = Vec::new();
+    let mut key_buffer = Vec::new();
 
     while let Some(node) = forward.iters.last_mut() {
         let e = node.next();
         match e {
             Some(other) => {
-                let key: K = prefix
-                    .iter()
-                    .chain(other.1.prefix().as_slice().iter())
-                    .copied()
-                    .collect::<Vec<u8>>()
-                    .as_slice()
-                    .into();
+                // Reuse the key buffer to avoid allocations
+                key_buffer.clear();
+                key_buffer.extend_from_slice(&prefix);
+                key_buffer.extend_from_slice(other.1.prefix().as_slice());
+                let key: K = key_buffer.as_slice().into();
+
                 if let NodeType::Twig(twig) = &other.1.node_type {
                     if range.contains(&key) {
                         // Iterate through leaves of the twig
