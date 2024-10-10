@@ -2334,6 +2334,8 @@ mod tests {
             actual_entries, expected_entries,
             "The number of entries in the tree does not match the expected number of insertions."
         );
+
+        assert_eq!(tree.version(), num_keys as u64);
     }
 
     #[test]
@@ -2352,6 +2354,8 @@ mod tests {
             total_entries, num_keys,
             "The total entries should be equal to the number of inserted keys."
         );
+
+        assert_eq!(tree.version(), { num_keys });
     }
 
     #[test]
@@ -2373,6 +2377,8 @@ mod tests {
         let (value, version, _) = tree.get(&key, 0).unwrap();
         assert_eq!(value, 2);
         assert_eq!(version, 2);
+
+        assert_eq!(tree.version(), 2);
     }
 
     #[test]
@@ -2612,6 +2618,7 @@ mod tests {
         let query_type = QueryType::LatestByVersion(3);
         let result = tree.get_value_by_query(&key, query_type).unwrap();
         assert_eq!(result, (30, 3, 300));
+        assert_eq!(tree.version(), 3);
     }
 
     #[test]
@@ -2625,6 +2632,7 @@ mod tests {
         let query_type = QueryType::LatestByTs(300);
         let result = tree.get_value_by_query(&key, query_type).unwrap();
         assert_eq!(result, (30, 3, 300));
+        assert_eq!(tree.version(), 3);
     }
 
     #[test]
@@ -2638,6 +2646,7 @@ mod tests {
         let query_type = QueryType::LastLessThanTs(150);
         let result = tree.get_value_by_query(&key, query_type).unwrap();
         assert_eq!(result, (10, 1, 100));
+        assert_eq!(tree.version(), 3);
     }
 
     #[test]
@@ -2651,6 +2660,7 @@ mod tests {
         let query_type = QueryType::LastLessOrEqualTs(150);
         let result = tree.get_value_by_query(&key, query_type).unwrap();
         assert_eq!(result, (20, 2, 150));
+        assert_eq!(tree.version(), 3);
     }
 
     #[test]
@@ -2664,6 +2674,7 @@ mod tests {
         let query_type = QueryType::FirstGreaterThanTs(150);
         let result = tree.get_value_by_query(&key, query_type).unwrap();
         assert_eq!(result, (30, 3, 200));
+        assert_eq!(tree.version(), 3);
     }
 
     #[test]
@@ -2677,5 +2688,6 @@ mod tests {
         let query_type = QueryType::FirstGreaterOrEqualTs(150);
         let result = tree.get_value_by_query(&key, query_type).unwrap();
         assert_eq!(result, (20, 2, 150));
+        assert_eq!(tree.version(), 3);
     }
 }
