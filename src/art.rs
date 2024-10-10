@@ -254,7 +254,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 // Create a new Node instance with the updated NodeType.
                 Self { node_type: node }
             }
-            NodeType::Twig(_) => panic!("Unexpected Twig node encountered in add_child()"),
+            NodeType::Twig(_) => panic!("Unexpected Twig node encountered in add_child_mut()"),
         }
     }
 
@@ -678,6 +678,36 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         }
     }
 
+    // Common logic for insert to extract common prefix and key prefix
+    fn common_insert_logic<'a>(
+        cur_node_prefix: &P,
+        key: &'a P,
+        depth: usize,
+    ) -> (&'a [u8], P, P, bool, usize) {
+        // Obtain the current node's prefix and its length.
+        let cur_node_prefix_len = cur_node_prefix.len();
+
+        // Determine the prefix of the key after the current depth.
+        let key_prefix = key.prefix_after(depth);
+        // Find the longest common prefix between the current node's prefix and the key's prefix.
+        let longest_common_prefix = cur_node_prefix.longest_common_prefix(key_prefix);
+
+        // Create a new key that represents the remaining part of the current node's prefix after the common prefix.
+        let new_key = cur_node_prefix.prefix_after(longest_common_prefix).into();
+        // Extract the prefix of the current node up to the common prefix.
+        let prefix = cur_node_prefix.prefix_before(longest_common_prefix).into();
+        // Determine whether the current node's prefix and the key's prefix match up to the common prefix.
+        let is_prefix_match = min(cur_node_prefix_len, key_prefix.len()) == longest_common_prefix;
+
+        (
+            key_prefix,
+            new_key,
+            prefix,
+            is_prefix_match,
+            longest_common_prefix,
+        )
+    }
+
     /// Inserts a key-value pair recursively into the node.
     ///
     /// Recursively inserts a key-value pair into the current node and its child nodes.
@@ -704,19 +734,9 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     ) -> NodeArc<P, V> {
         // Obtain the current node's prefix and its length.
         let cur_node_prefix = cur_node.prefix().clone();
-        let cur_node_prefix_len = cur_node.prefix().len();
 
-        // Determine the prefix of the key after the current depth.
-        let key_prefix = key.prefix_after(depth);
-        // Find the longest common prefix between the current node's prefix and the key's prefix.
-        let longest_common_prefix = cur_node_prefix.longest_common_prefix(key_prefix);
-
-        // Create a new key that represents the remaining part of the current node's prefix after the common prefix.
-        let new_key = cur_node_prefix.prefix_after(longest_common_prefix).into();
-        // Extract the prefix of the current node up to the common prefix.
-        let prefix = cur_node_prefix.prefix_before(longest_common_prefix).into();
-        // Determine whether the current node's prefix and the key's prefix match up to the common prefix.
-        let is_prefix_match = min(cur_node_prefix_len, key_prefix.len()) == longest_common_prefix;
+        let (key_prefix, new_key, prefix, is_prefix_match, longest_common_prefix) =
+            Self::common_insert_logic(&cur_node_prefix, key, depth);
 
         // If the current node is a Twig node and the prefixes match up to the end of both prefixes,
         // update the existing value in the Twig node.
@@ -788,19 +808,9 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     ) {
         // Obtain the current node's prefix and its length.
         let cur_node_prefix = cur_node.prefix().clone();
-        let cur_node_prefix_len = cur_node.prefix().len();
 
-        // Determine the prefix of the key after the current depth.
-        let key_prefix = key.prefix_after(depth);
-        // Find the longest common prefix between the current node's prefix and the key's prefix.
-        let longest_common_prefix = cur_node_prefix.longest_common_prefix(key_prefix);
-
-        // Create a new key that represents the remaining part of the current node's prefix after the common prefix.
-        let new_key = cur_node_prefix.prefix_after(longest_common_prefix).into();
-        // Extract the prefix of the current node up to the common prefix.
-        let prefix = cur_node_prefix.prefix_before(longest_common_prefix).into();
-        // Determine whether the current node's prefix and the key's prefix match up to the common prefix.
-        let is_prefix_match = min(cur_node_prefix_len, key_prefix.len()) == longest_common_prefix;
+        let (key_prefix, new_key, prefix, is_prefix_match, longest_common_prefix) =
+            Self::common_insert_logic(&cur_node_prefix, key, depth);
 
         // If the current node is a Twig node and the prefixes match up to the end of both prefixes,
         // update the existing value in the Twig node.
