@@ -10,10 +10,12 @@ pub trait NodeTrait<N> {
     fn clone(&self) -> Self;
     fn add_child(&mut self, key: u8, node: N);
     fn find_child(&self, key: u8) -> Option<&Arc<N>>;
+    fn find_child_mut(&mut self, key: u8) -> Option<&mut N>;
     fn delete_child(&self, key: u8) -> Self;
     fn num_children(&self) -> usize;
     fn size(&self) -> usize;
     fn replace_child(&self, key: u8, node: Arc<N>) -> Self;
+    fn update_version_to_max_child_version(&mut self);
 }
 
 pub trait Version {
@@ -123,39 +125,44 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         let new_leaf_value = LeafValue::new(value, version, ts);
 
         // Insert new LeafValue in sorted order
-        let insertion_index = match self
+        match self
             .values
             .binary_search_by(|v| v.version.cmp(&new_leaf_value.version))
         {
             Ok(index) => {
                 // If found, check if the timestamp also matches
                 if self.values[index].ts == ts {
-                    // If version and ts match, do not insert and return early
-                    return;
-                }
-
-                let mut insert_position = index;
-                if self.values[index].ts < ts {
-                    // Scan forward to find the first entry with a timestamp greater than the new entry's timestamp
-                    insert_position += self.values[index..]
-                        .iter()
-                        .take_while(|v| v.ts <= ts)
-                        .count();
+                    self.values[index] = Arc::new(new_leaf_value);
                 } else {
-                    // Scan backward to find the insertion point before the first entry with a timestamp less than the new entry's timestamp
-                    insert_position -= self.values[..index]
-                        .iter()
-                        .rev()
-                        .take_while(|v| v.ts >= ts)
-                        .count();
+                    // If an entry with the same version and different timestamp exists, add a new entry
+                    // Determine the direction to scan based on the comparison of timestamps
+                    let mut insert_position = index;
+                    if self.values[index].ts < ts {
+                        // Scan forward to find the first entry with a timestamp greater than the new entry's timestamp
+                        insert_position += self.values[index..]
+                            .iter()
+                            .take_while(|v| v.ts <= ts)
+                            .count();
+                    } else {
+                        // Scan backward to find the insertion point before the first entry with a timestamp less than the new entry's timestamp
+                        insert_position -= self.values[..index]
+                            .iter()
+                            .rev()
+                            .take_while(|v| v.ts >= ts)
+                            .count();
+                    }
+                    self.values
+                        .insert(insert_position, Arc::new(new_leaf_value));
                 }
-
-                insert_position
             }
-            Err(index) => index,
+            // Err(index) => index,
+            Err(index) => {
+                // If no entry with the same version exists, insert the new value at the correct position
+                self.values.insert(index, Arc::new(new_leaf_value));
+            }
         };
-        self.values
-            .insert(insertion_index, Arc::new(new_leaf_value));
+        // self.values
+        //     .insert(insertion_index, Arc::new(new_leaf_value));
 
         self.version = self.version(); // Update LeafNode's version
     }
@@ -355,11 +362,6 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> FlatNode<P, N, WIDTH> {
     }
 
     #[inline]
-    fn update_version_to_max_child_version(&mut self) {
-        self.version = self.max_child_version();
-    }
-
-    #[inline]
     fn update_version(&mut self) {
         // Compute the maximum version among all children
         let max_child_version = self.max_child_version();
@@ -399,6 +401,11 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N
         new_node
     }
 
+    #[inline]
+    fn update_version_to_max_child_version(&mut self) {
+        self.version = self.max_child_version();
+    }
+
     fn replace_child(&self, key: u8, node: Arc<N>) -> Self {
         let mut new_node = self.clone();
         let idx = new_node.index(key).unwrap();
@@ -421,6 +428,13 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N
         let idx = self.index(key)?;
         let child = self.children[idx].as_ref();
         child
+    }
+
+    // New find_child_mut method
+    fn find_child_mut(&mut self, key: u8) -> Option<&mut N> {
+        let idx = self.index(key)?;
+        let child = self.children[idx].as_mut()?;
+        Arc::get_mut(child)
     }
 
     fn delete_child(&self, key: u8) -> Self {
@@ -541,11 +555,6 @@ impl<P: KeyTrait, N: Version> Node48<P, N> {
     }
 
     #[inline]
-    fn update_version_to_max_child_version(&mut self) {
-        self.version = self.max_child_version();
-    }
-
-    #[inline]
     fn update_version(&mut self) {
         // Compute the maximum version among all children
         let max_child_version = self.max_child_version();
@@ -583,6 +592,11 @@ impl<P: KeyTrait, N: Version> NodeTrait<N> for Node48<P, N> {
         }
     }
 
+    #[inline]
+    fn update_version_to_max_child_version(&mut self) {
+        self.version = self.max_child_version();
+    }
+
     fn replace_child(&self, key: u8, node: Arc<N>) -> Self {
         let mut new_node = self.clone();
         let idx = new_node.keys[key as usize];
@@ -617,6 +631,16 @@ impl<P: KeyTrait, N: Version> NodeTrait<N> for Node48<P, N> {
             return None;
         }
         Some(self.children[idx as usize].as_ref().unwrap())
+    }
+
+    // New find_child_mut method
+    fn find_child_mut(&mut self, key: u8) -> Option<&mut N> {
+        let idx = self.keys[key as usize];
+        if idx == u8::MAX {
+            return None;
+        }
+        let child_arc = self.children[idx as usize].as_mut()?;
+        Arc::get_mut(child_arc)
     }
 
     fn num_children(&self) -> usize {
@@ -694,11 +718,6 @@ impl<P: KeyTrait, N: Version> Node256<P, N> {
     }
 
     #[inline]
-    fn update_version_to_max_child_version(&mut self) {
-        self.version = self.max_child_version();
-    }
-
-    #[inline]
     fn update_version(&mut self) {
         // Compute the maximum version among all children
         let max_child_version = self.max_child_version();
@@ -734,6 +753,11 @@ impl<P: KeyTrait, N: Version> NodeTrait<N> for Node256<P, N> {
         }
     }
 
+    #[inline]
+    fn update_version_to_max_child_version(&mut self) {
+        self.version = self.max_child_version();
+    }
+
     fn replace_child(&self, key: u8, node: Arc<N>) -> Self {
         debug_assert!(self.children[key as usize].is_some());
         let mut new_node = self.clone();
@@ -753,6 +777,12 @@ impl<P: KeyTrait, N: Version> NodeTrait<N> for Node256<P, N> {
     #[inline]
     fn find_child(&self, key: u8) -> Option<&Arc<N>> {
         self.children[key as usize].as_ref()
+    }
+
+    // New find_child_mut method
+    fn find_child_mut(&mut self, key: u8) -> Option<&mut N> {
+        let child_arc = self.children[key as usize].as_mut()?;
+        Arc::get_mut(child_arc)
     }
 
     #[inline]
