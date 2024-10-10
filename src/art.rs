@@ -254,6 +254,38 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 // Create a new Node instance with the updated NodeType.
                 Self { node_type: node }
             }
+            NodeType::Twig(_) => panic!("Unexpected Twig node encountered in add_child_mut()"),
+        }
+    }
+
+    #[inline]
+    fn add_child_mut(&mut self, key: u8, child: Node<P, V>) {
+        if self.is_full() {
+            let new_node = self.grow();
+            *self = new_node;
+        }
+
+        match &mut self.node_type {
+            NodeType::Node1(ref mut n) => {
+                // Add the child node to the Node1 instance.
+                n.add_child(key, child);
+            }
+            NodeType::Node4(ref mut n) => {
+                // Add the child node to the Node4 instance.
+                n.add_child(key, child);
+            }
+            NodeType::Node16(ref mut n) => {
+                // Add the child node to the Node16 instance.
+                n.add_child(key, child);
+            }
+            NodeType::Node48(ref mut n) => {
+                // Add the child node to the Node48 instance.
+                n.add_child(key, child);
+            }
+            NodeType::Node256(ref mut n) => {
+                // Add the child node to the Node256 instance.
+                n.add_child(key, child);
+            }
             NodeType::Twig(_) => panic!("Unexpected Twig node encountered in add_child()"),
         }
     }
@@ -321,6 +353,24 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             NodeType::Node16(n) => n.find_child(key),
             NodeType::Node48(n) => n.find_child(key),
             NodeType::Node256(n) => n.find_child(key),
+            NodeType::Twig(_) => None,
+        }
+    }
+
+    #[inline]
+    fn find_child_mut(&mut self, key: u8) -> Option<&mut Node<P, V>> {
+        // If there are no children, return None.
+        if self.num_children() == 0 {
+            return None;
+        }
+
+        // Match the node type to find the child using the appropriate method.
+        match &mut self.node_type {
+            NodeType::Node1(n) => n.find_child_mut(key),
+            NodeType::Node4(n) => n.find_child_mut(key),
+            NodeType::Node16(n) => n.find_child_mut(key),
+            NodeType::Node48(n) => n.find_child_mut(key),
+            NodeType::Node256(n) => n.find_child_mut(key),
             NodeType::Twig(_) => None,
         }
     }
@@ -617,6 +667,47 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         }
     }
 
+    fn update_version(&mut self) {
+        match &mut self.node_type {
+            NodeType::Node1(n) => n.update_version_to_max_child_version(),
+            NodeType::Node4(n) => n.update_version_to_max_child_version(),
+            NodeType::Node16(n) => n.update_version_to_max_child_version(),
+            NodeType::Node48(n) => n.update_version_to_max_child_version(),
+            NodeType::Node256(n) => n.update_version_to_max_child_version(),
+            NodeType::Twig(_) => {}
+        }
+    }
+
+    // Common logic for insert to extract common prefix and key prefix
+    fn common_insert_logic<'a>(
+        cur_node_prefix: &P,
+        key: &'a P,
+        depth: usize,
+    ) -> (&'a [u8], P, P, bool, usize) {
+        // Obtain the current node's prefix and its length.
+        let cur_node_prefix_len = cur_node_prefix.len();
+
+        // Determine the prefix of the key after the current depth.
+        let key_prefix = key.prefix_after(depth);
+        // Find the longest common prefix between the current node's prefix and the key's prefix.
+        let longest_common_prefix = cur_node_prefix.longest_common_prefix(key_prefix);
+
+        // Create a new key that represents the remaining part of the current node's prefix after the common prefix.
+        let new_key = cur_node_prefix.prefix_after(longest_common_prefix).into();
+        // Extract the prefix of the current node up to the common prefix.
+        let prefix = cur_node_prefix.prefix_before(longest_common_prefix).into();
+        // Determine whether the current node's prefix and the key's prefix match up to the common prefix.
+        let is_prefix_match = min(cur_node_prefix_len, key_prefix.len()) == longest_common_prefix;
+
+        (
+            key_prefix,
+            new_key,
+            prefix,
+            is_prefix_match,
+            longest_common_prefix,
+        )
+    }
+
     /// Inserts a key-value pair recursively into the node.
     ///
     /// Recursively inserts a key-value pair into the current node and its child nodes.
@@ -643,19 +734,9 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     ) -> NodeArc<P, V> {
         // Obtain the current node's prefix and its length.
         let cur_node_prefix = cur_node.prefix().clone();
-        let cur_node_prefix_len = cur_node.prefix().len();
 
-        // Determine the prefix of the key after the current depth.
-        let key_prefix = key.prefix_after(depth);
-        // Find the longest common prefix between the current node's prefix and the key's prefix.
-        let longest_common_prefix = cur_node_prefix.longest_common_prefix(key_prefix);
-
-        // Create a new key that represents the remaining part of the current node's prefix after the common prefix.
-        let new_key = cur_node_prefix.prefix_after(longest_common_prefix).into();
-        // Extract the prefix of the current node up to the common prefix.
-        let prefix = cur_node_prefix.prefix_before(longest_common_prefix).into();
-        // Determine whether the current node's prefix and the key's prefix match up to the common prefix.
-        let is_prefix_match = min(cur_node_prefix_len, key_prefix.len()) == longest_common_prefix;
+        let (key_prefix, new_key, prefix, is_prefix_match, longest_common_prefix) =
+            Self::common_insert_logic(&cur_node_prefix, key, depth);
 
         // If the current node is a Twig node and the prefixes match up to the end of both prefixes,
         // update the existing value in the Twig node.
@@ -684,6 +765,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 ts,
             );
             n4 = n4.add_child(k1, old_node).add_child(k2, new_twig);
+
             return Arc::new(n4);
         }
 
@@ -712,7 +794,82 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             ts,
         );
         let new_node = cur_node.add_child(k, new_twig);
+
         Arc::new(new_node)
+    }
+
+    pub(crate) fn insert_recurse_mut(
+        cur_node: &mut Node<P, V>,
+        key: &P,
+        value: V,
+        commit_version: u64,
+        ts: u64,
+        depth: usize,
+    ) {
+        // Obtain the current node's prefix and its length.
+        let cur_node_prefix = cur_node.prefix().clone();
+
+        let (key_prefix, new_key, prefix, is_prefix_match, longest_common_prefix) =
+            Self::common_insert_logic(&cur_node_prefix, key, depth);
+
+        // If the current node is a Twig node and the prefixes match up to the end of both prefixes,
+        // update the existing value in the Twig node.
+        if let NodeType::Twig(ref mut twig) = &mut cur_node.node_type {
+            if is_prefix_match && cur_node_prefix.len() == key_prefix.len() {
+                twig.insert_mut(value.clone(), commit_version, ts);
+                return;
+            }
+        }
+
+        // If the prefixes don't match, create a new Node4 with the old node and a new Twig as children.
+        if !is_prefix_match {
+            cur_node.set_prefix(new_key);
+
+            let n4 = Node::new_node4(prefix);
+
+            let k1 = cur_node_prefix.at(longest_common_prefix);
+            let k2 = key_prefix[longest_common_prefix];
+
+            let old_node = std::mem::replace(cur_node, n4);
+
+            let new_twig = Node::new_twig(
+                key_prefix[longest_common_prefix..].into(),
+                key.as_slice().into(),
+                value.clone(),
+                commit_version,
+                ts,
+            );
+            cur_node.add_child_mut(k1, old_node);
+            cur_node.add_child_mut(k2, new_twig);
+
+            return;
+        }
+
+        // Continue the insertion process by finding or creating the appropriate child node for the next character.
+        let k = key_prefix[longest_common_prefix];
+        let child_for_key = cur_node.find_child_mut(k);
+        if let Some(child) = child_for_key {
+            Node::insert_recurse_mut(
+                child,
+                key,
+                value.clone(),
+                commit_version,
+                ts,
+                depth + longest_common_prefix,
+            );
+            cur_node.update_version();
+            return;
+        }
+
+        // If no child exists for the key's character, create a new Twig node and add it as a child.
+        let new_twig = Node::new_twig(
+            key_prefix[longest_common_prefix..].into(),
+            key.as_slice().into(),
+            value.clone(),
+            commit_version,
+            ts,
+        );
+        cur_node.add_child_mut(k, new_twig);
     }
 
     /// Removes a key recursively from the node and its children.
@@ -926,6 +1083,41 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Ok(())
     }
 
+    fn insert_common_mut(
+        &mut self,
+        key: &P,
+        value: V,
+        version: u64,
+        ts: u64,
+        check_version: bool,
+    ) -> Result<(), TrieError> {
+        if let Some(root_arc) = self.root.as_mut() {
+            let curr_version = root_arc.version();
+            let mut commit_version = version;
+            if version == 0 {
+                commit_version = curr_version + 1;
+            } else if check_version && curr_version > version {
+                return Err(TrieError::VersionIsOld);
+            }
+            if let Some(root) = Arc::get_mut(root_arc) {
+                Node::insert_recurse_mut(root, key, value, commit_version, ts, 0)
+            } else {
+                return Err(TrieError::RootIsNotUniquelyOwned);
+            }
+        } else {
+            let commit_version = if version == 0 { 1 } else { version };
+            self.root = Some(Arc::new(Node::new_twig(
+                key.as_slice().into(),
+                key.as_slice().into(),
+                value,
+                commit_version,
+                ts,
+            )));
+        }
+        self.size += 1;
+        Ok(())
+    }
+
     /// Inserts a new key-value pair with the specified version into the Trie.
     ///
     /// This function inserts a new key-value pair into the Trie. If the key already exists,
@@ -961,7 +1153,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         version: u64,
         ts: u64,
     ) -> Result<(), TrieError> {
-        self.insert_common(key, value, version, ts, false)
+        self.insert_common_mut(key, value, version, ts, false)
     }
 
     pub(crate) fn remove_from_node(
@@ -2142,6 +2334,8 @@ mod tests {
             actual_entries, expected_entries,
             "The number of entries in the tree does not match the expected number of insertions."
         );
+
+        assert_eq!(tree.version(), num_keys as u64);
     }
 
     #[test]
@@ -2160,6 +2354,8 @@ mod tests {
             total_entries, num_keys,
             "The total entries should be equal to the number of inserted keys."
         );
+
+        assert_eq!(tree.version(), { num_keys });
     }
 
     #[test]
@@ -2181,6 +2377,8 @@ mod tests {
         let (value, version, _) = tree.get(&key, 0).unwrap();
         assert_eq!(value, 2);
         assert_eq!(version, 2);
+
+        assert_eq!(tree.version(), 2);
     }
 
     #[test]
@@ -2251,7 +2449,7 @@ mod tests {
         // Insert 75 keys
         for i in 1..=75 {
             let key = VariableSizeKey::from_str(&format!("key{}", i)).unwrap();
-            let _ = tree.insert(&key, i, i as u64, 0);
+            tree.insert(&key, i, i as u64, 0).unwrap();
         }
 
         // Attempt to delete 25 keys (76 to 100), which do not exist
@@ -2420,6 +2618,7 @@ mod tests {
         let query_type = QueryType::LatestByVersion(3);
         let result = tree.get_value_by_query(&key, query_type).unwrap();
         assert_eq!(result, (30, 3, 300));
+        assert_eq!(tree.version(), 3);
     }
 
     #[test]
@@ -2433,6 +2632,7 @@ mod tests {
         let query_type = QueryType::LatestByTs(300);
         let result = tree.get_value_by_query(&key, query_type).unwrap();
         assert_eq!(result, (30, 3, 300));
+        assert_eq!(tree.version(), 3);
     }
 
     #[test]
@@ -2446,6 +2646,7 @@ mod tests {
         let query_type = QueryType::LastLessThanTs(150);
         let result = tree.get_value_by_query(&key, query_type).unwrap();
         assert_eq!(result, (10, 1, 100));
+        assert_eq!(tree.version(), 3);
     }
 
     #[test]
@@ -2459,6 +2660,7 @@ mod tests {
         let query_type = QueryType::LastLessOrEqualTs(150);
         let result = tree.get_value_by_query(&key, query_type).unwrap();
         assert_eq!(result, (20, 2, 150));
+        assert_eq!(tree.version(), 3);
     }
 
     #[test]
@@ -2472,6 +2674,7 @@ mod tests {
         let query_type = QueryType::FirstGreaterThanTs(150);
         let result = tree.get_value_by_query(&key, query_type).unwrap();
         assert_eq!(result, (30, 3, 200));
+        assert_eq!(tree.version(), 3);
     }
 
     #[test]
@@ -2485,5 +2688,6 @@ mod tests {
         let query_type = QueryType::FirstGreaterOrEqualTs(150);
         let result = tree.get_value_by_query(&key, query_type).unwrap();
         assert_eq!(result, (20, 2, 150));
+        assert_eq!(tree.version(), 3);
     }
 }

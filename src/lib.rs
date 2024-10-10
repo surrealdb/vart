@@ -399,6 +399,7 @@ impl<const SIZE: usize> BitSet<SIZE> {
 pub enum TrieError {
     FixedSizeKeyLengthExceeded,
     VersionIsOld,
+    RootIsNotUniquelyOwned,
 }
 
 impl Error for TrieError {}
@@ -411,6 +412,7 @@ impl fmt::Display for TrieError {
             TrieError::VersionIsOld => {
                 write!(f, "Given version is older than root's current version")
             }
+            TrieError::RootIsNotUniquelyOwned => write!(f, "Root arc is not uniquely owned"),
         }
     }
 }
