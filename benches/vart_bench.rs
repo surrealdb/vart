@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::time::Instant;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
@@ -39,6 +40,16 @@ pub fn seq_insert_mut(c: &mut Criterion) {
         })
     });
 
+    // Benchmark for BTreeMap
+    group.bench_function("btreemap", |b| {
+        let mut btree = BTreeMap::new();
+        let mut key = 0u64;
+        b.iter(|| {
+            btree.insert(key, key);
+            key += 1;
+        })
+    });
+
     group.finish();
 }
 
@@ -72,6 +83,16 @@ pub fn rand_insert_mut(c: &mut Criterion) {
         b.iter(|| {
             let key = &keys[rng.gen_range(0..keys.len())];
             let _ = tree.insert_unchecked(&key.into(), key.clone(), 0, 0);
+        })
+    });
+
+    // Benchmark for BTreeMap
+    group.bench_function("btreemap", |b| {
+        let mut btree = BTreeMap::new();
+        let mut rng = seeded_rng(0xE080D1A42C207DAF);
+        b.iter(|| {
+            let key = &keys[rng.gen_range(0..keys.len())];
+            btree.insert(key.clone(), key.clone());
         })
     });
 
@@ -270,8 +291,8 @@ criterion_group!(iter_benches, iter_benchmark);
 criterion_group!(range_benches, range_benchmark);
 criterion_main!(
     insert_benches,
-    // read_benches,
-    // delete_benches,
-    // iter_benches,
-    // range_benches
+    read_benches,
+    delete_benches,
+    iter_benches,
+    range_benches
 );

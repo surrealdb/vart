@@ -69,43 +69,44 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
             .unwrap_or(self.version)
     }
 
-    pub fn insert(&self, value: V, version: u64, ts: u64) -> TwigNode<K, V> {
-        let mut new_values = self.values.clone();
-
+    fn insert_common(values: &mut Vec<Arc<LeafValue<V>>>, value: V, version: u64, ts: u64) {
         let new_leaf_value = LeafValue::new(value, version, ts);
 
         // Check if a LeafValue with the same version exists and update or insert accordingly
-        match new_values.binary_search_by(|v| v.version.cmp(&new_leaf_value.version)) {
+        match values.binary_search_by(|v| v.version.cmp(&new_leaf_value.version)) {
             Ok(index) => {
                 // If an entry with the same version and timestamp exists, just put the same value
-                if self.values[index].ts == ts {
-                    new_values[index] = Arc::new(new_leaf_value);
+                if values[index].ts == ts {
+                    values[index] = Arc::new(new_leaf_value);
                 } else {
                     // If an entry with the same version and different timestamp exists, add a new entry
                     // Determine the direction to scan based on the comparison of timestamps
                     let mut insert_position = index;
-                    if new_values[index].ts < ts {
+                    if values[index].ts < ts {
                         // Scan forward to find the first entry with a timestamp greater than the new entry's timestamp
-                        insert_position += new_values[index..]
-                            .iter()
-                            .take_while(|v| v.ts <= ts)
-                            .count();
+                        insert_position +=
+                            values[index..].iter().take_while(|v| v.ts <= ts).count();
                     } else {
                         // Scan backward to find the insertion point before the first entry with a timestamp less than the new entry's timestamp
-                        insert_position -= new_values[..index]
+                        insert_position -= values[..index]
                             .iter()
                             .rev()
                             .take_while(|v| v.ts >= ts)
                             .count();
                     }
-                    new_values.insert(insert_position, Arc::new(new_leaf_value));
+                    values.insert(insert_position, Arc::new(new_leaf_value));
                 }
             }
             Err(index) => {
                 // If no entry with the same version exists, insert the new value at the correct position
-                new_values.insert(index, Arc::new(new_leaf_value));
+                values.insert(index, Arc::new(new_leaf_value));
             }
-        };
+        }
+    }
+
+    pub fn insert(&self, value: V, version: u64, ts: u64) -> TwigNode<K, V> {
+        let mut new_values = self.values.clone();
+        Self::insert_common(&mut new_values, value, version, ts);
 
         let new_version = new_values
             .iter()
@@ -122,48 +123,7 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
     }
 
     pub fn insert_mut(&mut self, value: V, version: u64, ts: u64) {
-        let new_leaf_value = LeafValue::new(value, version, ts);
-
-        // Insert new LeafValue in sorted order
-        match self
-            .values
-            .binary_search_by(|v| v.version.cmp(&new_leaf_value.version))
-        {
-            Ok(index) => {
-                // If found, check if the timestamp also matches
-                if self.values[index].ts == ts {
-                    self.values[index] = Arc::new(new_leaf_value);
-                } else {
-                    // If an entry with the same version and different timestamp exists, add a new entry
-                    // Determine the direction to scan based on the comparison of timestamps
-                    let mut insert_position = index;
-                    if self.values[index].ts < ts {
-                        // Scan forward to find the first entry with a timestamp greater than the new entry's timestamp
-                        insert_position += self.values[index..]
-                            .iter()
-                            .take_while(|v| v.ts <= ts)
-                            .count();
-                    } else {
-                        // Scan backward to find the insertion point before the first entry with a timestamp less than the new entry's timestamp
-                        insert_position -= self.values[..index]
-                            .iter()
-                            .rev()
-                            .take_while(|v| v.ts >= ts)
-                            .count();
-                    }
-                    self.values
-                        .insert(insert_position, Arc::new(new_leaf_value));
-                }
-            }
-            // Err(index) => index,
-            Err(index) => {
-                // If no entry with the same version exists, insert the new value at the correct position
-                self.values.insert(index, Arc::new(new_leaf_value));
-            }
-        };
-        // self.values
-        //     .insert(insertion_index, Arc::new(new_leaf_value));
-
+        Self::insert_common(&mut self.values, value, version, ts);
         self.version = self.version(); // Update LeafNode's version
     }
 
