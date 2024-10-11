@@ -582,7 +582,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             NodeType::Node16(n) => n.num_children(),
             NodeType::Node48(n) => n.num_children(),
             NodeType::Node256(n) => n.num_children(),
-            NodeType::Twig(n) => n.num_children(),
+            NodeType::Twig(_) => 0,
         }
     }
 

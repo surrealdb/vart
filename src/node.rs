@@ -61,12 +61,7 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         }
     }
 
-    #[inline(always)]
-    pub fn num_children(&self) -> usize {
-        self.values.len()
-    }
-
-    pub fn version(&self) -> u64 {
+    pub(crate) fn version(&self) -> u64 {
         self.values
             .iter()
             .map(|value| value.version)
@@ -284,12 +279,12 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> FlatNode<P, N, WIDTH> {
         new_node
     }
 
-    pub fn get_value_if_single_child(&self) -> (&P, Option<Arc<N>>) {
+    pub(crate) fn get_value_if_single_child(&self) -> (&P, Option<Arc<N>>) {
         assert_eq!(self.num_children, 1);
         (&self.prefix, self.children[0].clone())
     }
 
-    pub fn grow(&self) -> Node48<P, N> {
+    pub(crate) fn grow(&self) -> Node48<P, N> {
         let mut n48 = Node48::new(self.prefix.clone());
         for i in 0..self.num_children as usize {
             if let Some(child) = self.children[i].as_ref() {
