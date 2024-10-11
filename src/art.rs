@@ -1513,24 +1513,24 @@ mod tests {
         }
     }
 
-    // // Inserting Two values into a tree and deleting them both
-    // // should result in a nil tree root
-    // // This tests the expansion of the root into a NODE4 and
-    // // successfully collapsing into a twig and then nil upon successive removals
-    // #[test]
-    // fn insert2_and_remove2_and_root_should_be_nil() {
-    //     let key1 = &VariableSizeKey::from_str("test1");
-    //     let key2 = &VariableSizeKey::from_str("test2");
+    // Inserting Two values into a tree and deleting them both
+    // should result in a nil tree root
+    // This tests the expansion of the root into a NODE4 and
+    // successfully collapsing into a twig and then nil upon successive removals
+    #[test]
+    fn insert2_and_remove2_and_root_should_be_nil() {
+        let key1 = &VariableSizeKey::from_str("test1").unwrap();
+        let key2 = &VariableSizeKey::from_str("test2").unwrap();
 
-    //     let mut tree = Tree::<VariableSizeKey, i32>::new();
-    //     tree.insert(key1, 1, 0, 0);
-    //     tree.insert(key2, 1, 0);
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        tree.insert(key1, 1, 0, 0).unwrap();
+        tree.insert(key2, 1, 0, 0).unwrap();
 
-    //     assert_eq!(tree.remove(key1), true);
-    //     assert_eq!(tree.remove(key2), true);
+        assert!(tree.remove(key1));
+        assert!(tree.remove(key2));
 
-    //     assert!(tree.root.is_none());
-    // }
+        assert!(tree.root.is_none());
+    }
 
     // Inserting Five values into a tree and deleting one of them
     // should result in a tree root of type NODE4
@@ -1559,26 +1559,26 @@ mod tests {
         }
     }
 
-    //     // Inserting Five values into a tree and deleting all of them
-    //     // should result in a tree root of type nil
-    //     // This tests the expansion of the root into a NODE16 and
-    //     // successfully collapsing into a NODE4, twig, then nil
-    //     #[test]
-    //     fn insert5_and_remove5_and_root_should_be_nil() {
-    //         let mut tree = Tree::<VariableSizeKey, i32>::new();
+    // Inserting Five values into a tree and deleting all of them
+    // should result in a tree root of type nil
+    // This tests the expansion of the root into a NODE16 and
+    // successfully collapsing into a NODE4, twig, then nil
+    #[test]
+    fn insert5_and_remove5_and_root_should_be_nil() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
-    //         for i in 0..5u32 {
-    //             let key = &VariableSizeKey::from_slice(&i.to_be_bytes());
-    //             tree.insert(key, 1);
-    //         }
+        for i in 0..5u32 {
+            let key = &VariableSizeKey::from_slice(&i.to_be_bytes());
+            tree.insert(key, 1, 0, 0).unwrap();
+        }
 
-    //         for i in 0..5u32 {
-    //             let key = &VariableSizeKey::from_slice(&i.to_be_bytes());
-    //             tree.remove(key);
-    //         }
+        for i in 0..5u32 {
+            let key = &VariableSizeKey::from_slice(&i.to_be_bytes());
+            tree.remove(key);
+        }
 
-    //         assert!(tree.root.is_none());
-    //     }
+        assert!(tree.root.is_none());
+    }
 
     // Inserting 17 values into a tree and deleting one of them should
     // result in a tree root of type NODE16
@@ -1626,26 +1626,26 @@ mod tests {
         }
     }
 
-    // // Inserting 17 values into a tree and removing them all should
-    // // result in a tree of root type nil
-    // // This tests the expansion of the root into a NODE48, and
-    // // successfully collapsing into a NODE16, NODE4, twig, and then nil
-    // #[test]
-    // fn insert17_and_remove17_and_root_should_be_nil() {
-    //     let mut tree = Tree::<VariableSizeKey, i32>::new();
+    // Inserting 17 values into a tree and removing them all should
+    // result in a tree of root type nil
+    // This tests the expansion of the root into a NODE48, and
+    // successfully collapsing into a NODE16, NODE4, twig, and then nil
+    #[test]
+    fn insert17_and_remove17_and_root_should_be_nil() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
-    //     for i in 0..17u32 {
-    //         let key = VariableSizeKey::from_slice(&i.to_be_bytes());
-    //         tree.insert(&key, 1);
-    //     }
+        for i in 0..17u32 {
+            let key = VariableSizeKey::from_slice(&i.to_be_bytes());
+            tree.insert(&key, 1, 0, 0).unwrap();
+        }
 
-    //     for i in 0..17u32 {
-    //         let key = VariableSizeKey::from_slice(&i.to_be_bytes());
-    //         tree.remove(&key);
-    //     }
+        for i in 0..17u32 {
+            let key = VariableSizeKey::from_slice(&i.to_be_bytes());
+            tree.remove(&key);
+        }
 
-    //     assert!(tree.root.is_none());
-    // }
+        assert!(tree.root.is_none());
+    }
 
     // Inserting 49 values into a tree and removing one of them should
     // result in a tree root of type NODE48
@@ -1693,26 +1693,26 @@ mod tests {
         }
     }
 
-    //     // // Inserting 49 values into a tree and removing all of them should
-    //     // // result in a nil tree root
-    //     // // This tests the expansion of the root into a NODE256, and
-    //     // // successfully collapsing into a Node48, Node16, Node4, twig, and finally nil
-    //     // #[test]
-    //     // fn insert49_and_remove49_and_root_should_be_nil() {
-    //     //     let mut tree = Tree::<VariableSizeKey, i32>::new();
+    // Inserting 49 values into a tree and removing all of them should
+    // result in a nil tree root
+    // This tests the expansion of the root into a NODE256, and
+    // successfully collapsing into a Node48, Node16, Node4, twig, and finally nil
+    #[test]
+    fn insert49_and_remove49_and_root_should_be_nil() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
-    //     //     for i in 0..49u32 {
-    //     //         let key = &VariableSizeKey::from_slice(&i.to_be_bytes());
-    //     //         tree.insert(key, 1);
-    //     //     }
+        for i in 0..49u32 {
+            let key = &VariableSizeKey::from_slice(&i.to_be_bytes());
+            tree.insert(key, 1, 0, 0).unwrap();
+        }
 
-    //     //     for i in 0..49u32 {
-    //     //         let key = VariableSizeKey::from_slice(&i.to_be_bytes());
-    //     //         assert_eq!(tree.remove(&key), true);
-    //     //     }
+        for i in 0..49u32 {
+            let key = VariableSizeKey::from_slice(&i.to_be_bytes());
+            assert!(tree.remove(&key));
+        }
 
-    //     //     assert!(tree.root.is_none());
-    //     // }
+        assert!(tree.root.is_none());
+    }
 
     #[derive(Debug, Clone, PartialEq)]
     struct Kvt {
