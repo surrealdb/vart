@@ -47,7 +47,6 @@ impl<P: KeyTrait, V: Clone> Version for Node<P, V> {
     fn version(&self) -> u64 {
         match &self.node_type {
             NodeType::Twig(twig) => twig.version(),
-            NodeType::Node1(n) => n.version(),
             NodeType::Node4(n) => n.version(),
             NodeType::Node16(n) => n.version(),
             NodeType::Node48(n) => n.version(),
@@ -90,11 +89,22 @@ pub(crate) enum NodeType<P: KeyTrait, V: Clone> {
     // Twig node of the adaptive radix trie
     Twig(TwigNode<P, V>),
     // Inner node of the adaptive radix trie
-    Node1(FlatNode<P, Node<P, V>, 1>), // Node with 1 key and 1 children
     Node4(FlatNode<P, Node<P, V>, 4>), // Node with 4 keys and 4 children
     Node16(FlatNode<P, Node<P, V>, 16>), // Node with 16 keys and 16 children
     Node48(Node48<P, Node<P, V>>),     // Node with 256 keys and 48 children
     Node256(Node256<P, Node<P, V>>),   // Node with 256 keys and 256 children
+}
+
+impl<P: KeyTrait, V: Clone> NodeType<P, V> {
+    pub(crate) fn set_prefix(&mut self, prefix: P) {
+        match self {
+            NodeType::Node4(n) => n.prefix = prefix,
+            NodeType::Node16(n) => n.prefix = prefix,
+            NodeType::Node48(n) => n.prefix = prefix,
+            NodeType::Node256(n) => n.prefix = prefix,
+            NodeType::Twig(n) => n.prefix = prefix,
+        }
+    }
 }
 
 impl<P: KeyTrait, V: Clone> Node<P, V> {
@@ -165,7 +175,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     #[inline]
     fn is_full(&self) -> bool {
         match &self.node_type {
-            NodeType::Node1(n) => n.num_children() >= n.size(),
             NodeType::Node4(n) => n.num_children() >= n.size(),
             NodeType::Node16(n) => n.num_children() >= n.size(),
             NodeType::Node48(n) => n.num_children() >= n.size(),
@@ -194,9 +203,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             self.grow()
         } else {
             match &self.node_type {
-                NodeType::Node1(n) => Self {
-                    node_type: NodeType::Node1(n.clone()),
-                },
                 NodeType::Node4(n) => Self {
                     node_type: NodeType::Node4(n.clone()),
                 },
@@ -214,14 +220,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         };
 
         match cloned_node.node_type {
-            NodeType::Node1(mut n) => {
-                // Add the child node to the Node1 instance.
-                n.add_child(key, child);
-                let node = NodeType::Node1(n);
-
-                // Create a new Node instance with the updated NodeType.
-                Self { node_type: node }
-            }
             NodeType::Node4(mut n) => {
                 // Add the child node to the Node4 instance.
                 n.add_child(key, child);
@@ -266,10 +264,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         }
 
         match &mut self.node_type {
-            NodeType::Node1(ref mut n) => {
-                // Add the child node to the Node1 instance.
-                n.add_child(key, child);
-            }
             NodeType::Node4(ref mut n) => {
                 // Add the child node to the Node4 instance.
                 n.add_child(key, child);
@@ -302,10 +296,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     #[inline]
     fn grow(&self) -> Self {
         let node_type = match &self.node_type {
-            NodeType::Node1(n) => {
-                // Grow a Node4 to a Node16 by resizing.
-                NodeType::Node4(n.resize())
-            }
             NodeType::Node4(n) => {
                 // Grow a Node4 to a Node16 by resizing.
                 NodeType::Node16(n.resize())
@@ -348,7 +338,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
         // Match the node type to find the child using the appropriate method.
         match &self.node_type {
-            NodeType::Node1(n) => n.find_child(key),
             NodeType::Node4(n) => n.find_child(key),
             NodeType::Node16(n) => n.find_child(key),
             NodeType::Node48(n) => n.find_child(key),
@@ -366,7 +355,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
         // Match the node type to find the child using the appropriate method.
         match &mut self.node_type {
-            NodeType::Node1(n) => n.find_child_mut(key),
             NodeType::Node4(n) => n.find_child_mut(key),
             NodeType::Node16(n) => n.find_child_mut(key),
             NodeType::Node48(n) => n.find_child_mut(key),
@@ -390,11 +378,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     ///
     fn replace_child(&self, key: u8, node: Arc<Node<P, V>>) -> Self {
         match &self.node_type {
-            NodeType::Node1(n) => {
-                // Replace the child node in the Node4 instance and update the NodeType.
-                let node = NodeType::Node1(n.replace_child(key, node));
-                Self { node_type: node }
-            }
             NodeType::Node4(n) => {
                 // Replace the child node in the Node4 instance and update the NodeType.
                 let node = NodeType::Node4(n.replace_child(key, node));
@@ -435,12 +418,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     #[inline]
     fn delete_child(&self, key: u8) -> Self {
         match &self.node_type {
-            NodeType::Node1(n) => {
-                // Delete the child node from the Node1 instance and update the NodeType.
-                let node = NodeType::Node1(n.delete_child(key));
-
-                Self { node_type: node }
-            }
             NodeType::Node4(n) => {
                 // Delete the child node from the Node4 instance and update the NodeType.
                 let node = NodeType::Node4(n.delete_child(key));
@@ -531,7 +508,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     #[inline]
     pub(crate) fn prefix(&self) -> &P {
         match &self.node_type {
-            NodeType::Node1(n) => &n.prefix,
             NodeType::Node4(n) => &n.prefix,
             NodeType::Node16(n) => &n.prefix,
             NodeType::Node48(n) => &n.prefix,
@@ -550,14 +526,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     ///
     #[inline]
     fn set_prefix(&mut self, prefix: P) {
-        match &mut self.node_type {
-            NodeType::Node1(n) => n.prefix = prefix,
-            NodeType::Node4(n) => n.prefix = prefix,
-            NodeType::Node16(n) => n.prefix = prefix,
-            NodeType::Node48(n) => n.prefix = prefix,
-            NodeType::Node256(n) => n.prefix = prefix,
-            NodeType::Twig(n) => n.prefix = prefix,
-        }
+        self.node_type.set_prefix(prefix);
     }
 
     /// Shrinks the current node to a smaller size.
@@ -574,13 +543,14 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     /// before replacing itself.
     fn shrink(&mut self) {
         match &mut self.node_type {
-            NodeType::Node1(n) => {
-                // Shrink Node1 to Node1 by resizing it.
-                self.node_type = NodeType::Node1(n.resize());
-            }
             NodeType::Node4(n) => {
                 // Shrink Node4 to Node1 by resizing it.
-                self.node_type = NodeType::Node1(n.resize());
+                let (curr_prefix, child) = n.get_value_if_single_child();
+                let child = child.unwrap();
+                let mut child_type = child.node_type.clone();
+                let new_prefix = curr_prefix.extend(child.prefix());
+                child_type.set_prefix(new_prefix);
+                self.node_type = child_type;
             }
             NodeType::Node16(n) => {
                 // Shrink Node16 to Node4 by resizing it.
@@ -608,12 +578,11 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     #[inline]
     pub(crate) fn num_children(&self) -> usize {
         match &self.node_type {
-            NodeType::Node1(n) => n.num_children(),
             NodeType::Node4(n) => n.num_children(),
             NodeType::Node16(n) => n.num_children(),
             NodeType::Node48(n) => n.num_children(),
             NodeType::Node256(n) => n.num_children(),
-            NodeType::Twig(_) => 0,
+            NodeType::Twig(n) => n.num_children(),
         }
     }
 
@@ -644,7 +613,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     #[allow(unused)]
     pub(crate) fn node_type_name(&self) -> String {
         match &self.node_type {
-            NodeType::Node1(_) => "Node1".to_string(),
             NodeType::Node4(_) => "Node4".to_string(),
             NodeType::Node16(_) => "Node16".to_string(),
             NodeType::Node48(_) => "Node48".to_string(),
@@ -670,7 +638,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
     fn update_version(&mut self) {
         match &mut self.node_type {
-            NodeType::Node1(n) => n.update_version_to_max_child_version(),
             NodeType::Node4(n) => n.update_version_to_max_child_version(),
             NodeType::Node16(n) => n.update_version_to_max_child_version(),
             NodeType::Node48(n) => n.update_version_to_max_child_version(),
@@ -989,7 +956,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     #[allow(dead_code)]
     pub(crate) fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = (u8, &Arc<Self>)> + '_> {
         match &self.node_type {
-            NodeType::Node1(n) => Box::new(n.iter()),
             NodeType::Node4(n) => Box::new(n.iter()),
             NodeType::Node16(n) => Box::new(n.iter()),
             NodeType::Node48(n) => Box::new(n.iter()),
@@ -1027,7 +993,6 @@ impl<P: KeyTrait, V: Clone> NodeType<P, V> {
         match self {
             // twig value not actually cloned
             NodeType::Twig(twig) => NodeType::Twig(twig.clone()),
-            NodeType::Node1(n) => NodeType::Node1(n.clone()),
             NodeType::Node4(n) => NodeType::Node4(n.clone()),
             NodeType::Node16(n) => NodeType::Node16(n.clone()),
             NodeType::Node48(n) => NodeType::Node48(n.clone()),
@@ -1180,7 +1145,10 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                     let (new_root, removed) =
                         Node::remove_recurse(root, key, longest_common_prefix);
 
-                    if removed && new_root.as_ref().unwrap().num_children() == 0 {
+                    if removed
+                        && new_root.as_ref().unwrap().is_inner()
+                        && new_root.as_ref().unwrap().num_children() == 0
+                    {
                         // If the node was deleted and it has no children, return None as the new root.
                         (None, removed)
                     } else {
@@ -1515,7 +1483,7 @@ mod tests {
 
         // Root verification
         if let Some(root) = &tree.root {
-            assert_eq!(root.node_type_name(), "Node1");
+            assert_eq!(root.node_type_name(), "Twig");
         } else {
             panic!("Tree root is None");
         }
@@ -1539,7 +1507,7 @@ mod tests {
 
         // Root verification
         if let Some(root) = &tree.root {
-            assert_eq!(root.node_type_name(), "Node1");
+            assert_eq!(root.node_type_name(), "Twig");
         } else {
             panic!("Tree root is None");
         }
