@@ -1032,7 +1032,6 @@ mod tests {
             (b"kiwi\0".to_vec(), &10, &10, &0),
         ];
 
-        println!("{} {:?}", results.len(), results);
         assert_eq!(results, expected);
     }
 

@@ -47,7 +47,6 @@ impl<P: KeyTrait, V: Clone> Version for Node<P, V> {
     fn version(&self) -> u64 {
         match &self.node_type {
             NodeType::Twig(twig) => twig.version(),
-            NodeType::Node1(n) => n.version(),
             NodeType::Node4(n) => n.version(),
             NodeType::Node16(n) => n.version(),
             NodeType::Node48(n) => n.version(),
@@ -90,11 +89,22 @@ pub(crate) enum NodeType<P: KeyTrait, V: Clone> {
     // Twig node of the adaptive radix trie
     Twig(TwigNode<P, V>),
     // Inner node of the adaptive radix trie
-    Node1(FlatNode<P, Node<P, V>, 1>), // Node with 1 key and 1 children
     Node4(FlatNode<P, Node<P, V>, 4>), // Node with 4 keys and 4 children
     Node16(FlatNode<P, Node<P, V>, 16>), // Node with 16 keys and 16 children
     Node48(Node48<P, Node<P, V>>),     // Node with 256 keys and 48 children
     Node256(Node256<P, Node<P, V>>),   // Node with 256 keys and 256 children
+}
+
+impl<P: KeyTrait, V: Clone> NodeType<P, V> {
+    pub(crate) fn set_prefix(&mut self, prefix: P) {
+        match self {
+            NodeType::Node4(n) => n.prefix = prefix,
+            NodeType::Node16(n) => n.prefix = prefix,
+            NodeType::Node48(n) => n.prefix = prefix,
+            NodeType::Node256(n) => n.prefix = prefix,
+            NodeType::Twig(n) => n.prefix = prefix,
+        }
+    }
 }
 
 impl<P: KeyTrait, V: Clone> Node<P, V> {
@@ -165,7 +175,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     #[inline]
     fn is_full(&self) -> bool {
         match &self.node_type {
-            NodeType::Node1(n) => n.num_children() >= n.size(),
             NodeType::Node4(n) => n.num_children() >= n.size(),
             NodeType::Node16(n) => n.num_children() >= n.size(),
             NodeType::Node48(n) => n.num_children() >= n.size(),
@@ -194,9 +203,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             self.grow()
         } else {
             match &self.node_type {
-                NodeType::Node1(n) => Self {
-                    node_type: NodeType::Node1(n.clone()),
-                },
                 NodeType::Node4(n) => Self {
                     node_type: NodeType::Node4(n.clone()),
                 },
@@ -214,14 +220,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         };
 
         match cloned_node.node_type {
-            NodeType::Node1(mut n) => {
-                // Add the child node to the Node1 instance.
-                n.add_child(key, child);
-                let node = NodeType::Node1(n);
-
-                // Create a new Node instance with the updated NodeType.
-                Self { node_type: node }
-            }
             NodeType::Node4(mut n) => {
                 // Add the child node to the Node4 instance.
                 n.add_child(key, child);
@@ -266,10 +264,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         }
 
         match &mut self.node_type {
-            NodeType::Node1(ref mut n) => {
-                // Add the child node to the Node1 instance.
-                n.add_child(key, child);
-            }
             NodeType::Node4(ref mut n) => {
                 // Add the child node to the Node4 instance.
                 n.add_child(key, child);
@@ -302,10 +296,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     #[inline]
     fn grow(&self) -> Self {
         let node_type = match &self.node_type {
-            NodeType::Node1(n) => {
-                // Grow a Node4 to a Node16 by resizing.
-                NodeType::Node4(n.resize())
-            }
             NodeType::Node4(n) => {
                 // Grow a Node4 to a Node16 by resizing.
                 NodeType::Node16(n.resize())
@@ -348,7 +338,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
         // Match the node type to find the child using the appropriate method.
         match &self.node_type {
-            NodeType::Node1(n) => n.find_child(key),
             NodeType::Node4(n) => n.find_child(key),
             NodeType::Node16(n) => n.find_child(key),
             NodeType::Node48(n) => n.find_child(key),
@@ -366,7 +355,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
         // Match the node type to find the child using the appropriate method.
         match &mut self.node_type {
-            NodeType::Node1(n) => n.find_child_mut(key),
             NodeType::Node4(n) => n.find_child_mut(key),
             NodeType::Node16(n) => n.find_child_mut(key),
             NodeType::Node48(n) => n.find_child_mut(key),
@@ -390,11 +378,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     ///
     fn replace_child(&self, key: u8, node: Arc<Node<P, V>>) -> Self {
         match &self.node_type {
-            NodeType::Node1(n) => {
-                // Replace the child node in the Node4 instance and update the NodeType.
-                let node = NodeType::Node1(n.replace_child(key, node));
-                Self { node_type: node }
-            }
             NodeType::Node4(n) => {
                 // Replace the child node in the Node4 instance and update the NodeType.
                 let node = NodeType::Node4(n.replace_child(key, node));
@@ -435,12 +418,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     #[inline]
     fn delete_child(&self, key: u8) -> Self {
         match &self.node_type {
-            NodeType::Node1(n) => {
-                // Delete the child node from the Node1 instance and update the NodeType.
-                let node = NodeType::Node1(n.delete_child(key));
-
-                Self { node_type: node }
-            }
             NodeType::Node4(n) => {
                 // Delete the child node from the Node4 instance and update the NodeType.
                 let node = NodeType::Node4(n.delete_child(key));
@@ -531,7 +508,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     #[inline]
     pub(crate) fn prefix(&self) -> &P {
         match &self.node_type {
-            NodeType::Node1(n) => &n.prefix,
             NodeType::Node4(n) => &n.prefix,
             NodeType::Node16(n) => &n.prefix,
             NodeType::Node48(n) => &n.prefix,
@@ -550,14 +526,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     ///
     #[inline]
     fn set_prefix(&mut self, prefix: P) {
-        match &mut self.node_type {
-            NodeType::Node1(n) => n.prefix = prefix,
-            NodeType::Node4(n) => n.prefix = prefix,
-            NodeType::Node16(n) => n.prefix = prefix,
-            NodeType::Node48(n) => n.prefix = prefix,
-            NodeType::Node256(n) => n.prefix = prefix,
-            NodeType::Twig(n) => n.prefix = prefix,
-        }
+        self.node_type.set_prefix(prefix);
     }
 
     /// Shrinks the current node to a smaller size.
@@ -574,13 +543,18 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     /// before replacing itself.
     fn shrink(&mut self) {
         match &mut self.node_type {
-            NodeType::Node1(n) => {
-                // Shrink Node1 to Node1 by resizing it.
-                self.node_type = NodeType::Node1(n.resize());
-            }
             NodeType::Node4(n) => {
                 // Shrink Node4 to Node1 by resizing it.
-                self.node_type = NodeType::Node1(n.resize());
+                // In an Adaptive Radix Tree (ART), when a node has only one child,
+                // it can be collapsed into its first child to save space and improve efficiency.
+                // During this process, the prefix of the current node and the prefix of the child node
+                // are combined (compressed) into a single prefix.
+                let (curr_prefix, child) = n.get_value_if_single_child();
+                let child = child.unwrap();
+                let mut child_type = child.node_type.clone();
+                let new_prefix = curr_prefix.extend(child.prefix());
+                child_type.set_prefix(new_prefix);
+                self.node_type = child_type;
             }
             NodeType::Node16(n) => {
                 // Shrink Node16 to Node4 by resizing it.
@@ -608,7 +582,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     #[inline]
     pub(crate) fn num_children(&self) -> usize {
         match &self.node_type {
-            NodeType::Node1(n) => n.num_children(),
             NodeType::Node4(n) => n.num_children(),
             NodeType::Node16(n) => n.num_children(),
             NodeType::Node48(n) => n.num_children(),
@@ -644,7 +617,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     #[allow(unused)]
     pub(crate) fn node_type_name(&self) -> String {
         match &self.node_type {
-            NodeType::Node1(_) => "Node1".to_string(),
             NodeType::Node4(_) => "Node4".to_string(),
             NodeType::Node16(_) => "Node16".to_string(),
             NodeType::Node48(_) => "Node48".to_string(),
@@ -670,7 +642,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
     fn update_version(&mut self) {
         match &mut self.node_type {
-            NodeType::Node1(n) => n.update_version_to_max_child_version(),
             NodeType::Node4(n) => n.update_version_to_max_child_version(),
             NodeType::Node16(n) => n.update_version_to_max_child_version(),
             NodeType::Node48(n) => n.update_version_to_max_child_version(),
@@ -989,7 +960,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     #[allow(dead_code)]
     pub(crate) fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = (u8, &Arc<Self>)> + '_> {
         match &self.node_type {
-            NodeType::Node1(n) => Box::new(n.iter()),
             NodeType::Node4(n) => Box::new(n.iter()),
             NodeType::Node16(n) => Box::new(n.iter()),
             NodeType::Node48(n) => Box::new(n.iter()),
@@ -1027,7 +997,6 @@ impl<P: KeyTrait, V: Clone> NodeType<P, V> {
         match self {
             // twig value not actually cloned
             NodeType::Twig(twig) => NodeType::Twig(twig.clone()),
-            NodeType::Node1(n) => NodeType::Node1(n.clone()),
             NodeType::Node4(n) => NodeType::Node4(n.clone()),
             NodeType::Node16(n) => NodeType::Node16(n.clone()),
             NodeType::Node48(n) => NodeType::Node48(n.clone()),
@@ -1180,7 +1149,10 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                     let (new_root, removed) =
                         Node::remove_recurse(root, key, longest_common_prefix);
 
-                    if removed && new_root.as_ref().unwrap().num_children() == 0 {
+                    if removed
+                        && new_root.as_ref().unwrap().is_inner()
+                        && new_root.as_ref().unwrap().num_children() == 0
+                    {
                         // If the node was deleted and it has no children, return None as the new root.
                         (None, removed)
                     } else {
@@ -1515,7 +1487,7 @@ mod tests {
 
         // Root verification
         if let Some(root) = &tree.root {
-            assert_eq!(root.node_type_name(), "Node1");
+            assert_eq!(root.node_type_name(), "Twig");
         } else {
             panic!("Tree root is None");
         }
@@ -1539,30 +1511,30 @@ mod tests {
 
         // Root verification
         if let Some(root) = &tree.root {
-            assert_eq!(root.node_type_name(), "Node1");
+            assert_eq!(root.node_type_name(), "Twig");
         } else {
             panic!("Tree root is None");
         }
     }
 
-    // // Inserting Two values into a tree and deleting them both
-    // // should result in a nil tree root
-    // // This tests the expansion of the root into a NODE4 and
-    // // successfully collapsing into a twig and then nil upon successive removals
-    // #[test]
-    // fn insert2_and_remove2_and_root_should_be_nil() {
-    //     let key1 = &VariableSizeKey::from_str("test1");
-    //     let key2 = &VariableSizeKey::from_str("test2");
+    // Inserting Two values into a tree and deleting them both
+    // should result in a nil tree root
+    // This tests the expansion of the root into a NODE4 and
+    // successfully collapsing into a twig and then nil upon successive removals
+    #[test]
+    fn insert2_and_remove2_and_root_should_be_nil() {
+        let key1 = &VariableSizeKey::from_str("test1").unwrap();
+        let key2 = &VariableSizeKey::from_str("test2").unwrap();
 
-    //     let mut tree = Tree::<VariableSizeKey, i32>::new();
-    //     tree.insert(key1, 1, 0, 0);
-    //     tree.insert(key2, 1, 0);
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        tree.insert(key1, 1, 0, 0).unwrap();
+        tree.insert(key2, 1, 0, 0).unwrap();
 
-    //     assert_eq!(tree.remove(key1), true);
-    //     assert_eq!(tree.remove(key2), true);
+        assert!(tree.remove(key1));
+        assert!(tree.remove(key2));
 
-    //     assert!(tree.root.is_none());
-    // }
+        assert!(tree.root.is_none());
+    }
 
     // Inserting Five values into a tree and deleting one of them
     // should result in a tree root of type NODE4
@@ -1591,26 +1563,26 @@ mod tests {
         }
     }
 
-    //     // Inserting Five values into a tree and deleting all of them
-    //     // should result in a tree root of type nil
-    //     // This tests the expansion of the root into a NODE16 and
-    //     // successfully collapsing into a NODE4, twig, then nil
-    //     #[test]
-    //     fn insert5_and_remove5_and_root_should_be_nil() {
-    //         let mut tree = Tree::<VariableSizeKey, i32>::new();
+    // Inserting Five values into a tree and deleting all of them
+    // should result in a tree root of type nil
+    // This tests the expansion of the root into a NODE16 and
+    // successfully collapsing into a NODE4, twig, then nil
+    #[test]
+    fn insert5_and_remove5_and_root_should_be_nil() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
-    //         for i in 0..5u32 {
-    //             let key = &VariableSizeKey::from_slice(&i.to_be_bytes());
-    //             tree.insert(key, 1);
-    //         }
+        for i in 0..5u32 {
+            let key = &VariableSizeKey::from_slice(&i.to_be_bytes());
+            tree.insert(key, 1, 0, 0).unwrap();
+        }
 
-    //         for i in 0..5u32 {
-    //             let key = &VariableSizeKey::from_slice(&i.to_be_bytes());
-    //             tree.remove(key);
-    //         }
+        for i in 0..5u32 {
+            let key = &VariableSizeKey::from_slice(&i.to_be_bytes());
+            tree.remove(key);
+        }
 
-    //         assert!(tree.root.is_none());
-    //     }
+        assert!(tree.root.is_none());
+    }
 
     // Inserting 17 values into a tree and deleting one of them should
     // result in a tree root of type NODE16
@@ -1658,26 +1630,26 @@ mod tests {
         }
     }
 
-    // // Inserting 17 values into a tree and removing them all should
-    // // result in a tree of root type nil
-    // // This tests the expansion of the root into a NODE48, and
-    // // successfully collapsing into a NODE16, NODE4, twig, and then nil
-    // #[test]
-    // fn insert17_and_remove17_and_root_should_be_nil() {
-    //     let mut tree = Tree::<VariableSizeKey, i32>::new();
+    // Inserting 17 values into a tree and removing them all should
+    // result in a tree of root type nil
+    // This tests the expansion of the root into a NODE48, and
+    // successfully collapsing into a NODE16, NODE4, twig, and then nil
+    #[test]
+    fn insert17_and_remove17_and_root_should_be_nil() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
-    //     for i in 0..17u32 {
-    //         let key = VariableSizeKey::from_slice(&i.to_be_bytes());
-    //         tree.insert(&key, 1);
-    //     }
+        for i in 0..17u32 {
+            let key = VariableSizeKey::from_slice(&i.to_be_bytes());
+            tree.insert(&key, 1, 0, 0).unwrap();
+        }
 
-    //     for i in 0..17u32 {
-    //         let key = VariableSizeKey::from_slice(&i.to_be_bytes());
-    //         tree.remove(&key);
-    //     }
+        for i in 0..17u32 {
+            let key = VariableSizeKey::from_slice(&i.to_be_bytes());
+            tree.remove(&key);
+        }
 
-    //     assert!(tree.root.is_none());
-    // }
+        assert!(tree.root.is_none());
+    }
 
     // Inserting 49 values into a tree and removing one of them should
     // result in a tree root of type NODE48
@@ -1725,26 +1697,26 @@ mod tests {
         }
     }
 
-    //     // // Inserting 49 values into a tree and removing all of them should
-    //     // // result in a nil tree root
-    //     // // This tests the expansion of the root into a NODE256, and
-    //     // // successfully collapsing into a Node48, Node16, Node4, twig, and finally nil
-    //     // #[test]
-    //     // fn insert49_and_remove49_and_root_should_be_nil() {
-    //     //     let mut tree = Tree::<VariableSizeKey, i32>::new();
+    // Inserting 49 values into a tree and removing all of them should
+    // result in a nil tree root
+    // This tests the expansion of the root into a NODE256, and
+    // successfully collapsing into a Node48, Node16, Node4, twig, and finally nil
+    #[test]
+    fn insert49_and_remove49_and_root_should_be_nil() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
 
-    //     //     for i in 0..49u32 {
-    //     //         let key = &VariableSizeKey::from_slice(&i.to_be_bytes());
-    //     //         tree.insert(key, 1);
-    //     //     }
+        for i in 0..49u32 {
+            let key = &VariableSizeKey::from_slice(&i.to_be_bytes());
+            tree.insert(key, 1, 0, 0).unwrap();
+        }
 
-    //     //     for i in 0..49u32 {
-    //     //         let key = VariableSizeKey::from_slice(&i.to_be_bytes());
-    //     //         assert_eq!(tree.remove(&key), true);
-    //     //     }
+        for i in 0..49u32 {
+            let key = VariableSizeKey::from_slice(&i.to_be_bytes());
+            assert!(tree.remove(&key));
+        }
 
-    //     //     assert!(tree.root.is_none());
-    //     // }
+        assert!(tree.root.is_none());
+    }
 
     #[derive(Debug, Clone, PartialEq)]
     struct Kvt {
