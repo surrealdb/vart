@@ -545,6 +545,10 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         match &mut self.node_type {
             NodeType::Node4(n) => {
                 // Shrink Node4 to Node1 by resizing it.
+                // In an Adaptive Radix Tree (ART), when a node has only one child,
+                // it can be collapsed into its first child to save space and improve efficiency.
+                // During this process, the prefix of the current node and the prefix of the child node
+                // are combined (compressed) into a single prefix.
                 let (curr_prefix, child) = n.get_value_if_single_child();
                 let child = child.unwrap();
                 let mut child_type = child.node_type.clone();
