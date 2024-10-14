@@ -39,7 +39,7 @@ const NODE256MIN: usize = NODE48MAX + 1;
 /// - `node_type`: The `NodeType` variant representing the type of the node, containing its
 ///                specific structure and associated data.
 ///
-pub struct Node<P: KeyTrait, V: Clone> {
+pub(crate) struct Node<P: KeyTrait, V: Clone> {
     pub(crate) node_type: NodeType<P, V>, // Type of the node
 }
 
@@ -606,7 +606,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     }
 
     #[inline]
-    pub fn num_children(&self) -> usize {
+    pub(crate) fn num_children(&self) -> usize {
         match &self.node_type {
             NodeType::Node1(n) => n.num_children(),
             NodeType::Node4(n) => n.num_children(),
@@ -628,7 +628,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     }
 
     #[inline]
-    pub fn get_all_versions(&self) -> Option<Vec<(V, u64, u64)>> {
+    pub(crate) fn get_all_versions(&self) -> Option<Vec<(V, u64, u64)>> {
         // Unwrap the NodeType::Twig to access the TwigNode instance.
         let NodeType::Twig(twig) = &self.node_type else {
             return None;
@@ -641,7 +641,8 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         Some(val)
     }
 
-    pub fn node_type_name(&self) -> String {
+    #[allow(unused)]
+    pub(crate) fn node_type_name(&self) -> String {
         match &self.node_type {
             NodeType::Node1(_) => "Node1".to_string(),
             NodeType::Node4(_) => "Node4".to_string(),
@@ -969,7 +970,10 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         Some((val.value.clone(), val.version, val.ts))
     }
 
-    pub fn get_version_history(cur_node: &Node<P, V>, key: &P) -> Option<Vec<(V, u64, u64)>> {
+    pub(crate) fn get_version_history(
+        cur_node: &Node<P, V>,
+        key: &P,
+    ) -> Option<Vec<(V, u64, u64)>> {
         Self::navigate_to_node(cur_node, key).and_then(|cur_node| cur_node.get_all_versions())
     }
 
@@ -983,7 +987,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     /// Returns a boxed iterator that yields tuples containing keys and references to child nodes.
     ///
     #[allow(dead_code)]
-    pub fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = (u8, &Arc<Self>)> + '_> {
+    pub(crate) fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = (u8, &Arc<Self>)> + '_> {
         match &self.node_type {
             NodeType::Node1(n) => Box::new(n.iter()),
             NodeType::Node4(n) => Box::new(n.iter()),
