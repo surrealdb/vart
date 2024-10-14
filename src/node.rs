@@ -6,7 +6,7 @@ use crate::{art::QueryType, KeyTrait};
     Immutable nodes
 */
 
-pub trait NodeTrait<N> {
+pub(crate) trait NodeTrait<N> {
     fn clone(&self) -> Self;
     fn add_child(&mut self, key: u8, node: N);
     fn find_child(&self, key: u8) -> Option<&Arc<N>>;
@@ -18,12 +18,12 @@ pub trait NodeTrait<N> {
     fn update_version_to_max_child_version(&mut self);
 }
 
-pub trait Version {
+pub(crate) trait Version {
     fn version(&self) -> u64;
 }
 
 #[derive(Clone)]
-pub struct TwigNode<K: KeyTrait, V: Clone> {
+pub(crate) struct TwigNode<K: KeyTrait, V: Clone> {
     pub(crate) prefix: K,
     pub(crate) key: K,
     pub(crate) values: Vec<Arc<LeafValue<V>>>,
@@ -39,20 +39,20 @@ pub struct TwigNode<K: KeyTrait, V: Clone> {
 // This ensures a consistent ordering of versions based on their timestamps.
 //
 #[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord)]
-pub struct LeafValue<V: Clone> {
+pub(crate) struct LeafValue<V: Clone> {
     pub(crate) value: V,
     pub(crate) version: u64,
     pub(crate) ts: u64,
 }
 
 impl<V: Clone> LeafValue<V> {
-    pub fn new(value: V, version: u64, ts: u64) -> Self {
+    pub(crate) fn new(value: V, version: u64, ts: u64) -> Self {
         LeafValue { value, version, ts }
     }
 }
 
 impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
-    pub fn new(prefix: K, key: K) -> Self {
+    pub(crate) fn new(prefix: K, key: K) -> Self {
         TwigNode {
             prefix,
             key,
@@ -61,7 +61,7 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         }
     }
 
-    pub fn version(&self) -> u64 {
+    pub(crate) fn version(&self) -> u64 {
         self.values
             .iter()
             .map(|value| value.version)
@@ -104,7 +104,7 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         }
     }
 
-    pub fn insert(&self, value: V, version: u64, ts: u64) -> TwigNode<K, V> {
+    pub(crate) fn insert(&self, value: V, version: u64, ts: u64) -> TwigNode<K, V> {
         let mut new_values = self.values.clone();
         Self::insert_common(&mut new_values, value, version, ts);
 
@@ -122,12 +122,12 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         }
     }
 
-    pub fn insert_mut(&mut self, value: V, version: u64, ts: u64) {
+    pub(crate) fn insert_mut(&mut self, value: V, version: u64, ts: u64) {
         Self::insert_common(&mut self.values, value, version, ts);
         self.version = self.version(); // Update LeafNode's version
     }
 
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Arc<LeafValue<V>>> {
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &Arc<LeafValue<V>>> {
         self.values.iter()
     }
 }
@@ -161,20 +161,12 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     }
 
     #[inline]
-    pub fn get_latest_leaf(&self) -> Option<&Arc<LeafValue<V>>> {
+    pub(crate) fn get_latest_leaf(&self) -> Option<&Arc<LeafValue<V>>> {
         self.values.iter().max_by_key(|value| value.version)
     }
 
     #[inline]
-    pub fn get_latest_value(&self) -> Option<&V> {
-        self.values
-            .iter()
-            .max_by_key(|value| value.version)
-            .map(|value| &value.value)
-    }
-
-    #[inline]
-    pub fn get_leaf_by_version(&self, version: u64) -> Option<&Arc<LeafValue<V>>> {
+    pub(crate) fn get_leaf_by_version(&self, version: u64) -> Option<&Arc<LeafValue<V>>> {
         self.values
             .iter()
             .filter(|value| value.version <= version)
@@ -182,7 +174,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     }
 
     #[inline]
-    pub fn get_leaf_by_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
+    pub(crate) fn get_leaf_by_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
         self.values
             .iter()
             .filter(|value| value.ts <= ts)
@@ -190,7 +182,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     }
 
     #[inline]
-    pub fn get_all_versions(&self) -> Vec<(V, u64, u64)> {
+    pub(crate) fn get_all_versions(&self) -> Vec<(V, u64, u64)> {
         self.values
             .iter()
             .map(|value| (value.value.clone(), value.version, value.ts))
@@ -198,7 +190,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     }
 
     #[inline]
-    pub fn last_less_than_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
+    pub(crate) fn last_less_than_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
         self.values
             .iter()
             .filter(|value| value.ts < ts)
@@ -206,12 +198,12 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     }
 
     #[inline]
-    pub fn last_less_or_equal_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
+    pub(crate) fn last_less_or_equal_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
         self.get_leaf_by_ts(ts)
     }
 
     #[inline]
-    pub fn first_greater_than_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
+    pub(crate) fn first_greater_than_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
         self.values
             .iter()
             .filter(|value| value.ts > ts)
@@ -219,7 +211,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     }
 
     #[inline]
-    pub fn first_greater_or_equal_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
+    pub(crate) fn first_greater_or_equal_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
         self.values
             .iter()
             .filter(|value| value.ts >= ts)
@@ -243,7 +235,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
 // keys are stored in a parallel array. The keys are stored in sorted order, so
 // binary search can be used to find a particular key. The FlatNode is used for
 // storing Node4 and Node16 since they have identical layouts.
-pub struct FlatNode<P: KeyTrait, N: Version, const WIDTH: usize> {
+pub(crate) struct FlatNode<P: KeyTrait, N: Version, const WIDTH: usize> {
     pub(crate) prefix: P,
     pub(crate) version: u64,
     keys: [u8; WIDTH],
@@ -252,7 +244,7 @@ pub struct FlatNode<P: KeyTrait, N: Version, const WIDTH: usize> {
 }
 
 impl<P: KeyTrait, N: Version, const WIDTH: usize> FlatNode<P, N, WIDTH> {
-    pub fn new(prefix: P) -> Self {
+    pub(crate) fn new(prefix: P) -> Self {
         let children: [Option<Arc<N>>; WIDTH] = std::array::from_fn(|_| None);
 
         Self {
@@ -275,7 +267,7 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> FlatNode<P, N, WIDTH> {
             .position(|&c| key == c)
     }
 
-    pub fn resize<const NEW_WIDTH: usize>(&self) -> FlatNode<P, N, NEW_WIDTH> {
+    pub(crate) fn resize<const NEW_WIDTH: usize>(&self) -> FlatNode<P, N, NEW_WIDTH> {
         let mut new_node = FlatNode::<P, N, NEW_WIDTH>::new(self.prefix.clone());
         for i in 0..self.num_children as usize {
             new_node.keys[i] = self.keys[i];
@@ -287,7 +279,7 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> FlatNode<P, N, WIDTH> {
         new_node
     }
 
-    pub fn grow(&self) -> Node48<P, N> {
+    pub(crate) fn grow(&self) -> Node48<P, N> {
         let mut n48 = Node48::new(self.prefix.clone());
         for i in 0..self.num_children as usize {
             if let Some(child) = self.children[i].as_ref() {
@@ -446,7 +438,7 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> Version for FlatNode<P, N, WID
 // A Node48 is a 256-entry array of pointers to children. The pointers are stored in
 // a Vector Array, which is a Vector of length WIDTH (48) that stores the pointers.
 
-pub struct Node48<P: KeyTrait, N: Version> {
+pub(crate) struct Node48<P: KeyTrait, N: Version> {
     pub(crate) prefix: P,
     pub(crate) version: u64,
     keys: Box<[u8; 256]>,
@@ -455,7 +447,7 @@ pub struct Node48<P: KeyTrait, N: Version> {
 }
 
 impl<P: KeyTrait, N: Version> Node48<P, N> {
-    pub fn new(prefix: P) -> Self {
+    pub(crate) fn new(prefix: P) -> Self {
         Self {
             prefix,
             version: 0,
@@ -465,7 +457,7 @@ impl<P: KeyTrait, N: Version> Node48<P, N> {
         }
     }
 
-    pub fn insert_child(&mut self, key: u8, node: Arc<N>) {
+    pub(crate) fn insert_child(&mut self, key: u8, node: Arc<N>) {
         let pos = self.child_bitmap.trailing_ones();
         assert!(pos < 48);
 
@@ -474,7 +466,7 @@ impl<P: KeyTrait, N: Version> Node48<P, N> {
         self.child_bitmap |= 1 << pos;
     }
 
-    pub fn shrink<const NEW_WIDTH: usize>(&self) -> FlatNode<P, N, NEW_WIDTH> {
+    pub(crate) fn shrink<const NEW_WIDTH: usize>(&self) -> FlatNode<P, N, NEW_WIDTH> {
         let mut fnode = FlatNode::new(self.prefix.clone());
         for (key, pos) in self
             .keys
@@ -490,7 +482,7 @@ impl<P: KeyTrait, N: Version> Node48<P, N> {
         fnode
     }
 
-    pub fn grow(&self) -> Node256<P, N> {
+    pub(crate) fn grow(&self) -> Node256<P, N> {
         let mut n256 = Node256::new(self.prefix.clone());
         for (key, pos) in self
             .keys
@@ -532,7 +524,7 @@ impl<P: KeyTrait, N: Version> Node48<P, N> {
         }
     }
 
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (u8, &Arc<N>)> {
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = (u8, &Arc<N>)> {
         self.keys
             .iter()
             .enumerate()
@@ -628,7 +620,7 @@ impl<P: KeyTrait, N: Version> Version for Node48<P, N> {
 //
 // A Node256 is a 256-entry array of pointers to children. The pointers are stored in
 // a Vector Array, which is a Vector of length WIDTH (256) that stores the pointers.
-pub struct Node256<P: KeyTrait, N: Version> {
+pub(crate) struct Node256<P: KeyTrait, N: Version> {
     pub(crate) prefix: P,    // Prefix associated with the node
     pub(crate) version: u64, // Version for node256
 
@@ -637,7 +629,7 @@ pub struct Node256<P: KeyTrait, N: Version> {
 }
 
 impl<P: KeyTrait, N: Version> Node256<P, N> {
-    pub fn new(prefix: P) -> Self {
+    pub(crate) fn new(prefix: P) -> Self {
         Self {
             prefix,
             version: 0,
@@ -646,7 +638,7 @@ impl<P: KeyTrait, N: Version> Node256<P, N> {
         }
     }
 
-    pub fn shrink(&self) -> Node48<P, N> {
+    pub(crate) fn shrink(&self) -> Node48<P, N> {
         debug_assert!(self.num_children() < 49);
         let mut indexed = Node48::new(self.prefix.clone());
         for (key, v) in self
@@ -695,7 +687,7 @@ impl<P: KeyTrait, N: Version> Node256<P, N> {
         }
     }
 
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (u8, &Arc<N>)> {
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = (u8, &Arc<N>)> {
         self.children
             .iter()
             .enumerate()
@@ -1184,16 +1176,6 @@ mod tests {
         node.insert_mut(43, 124, 1);
         let latest_leaf = node.get_latest_leaf();
         assert_eq!(latest_leaf.unwrap().value, 43);
-    }
-
-    #[test]
-    fn twig_get_latest_value() {
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
-        node.insert_mut(42, 123, 0);
-        node.insert_mut(43, 124, 1);
-        let latest_value = node.get_latest_value();
-        assert_eq!(*latest_value.unwrap(), 43);
     }
 
     #[test]
