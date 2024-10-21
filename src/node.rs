@@ -1,3 +1,4 @@
+use std::slice::Iter;
 use std::sync::Arc;
 
 use crate::{art::QueryType, KeyTrait};
@@ -26,8 +27,90 @@ pub(crate) trait Version {
 pub(crate) struct TwigNode<K: KeyTrait, V: Clone> {
     pub(crate) prefix: K,
     pub(crate) key: K,
-    pub(crate) values: Vec<Arc<LeafValue<V>>>,
+    pub(crate) values: Values<V>,
     pub(crate) version: u64, // Version for the twig node
+}
+
+#[derive(Clone)]
+pub(crate) enum Values<V: Clone> {
+    Single(Option<Arc<LeafValue<V>>>),
+    Multiple(Vec<Arc<LeafValue<V>>>),
+}
+
+pub(crate) struct ValuesIter<'a, V: Clone> {
+    single: Option<&'a Arc<LeafValue<V>>>,
+    multiple: Option<Iter<'a, Arc<LeafValue<V>>>>,
+}
+
+impl<V: Clone> Values<V> {
+    pub(crate) fn iter(&self) -> ValuesIter<V> {
+        match self {
+            Values::Single(Some(value)) => ValuesIter {
+                single: Some(value),
+                multiple: None,
+            },
+            Values::Single(None) => ValuesIter {
+                single: None,
+                multiple: None,
+            },
+            Values::Multiple(values) => ValuesIter {
+                single: None,
+                multiple: Some(values.iter()),
+            },
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Values::Single(Some(_)) => 1,
+            Values::Single(None) => 0,
+            Values::Multiple(values) => values.len(),
+        }
+    }
+
+    pub(crate) fn set_single(&mut self, value: Arc<LeafValue<V>>) {
+        *self = Values::Single(Some(value));
+    }
+
+    pub(crate) fn add_multiple(&mut self, value: Arc<LeafValue<V>>) {
+        match self {
+            Values::Single(Some(existing_value)) => {
+                *self = Values::Multiple(vec![existing_value.clone(), value]);
+            }
+            Values::Single(None) => {
+                *self = Values::Multiple(vec![value]);
+            }
+            Values::Multiple(values) => {
+                values.push(value);
+            }
+        }
+    }
+}
+
+impl<'a, V: Clone> Iterator for ValuesIter<'a, V> {
+    type Item = &'a Arc<LeafValue<V>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(single) = self.single.take() {
+            return Some(single);
+        }
+        if let Some(multiple) = &mut self.multiple {
+            return multiple.next();
+        }
+        None
+    }
+}
+
+impl<'a, V: Clone> DoubleEndedIterator for ValuesIter<'a, V> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if let Some(multiple) = &mut self.multiple {
+            return multiple.next_back();
+        }
+        if let Some(single) = self.single.take() {
+            return Some(single);
+        }
+        None
+    }
 }
 
 // Timestamp-Version Ordering Constraint Explanation:
@@ -56,50 +139,71 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         TwigNode {
             prefix,
             key,
-            values: Vec::new(),
+            values: Values::Multiple(Vec::new()),
+            version: 0,
+        }
+    }
+
+    pub(crate) fn new_unversioned(prefix: K, key: K) -> Self {
+        TwigNode {
+            prefix,
+            key,
+            values: Values::Single(None),
             version: 0,
         }
     }
 
     pub(crate) fn version(&self) -> u64 {
-        self.values
-            .iter()
-            .map(|value| value.version)
-            .max()
-            .unwrap_or(self.version)
+        match &self.values {
+            Values::Single(Some(value)) => value.version,
+            Values::Single(None) => self.version,
+            Values::Multiple(values) => values
+                .iter()
+                .map(|value| value.version)
+                .max()
+                .unwrap_or(self.version),
+        }
     }
 
-    fn insert_common(values: &mut Vec<Arc<LeafValue<V>>>, value: V, version: u64, ts: u64) {
+    fn insert_common(values: &mut Values<V>, value: V, version: u64, ts: u64) {
         let new_leaf_value = LeafValue::new(value, version, ts);
 
-        // Check if a LeafValue with the same version exists and update or insert accordingly
-        match values.binary_search_by(|v| v.version.cmp(&new_leaf_value.version)) {
-            Ok(index) => {
-                // If an entry with the same version and timestamp exists, just put the same value
-                if values[index].ts == ts {
-                    values[index] = Arc::new(new_leaf_value);
-                } else {
-                    // If an entry with the same version and different timestamp exists, add a new entry
-                    // Determine the direction to scan based on the comparison of timestamps
-                    let mut insert_position = index;
-                    if values[index].ts < ts {
-                        // Scan forward to find the first entry with a timestamp greater than the new entry's timestamp
-                        insert_position +=
-                            values[index..].iter().take_while(|v| v.ts <= ts).count();
-                    } else {
-                        // Scan backward to find the insertion point before the first entry with a timestamp less than the new entry's timestamp
-                        insert_position -= values[..index]
-                            .iter()
-                            .rev()
-                            .take_while(|v| v.ts >= ts)
-                            .count();
-                    }
-                    values.insert(insert_position, Arc::new(new_leaf_value));
-                }
+        match values {
+            Values::Single(existing_value) => {
+                // Replace the existing single value
+                *existing_value = Some(new_leaf_value.into());
             }
-            Err(index) => {
-                // If no entry with the same version exists, insert the new value at the correct position
-                values.insert(index, Arc::new(new_leaf_value));
+            Values::Multiple(values) => {
+                // Check if a LeafValue with the same version exists and update or insert accordingly
+                match values.binary_search_by(|v| v.version.cmp(&new_leaf_value.version)) {
+                    Ok(index) => {
+                        // If an entry with the same version and timestamp exists, just put the same value
+                        if values[index].ts == ts {
+                            values[index] = Arc::new(new_leaf_value);
+                        } else {
+                            // If an entry with the same version and different timestamp exists, add a new entry
+                            // Determine the direction to scan based on the comparison of timestamps
+                            let mut insert_position = index;
+                            if values[index].ts < ts {
+                                // Scan forward to find the first entry with a timestamp greater than the new entry's timestamp
+                                insert_position +=
+                                    values[index..].iter().take_while(|v| v.ts <= ts).count();
+                            } else {
+                                // Scan backward to find the insertion point before the first entry with a timestamp less than the new entry's timestamp
+                                insert_position -= values[..index]
+                                    .iter()
+                                    .rev()
+                                    .take_while(|v| v.ts >= ts)
+                                    .count();
+                            }
+                            values.insert(insert_position, Arc::new(new_leaf_value));
+                        }
+                    }
+                    Err(index) => {
+                        // If no entry with the same version exists, insert the new value at the correct position
+                        values.insert(index, Arc::new(new_leaf_value));
+                    }
+                }
             }
         }
     }
@@ -1164,8 +1268,13 @@ mod tests {
         let new_node = node.insert(42, 123, 0);
         assert_eq!(node.values.len(), 0);
         assert_eq!(new_node.values.len(), 1);
-        assert_eq!(new_node.values[0].value, 42);
-        assert_eq!(new_node.values[0].version, 123);
+        let mut iter = new_node.values.iter();
+        if let Some(first_value) = iter.next() {
+            assert_eq!(first_value.value, 42);
+            assert_eq!(first_value.version, 123);
+        } else {
+            panic!("Expected at least one value in the node");
+        }
     }
 
     #[test]
@@ -1176,8 +1285,16 @@ mod tests {
 
         node.insert_mut(42, 123, 0);
         assert_eq!(node.values.len(), 1);
-        assert_eq!(node.values[0].value, 42);
-        assert_eq!(node.values[0].version, 123);
+        // assert_eq!(node.values[0].value, 42);
+        // assert_eq!(node.values[0].version, 123);
+
+        let mut iter = node.values.iter();
+        if let Some(first_value) = iter.next() {
+            assert_eq!(first_value.value, 42);
+            assert_eq!(first_value.version, 123);
+        } else {
+            panic!("Expected at least one value in the node");
+        }
     }
 
     #[test]
