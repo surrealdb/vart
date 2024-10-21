@@ -127,6 +127,13 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         self.version = self.version(); // Update LeafNode's version
     }
 
+    pub(crate) fn replace_if_newer_mut(&mut self, value: V, version: u64, ts: u64) {
+        if version > self.version {
+            self.values.clear();
+            self.insert_mut(value, version, ts);
+        }
+    }
+
     pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &Arc<LeafValue<V>>> {
         self.values.iter()
     }
