@@ -1112,18 +1112,20 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// Inserts a new key-value pair with the specified version into the Trie.
     ///
     /// This function inserts a new key-value pair into the Trie. If the key already exists,
-    /// the previous value associated with the key is returned. The version `ts` is used to
-    /// ensure proper ordering of values for versioning.
+    /// the previous value associated with the key is returned. The `version`` is used to
+    /// ensure proper ordering of values for versioning. The `ts` parameter is used to
+    /// record the timestamp of the insertion.
     ///
-    /// This method ensures that the `version` provided if equal to or greater than the
-    /// current version of the tree. If strictly greater guarantee is required, then
+    /// This method ensures that the `version` provided is equal to or greater than the
+    /// current version of the tree. If a strictly greater guarantee is required, then
     /// the caller is responsible for enforcing it.
     ///
     /// # Arguments
     ///
     /// * `key`: A reference to the key to be inserted.
     /// * `value`: The value to be associated with the key.
-    /// * `ts`: The version for the insertion, used for versioning.
+    /// * `version`: The version number for the key-value pair.
+    /// * `ts`: The timestamp for the insertion, used for versioning.
     ///
     /// # Returns
     ///
@@ -1132,11 +1134,25 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// # Errors
     ///
     /// Returns an error if the given version is older than the root's current version.
-    ///
     pub fn insert(&mut self, key: &P, value: V, version: u64, ts: u64) -> Result<(), TrieError> {
         self.insert_common(key, value, version, ts, true, false)
     }
 
+    /// Inserts or replaces a key-value pair in the trie.
+    ///
+    /// This function inserts a new key-value pair into the trie or replaces the existing value
+    /// if the key already exists. It ensures that the insertion is checked, meaning it will
+    /// validate the keys are inserted in increasing order of version numbers.
+    ///
+    /// # Parameters
+    /// - `key`: A reference to the key to be inserted or replaced.
+    /// - `value`: The value to be associated with the key.
+    /// - `version`: The version number for the key-value pair.
+    /// - `ts`: The timestamp for the key-value pair.
+    ///
+    /// # Returns
+    /// - `Result<(), TrieError>`: Returns `Ok(())` if the insertion or replacement is successful,
+    ///   or a `TrieError` if an error occurs during the operation.
     pub fn insert_or_replace(
         &mut self,
         key: &P,
@@ -1147,6 +1163,26 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         self.insert_common(key, value, version, ts, true, true)
     }
 
+    /// Inserts a key-value pair into the trie without checking for existing keys.
+    ///
+    /// This function inserts a new key-value pair into the trie without checking if the key
+    /// already exists. It is an unchecked insertion, meaning it will not check if the versions
+    /// are incremental during insertion. This can be faster but may lead to inconsistencies
+    /// if not used carefully.
+    ///
+    /// This function also avoids the Copy-on-Write overhead of the `Arc` type by using mutable
+    /// references to the nodes. This can be useful when the caller knows that the root node
+    /// is uniquely owned and can be mutated directly.
+    ///
+    /// # Parameters
+    /// - `key`: A reference to the key to be inserted.
+    /// - `value`: The value to be associated with the key.
+    /// - `version`: The version number for the key-value pair.
+    /// - `ts`: The timestamp for the key-value pair.
+    ///
+    /// # Returns
+    /// - `Result<(), TrieError>`: Returns `Ok(())` if the insertion is successful,
+    ///   or a `TrieError` if an error occurs during the operation.
     pub fn insert_unchecked(
         &mut self,
         key: &P,
@@ -1157,6 +1193,22 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         self.insert_common_mut(key, value, version, ts, false, false)
     }
 
+    /// Inserts or replaces a key-value pair in the trie without checking for existing keys.
+    ///
+    /// This function inserts a new key-value pair into the trie or replaces the existing value
+    /// if the key already exists. It is an unchecked insertion, meaning it will not check if the versions
+    /// are incremental during insertion. This can be faster but may lead to inconsistencies
+    /// if not used carefully.
+    ///
+    /// # Parameters
+    /// - `key`: A reference to the key to be inserted or replaced.
+    /// - `value`: The value to be associated with the key.
+    /// - `version`: The version number for the key-value pair.
+    /// - `ts`: The timestamp for the key-value pair.
+    ///
+    /// # Returns
+    /// - `Result<(), TrieError>`: Returns `Ok(())` if the insertion or replacement is successful,
+    ///   or a `TrieError` if an error occurs during the operation.
     pub fn insert_or_replace_unchecked(
         &mut self,
         key: &P,
@@ -1217,6 +1269,17 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         (new_root, is_deleted)
     }
 
+    /// Removes a key with all the versions associated with it from the Trie.
+    ///
+    /// This function removes a key and all its associated versions from the Trie.
+    ///
+    /// # Arguments
+    ///
+    /// * `key`: A reference to the key to be removed.
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if the key was successfully removed, `false` otherwise.
     pub fn remove(&mut self, key: &P) -> bool {
         // Directly match on the root to simplify logic
         let (new_root, is_deleted) = Tree::remove_from_node(self.root.as_ref(), key);
@@ -1229,6 +1292,25 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         is_deleted
     }
 
+    /// Retrieves the value associated with the given key at a given version from the Trie.
+    ///
+    /// This function searches for the value associated with the specified key at the specified
+    /// version in the Trie. If the version is set to 0, it retrieves the latest version available
+    /// for the key. The function uses a recursive search to find the value.
+    ///
+    /// # Arguments
+    ///
+    /// * `key`: A reference to the key to be searched.
+    /// * `version`: The version number to be searched. If set to 0, the latest version is retrieved.
+    ///
+    /// # Returns
+    ///
+    /// Returns an `Option` containing a tuple `(V, u64, u64)` if the key and version are found:
+    /// - `V`: The value associated with the key.
+    /// - `u64`: The version number of the value.
+    /// - `u64`: The timestamp of the value.
+    ///
+    /// Returns `None` if the key or version is not found.
     pub fn get(&self, key: &P, version: u64) -> Option<(V, u64, u64)> {
         let root = self.root.as_ref()?;
         let mut commit_version = version;
@@ -1323,6 +1405,19 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Range::new(root, range)
     }
 
+    /// Returns an iterator over the key-value pairs within the specified range, including all the
+    /// versions of the key.
+    ///
+    /// This function returns an iterator that yields key-value pairs along with their version
+    /// and timestamp within the specified range. If the Trie is empty, it returns an empty iterator.
+    ///
+    /// # Arguments
+    ///
+    /// * `range`: The range of keys to be iterated over.
+    ///
+    /// # Returns
+    ///
+    /// Returns an iterator over the key-value pairs, versions, and timestamps within the specified range.
     pub fn range_with_versions<'a, R>(
         &'a self,
         range: R,
@@ -1339,21 +1434,81 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Range::new_versioned(root, range)
     }
 
+    /// Retrieves the value associated with the given key at the specified timestamp.
+    ///
+    /// This function searches for the value associated with the specified key at the given
+    /// timestamp in the Trie. It uses a recursive search to find the value.
+    ///
+    /// # Arguments
+    ///
+    /// * `key`: A reference to the key to be searched.
+    /// * `ts`: The timestamp to be searched.
+    ///
+    /// # Returns
+    ///
+    /// Returns an `Option` containing a tuple `(V, u64, u64)` if the key and timestamp are found:
+    /// - `V`: The value associated with the key.
+    /// - `u64`: The version number of the value.
+    /// - `u64`: The timestamp of the value.
+    ///
+    /// Returns `None` if the key or timestamp is not found.
     pub fn get_at_ts(&self, key: &P, ts: u64) -> Option<(V, u64, u64)> {
         let root = self.root.as_ref()?;
         Node::get_recurse(root, key, QueryType::LatestByTs(ts))
     }
 
+    /// Retrieves the version history of the given key.
+    ///
+    /// This function searches for all versions of the specified key in the Trie and returns
+    /// a vector of tuples containing the value, version number, and timestamp for each version.
+    ///
+    /// # Arguments
+    ///
+    /// * `key`: A reference to the key to be searched.
+    ///
+    /// # Returns
+    ///
+    /// Returns an `Option` containing a vector of tuples `(V, u64, u64)` if the key is found:
+    /// - `V`: The value associated with the key.
+    /// - `u64`: The version number of the value.
+    /// - `u64`: The timestamp of the value.
+    ///
+    /// Returns `None` if the key is not found.
     pub fn get_version_history(&self, key: &P) -> Option<Vec<(V, u64, u64)>> {
         let root = self.root.as_ref()?;
         Node::get_version_history(root, key)
     }
 
+    /// Retrieves the value associated with the given key based on the specified query type.
+    ///
+    /// This function searches for the value associated with the specified key based on the
+    /// provided query type in the Trie. It uses a recursive search to find the value.
+    ///
+    /// # Arguments
+    ///
+    /// * `key`: A reference to the key to be searched.
+    /// * `query_type`: The type of query to be performed (e.g., latest by version, latest by timestamp).
+    ///
+    /// # Returns
+    ///
+    /// Returns an `Option` containing a tuple `(V, u64, u64)` if the key and query type are found:
+    /// - `V`: The value associated with the key.
+    /// - `u64`: The version number of the value.
+    /// - `u64`: The timestamp of the value.
+    ///
+    /// Returns `None` if the key or query type is not found.
     pub fn get_value_by_query(&self, key: &P, query_type: QueryType) -> Option<(V, u64, u64)> {
         let root = self.root.as_ref()?;
         Node::get_recurse(root, key, query_type)
     }
 
+    /// Checks if the Trie is empty.
+    ///
+    /// This function checks if the Trie contains any key-value pairs.
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if the Trie is empty, `false` otherwise.
     pub fn is_empty(&self) -> bool {
         self.size == 0
     }
