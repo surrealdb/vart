@@ -25,7 +25,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         // Insert the key-value pair into the root node using a recursive function
         match &self.root {
             Some(root) => {
-                let new_node = Node::insert_recurse(root, key, value, self.ts, ts, 0);
+                let new_node = Node::insert_recurse(root, key, value, self.ts, ts, 0, false);
                 // Update the root node with the new node after insertion
                 self.root = Some(new_node);
             }

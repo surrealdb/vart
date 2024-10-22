@@ -703,6 +703,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         commit_version: u64,
         ts: u64,
         depth: usize,
+        replace: bool,
     ) -> NodeArc<P, V> {
         // Obtain the current node's prefix and its length.
         let cur_node_prefix = cur_node.prefix().clone();
@@ -714,7 +715,14 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         // update the existing value in the Twig node.
         if let NodeType::Twig(ref twig) = &cur_node.node_type {
             if is_prefix_match && cur_node_prefix.len() == key_prefix.len() {
-                let new_twig = twig.insert(value, commit_version, ts);
+                let new_twig = if replace {
+                    // Create a replacement Twig node with the new value only.
+                    let mut new_twig = TwigNode::new(twig.prefix.clone(), twig.key.clone());
+                    new_twig.insert_mut(value, commit_version, ts);
+                    new_twig
+                } else {
+                    twig.insert(value, commit_version, ts)
+                };
                 return Arc::new(Node {
                     node_type: NodeType::Twig(new_twig),
                 });
@@ -752,6 +760,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 commit_version,
                 ts,
                 depth + longest_common_prefix,
+                replace,
             );
             let new_node = cur_node.replace_child(k, new_child);
             return Arc::new(new_node);
@@ -777,6 +786,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         commit_version: u64,
         ts: u64,
         depth: usize,
+        replace: bool,
     ) {
         // Obtain the current node's prefix and its length.
         let cur_node_prefix = cur_node.prefix().clone();
@@ -788,7 +798,17 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         // update the existing value in the Twig node.
         if let NodeType::Twig(ref mut twig) = &mut cur_node.node_type {
             if is_prefix_match && cur_node_prefix.len() == key_prefix.len() {
-                twig.insert_mut(value.clone(), commit_version, ts);
+                if replace {
+                    // Only replace if the provided value is more recent than
+                    // the existing ones. This is important because this method
+                    // is used for loading the index in SurrealKV and thus must
+                    // be able to handle segments left by an unfinished compaction
+                    // where older versions can end up in more recent segments
+                    // after the newer versions.
+                    twig.replace_if_newer_mut(value, commit_version, ts);
+                } else {
+                    twig.insert_mut(value, commit_version, ts);
+                }
                 return;
             }
         }
@@ -807,7 +827,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             let new_twig = Node::new_twig(
                 key_prefix[longest_common_prefix..].into(),
                 key.as_slice().into(),
-                value.clone(),
+                value,
                 commit_version,
                 ts,
             );
@@ -824,10 +844,11 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             Node::insert_recurse_mut(
                 child,
                 key,
-                value.clone(),
+                value,
                 commit_version,
                 ts,
                 depth + longest_common_prefix,
+                replace,
             );
             cur_node.update_version();
             return;
@@ -837,7 +858,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         let new_twig = Node::new_twig(
             key_prefix[longest_common_prefix..].into(),
             key.as_slice().into(),
-            value.clone(),
+            value,
             commit_version,
             ts,
         );
@@ -1027,6 +1048,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         version: u64,
         ts: u64,
         check_version: bool,
+        replace: bool,
     ) -> Result<(), TrieError> {
         let new_root = match &self.root {
             None => {
@@ -1047,7 +1069,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                 } else if check_version && curr_version > version {
                     return Err(TrieError::VersionIsOld);
                 }
-                Node::insert_recurse(root, key, value, commit_version, ts, 0)
+                Node::insert_recurse(root, key, value, commit_version, ts, 0, replace)
             }
         };
 
@@ -1063,6 +1085,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         version: u64,
         ts: u64,
         check_version: bool,
+        replace: bool,
     ) -> Result<(), TrieError> {
         if let Some(root_arc) = self.root.as_mut() {
             let curr_version = root_arc.version();
@@ -1073,7 +1096,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                 return Err(TrieError::VersionIsOld);
             }
             if let Some(root) = Arc::get_mut(root_arc) {
-                Node::insert_recurse_mut(root, key, value, commit_version, ts, 0)
+                Node::insert_recurse_mut(root, key, value, commit_version, ts, 0, replace)
             } else {
                 return Err(TrieError::RootIsNotUniquelyOwned);
             }
@@ -1116,7 +1139,17 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// Returns an error if the given version is older than the root's current version.
     ///
     pub fn insert(&mut self, key: &P, value: V, version: u64, ts: u64) -> Result<(), TrieError> {
-        self.insert_common(key, value, version, ts, true)
+        self.insert_common(key, value, version, ts, true, false)
+    }
+
+    pub fn insert_or_replace(
+        &mut self,
+        key: &P,
+        value: V,
+        version: u64,
+        ts: u64,
+    ) -> Result<(), TrieError> {
+        self.insert_common(key, value, version, ts, true, true)
     }
 
     pub fn insert_unchecked(
@@ -1126,7 +1159,17 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         version: u64,
         ts: u64,
     ) -> Result<(), TrieError> {
-        self.insert_common_mut(key, value, version, ts, false)
+        self.insert_common_mut(key, value, version, ts, false, false)
+    }
+
+    pub fn insert_or_replace_unchecked(
+        &mut self,
+        key: &P,
+        value: V,
+        version: u64,
+        ts: u64,
+    ) -> Result<(), TrieError> {
+        self.insert_common_mut(key, value, version, ts, false, true)
     }
 
     pub(crate) fn remove_from_node(
@@ -2665,5 +2708,41 @@ mod tests {
         let result = tree.get_value_by_query(&key, query_type).unwrap();
         assert_eq!(result, (20, 2, 150));
         assert_eq!(tree.version(), 3);
+    }
+
+    #[test]
+    fn test_insert_or_replace() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let key = VariableSizeKey::from_str("key").unwrap();
+
+        tree.insert_or_replace(&key, 1, 10, 100).unwrap();
+        tree.insert_or_replace(&key, 2, 20, 200).unwrap();
+
+        let history = tree.get_version_history(&key).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0], (2, 20, 200));
+    }
+
+    #[test]
+    fn test_insert_or_replace_unchecked() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let key = VariableSizeKey::from_str("key").unwrap();
+
+        // Scenario 1: the second value is more recent than the first one.
+        tree.insert_or_replace_unchecked(&key, 1, 10, 100).unwrap();
+        tree.insert_or_replace_unchecked(&key, 2, 20, 200).unwrap();
+
+        let history = tree.get_version_history(&key).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0], (2, 20, 200));
+
+        // Scenario 2: the new value has the smaller version and hence
+        // is older than the one already in the tree. Discard the new
+        // value.
+        tree.insert_or_replace_unchecked(&key, 1, 1, 1).unwrap();
+
+        let history = tree.get_version_history(&key).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0], (2, 20, 200));
     }
 }
