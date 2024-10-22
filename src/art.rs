@@ -705,16 +705,13 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         depth: usize,
         replace: bool,
     ) -> NodeArc<P, V> {
-        // Obtain the current node's prefix and its length.
-        let cur_node_prefix = cur_node.prefix().clone();
-
         let (key_prefix, new_key, prefix, is_prefix_match, longest_common_prefix) =
-            Self::common_insert_logic(&cur_node_prefix, key, depth);
+            Self::common_insert_logic(cur_node.prefix(), key, depth);
 
         // If the current node is a Twig node and the prefixes match up to the end of both prefixes,
         // update the existing value in the Twig node.
         if let NodeType::Twig(ref twig) = &cur_node.node_type {
-            if is_prefix_match && cur_node_prefix.len() == key_prefix.len() {
+            if is_prefix_match && twig.prefix.len() == key_prefix.len() {
                 let new_twig = if replace {
                     // Create a replacement Twig node with the new value only.
                     let mut new_twig = TwigNode::new(twig.prefix.clone(), twig.key.clone());
@@ -735,7 +732,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             old_node.set_prefix(new_key);
             let mut n4 = Node::new_node4(prefix);
 
-            let k1 = cur_node_prefix.at(longest_common_prefix);
+            let k1 = cur_node.prefix().at(longest_common_prefix);
             let k2 = key_prefix[longest_common_prefix];
             let new_twig = Node::new_twig(
                 key_prefix[longest_common_prefix..].into(),
@@ -788,16 +785,13 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         depth: usize,
         replace: bool,
     ) {
-        // Obtain the current node's prefix and its length.
-        let cur_node_prefix = cur_node.prefix().clone();
-
         let (key_prefix, new_key, prefix, is_prefix_match, longest_common_prefix) =
-            Self::common_insert_logic(&cur_node_prefix, key, depth);
+            Self::common_insert_logic(cur_node.prefix(), key, depth);
 
         // If the current node is a Twig node and the prefixes match up to the end of both prefixes,
         // update the existing value in the Twig node.
         if let NodeType::Twig(ref mut twig) = &mut cur_node.node_type {
-            if is_prefix_match && cur_node_prefix.len() == key_prefix.len() {
+            if is_prefix_match && twig.prefix.len() == key_prefix.len() {
                 if replace {
                     // Only replace if the provided value is more recent than
                     // the existing ones. This is important because this method
@@ -815,12 +809,13 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
         // If the prefixes don't match, create a new Node4 with the old node and a new Twig as children.
         if !is_prefix_match {
-            cur_node.set_prefix(new_key);
-
             let n4 = Node::new_node4(prefix);
 
-            let k1 = cur_node_prefix.at(longest_common_prefix);
+            let k1 = cur_node.prefix().at(longest_common_prefix);
             let k2 = key_prefix[longest_common_prefix];
+
+            // Must be set after the calculation of k1 above.
+            cur_node.set_prefix(new_key);
 
             let old_node = std::mem::replace(cur_node, n4);
 
