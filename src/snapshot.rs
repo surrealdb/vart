@@ -10,14 +10,14 @@ use crate::KeyTrait;
 #[derive(Clone)]
 /// Represents a snapshot of the data within the Trie.
 pub struct Snapshot<P: KeyTrait, V: Clone> {
-    pub(crate) ts: u64,
+    pub(crate) version: u64,
     pub(crate) root: Option<Arc<Node<P, V>>>,
 }
 
 impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
     /// Creates a new Snapshot instance with the provided snapshot_id and root node.
-    pub(crate) fn new(root: Option<Arc<Node<P, V>>>, ts: u64) -> Self {
-        Snapshot { ts, root }
+    pub(crate) fn new(root: Option<Arc<Node<P, V>>>, version: u64) -> Self {
+        Snapshot { version, root }
     }
 
     /// Inserts a key-value pair into the snapshot.
@@ -25,7 +25,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
         // Insert the key-value pair into the root node using a recursive function
         match &self.root {
             Some(root) => {
-                let new_node = Node::insert_recurse(root, key, value, self.ts, ts, 0, false);
+                let new_node = Node::insert_recurse(root, key, value, self.version, ts, 0, false);
                 // Update the root node with the new node after insertion
                 self.root = Some(new_node);
             }
@@ -34,7 +34,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
                     key.as_slice().into(),
                     key.as_slice().into(),
                     value,
-                    self.ts,
+                    self.version,
                     ts,
                 )))
             }
@@ -76,7 +76,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
     }
 
     pub fn ts(&self) -> u64 {
-        self.ts
+        self.version
     }
 
     pub fn iter(&self) -> Iter<P, V> {
