@@ -828,4 +828,66 @@ mod tests {
         let keys = snap.keys_at_ts(RangeFull {}, 0);
         assert_eq!(keys.len(), 1);
     }
+
+    #[test]
+    fn snapshot_creation_at_version() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let keys = ["key_1", "key_2", "key_3"];
+
+        for key in keys.iter() {
+            assert!(tree
+                .insert(&VariableSizeKey::from_str(key).unwrap(), 1, 0, 0)
+                .is_ok());
+        }
+
+        // Create a snapshot at the current version of the tree
+        let current_version = tree.version();
+        assert_eq!(current_version, keys.len() as u64);
+
+        let mut snap1 = tree.create_snapshot_at_version(current_version);
+
+        let key_to_insert = "key_1";
+        snap1.insert(&VariableSizeKey::from_str(key_to_insert).unwrap(), 1, 0);
+
+        let expected_snap_ts = current_version;
+        assert_eq!(snap1.version(), expected_snap_ts);
+
+        let expected_tree_ts = current_version;
+        assert_eq!(tree.version(), expected_tree_ts);
+    }
+
+    #[test]
+    fn snapshot_isolation_at_version() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let key_1 = VariableSizeKey::from_str("key_1").unwrap();
+        let key_2 = VariableSizeKey::from_str("key_2").unwrap();
+        let key_3_snap1 = VariableSizeKey::from_str("key_3_snap1").unwrap();
+        let key_3_snap2 = VariableSizeKey::from_str("key_3_snap2").unwrap();
+
+        assert!(tree.insert(&key_1, 1, 0, 0).is_ok());
+
+        // Create snapshots at the current version of the tree
+        let current_version = tree.version() + 1;
+        let mut snap1 = tree.create_snapshot_at_version(current_version);
+        assert_eq!(snap1.get(&key_1).unwrap(), (1, 1, 0));
+
+        let mut snap2 = tree.create_snapshot_at_version(current_version);
+        assert_eq!(snap2.get(&key_1).unwrap(), (1, 1, 0));
+
+        // Keys inserted after snapshot creation should not be visible to other snapshots
+        assert!(tree.insert(&key_2, 1, 0, 0).is_ok());
+        assert!(snap1.get(&key_2).is_none());
+        assert!(snap2.get(&key_2).is_none());
+
+        // Keys inserted after snapshot creation should be visible to the snapshot that inserted them
+        snap1.insert(&key_3_snap1, 2, 0);
+        assert_eq!(snap1.get(&key_3_snap1).unwrap(), (2, current_version, 0));
+
+        snap2.insert(&key_3_snap2, 3, 0);
+        assert_eq!(snap2.get(&key_3_snap2).unwrap(), (3, current_version, 0));
+
+        // Keys inserted after snapshot creation should not be visible to other snapshots
+        assert!(snap1.get(&key_3_snap2).is_none());
+        assert!(snap2.get(&key_3_snap1).is_none());
+    }
 }

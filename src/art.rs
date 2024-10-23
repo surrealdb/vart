@@ -1353,6 +1353,25 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Snapshot::new(root, version)
     }
 
+    /// Creates a new snapshot of the Trie at the specified version.
+    ///
+    /// This function creates a snapshot of the Trie at the given version. The snapshot
+    /// captures the state of the Trie as it was at the specified version. This can be useful
+    /// for versioned data access, allowing you to interact with the Trie as it existed at
+    /// a particular point in time.
+    ///
+    /// # Arguments
+    ///
+    /// * `version`: The version number at which to create the snapshot.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Snapshot` that can be used to interact with the Trie at the specified version.
+    pub fn create_snapshot_at_version(&self, version: u64) -> Snapshot<P, V> {
+        let root = self.root.as_ref().cloned();
+        Snapshot::new(root, version)
+    }
+
     /// Creates an iterator over the Trie's key-value pairs.
     ///
     /// This function creates and returns an iterator that can be used to traverse the key-value pairs
