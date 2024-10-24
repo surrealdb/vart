@@ -1367,9 +1367,15 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// # Returns
     ///
     /// Returns a `Snapshot` that can be used to interact with the Trie at the specified version.
-    pub fn create_snapshot_at_version(&self, version: u64) -> Snapshot<P, V> {
+    pub fn create_snapshot_at_version(&self, version: u64) -> Result<Snapshot<P, V>, TrieError> {
+        if let Some(root) = self.root.as_ref() {
+            if version < root.version() {
+                return Err(TrieError::SnapshotOlderThanRoot);
+            }
+        }
+
         let root = self.root.as_ref().cloned();
-        Snapshot::new(root, version)
+        Ok(Snapshot::new(root, version))
     }
 
     /// Creates an iterator over the Trie's key-value pairs.

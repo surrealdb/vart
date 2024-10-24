@@ -844,7 +844,7 @@ mod tests {
         let current_version = tree.version();
         assert_eq!(current_version, keys.len() as u64);
 
-        let mut snap1 = tree.create_snapshot_at_version(current_version);
+        let mut snap1 = tree.create_snapshot_at_version(current_version).unwrap();
 
         let key_to_insert = "key_1";
         snap1.insert(&VariableSizeKey::from_str(key_to_insert).unwrap(), 1, 0);
@@ -868,10 +868,10 @@ mod tests {
 
         // Create snapshots at the current version of the tree
         let current_version = tree.version() + 1;
-        let mut snap1 = tree.create_snapshot_at_version(current_version);
+        let mut snap1 = tree.create_snapshot_at_version(current_version).unwrap();
         assert_eq!(snap1.get(&key_1).unwrap(), (1, 1, 0));
 
-        let mut snap2 = tree.create_snapshot_at_version(current_version);
+        let mut snap2 = tree.create_snapshot_at_version(current_version).unwrap();
         assert_eq!(snap2.get(&key_1).unwrap(), (1, 1, 0));
 
         // Keys inserted after snapshot creation should not be visible to other snapshots
@@ -889,5 +889,28 @@ mod tests {
         // Keys inserted after snapshot creation should not be visible to other snapshots
         assert!(snap1.get(&key_3_snap2).is_none());
         assert!(snap2.get(&key_3_snap1).is_none());
+    }
+
+    #[test]
+    fn snapshot_creation_at_invalid_version() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let keys = ["key_1", "key_2", "key_3"];
+
+        for key in keys.iter() {
+            assert!(tree
+                .insert(&VariableSizeKey::from_str(key).unwrap(), 1, 0, 0)
+                .is_ok());
+        }
+
+        // Create a snapshot at the current version of the tree
+        let current_version = tree.version();
+        assert_eq!(current_version, keys.len() as u64);
+
+        // Attempt to create a snapshot at a version less than the current version
+        let invalid_version = current_version - 1;
+        let result = tree.create_snapshot_at_version(invalid_version);
+
+        // Ensure that an error is returned
+        assert!(result.is_err());
     }
 }
