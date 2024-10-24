@@ -60,6 +60,7 @@ impl<V: Clone> Values<V> {
         }
     }
 
+    #[allow(unused)]
     pub(crate) fn len(&self) -> usize {
         match self {
             Values::Single(Some(_)) => 1,
@@ -1278,8 +1279,6 @@ mod tests {
 
         node.insert_mut(42, 123, 0);
         assert_eq!(node.values.len(), 1);
-        // assert_eq!(node.values[0].value, 42);
-        // assert_eq!(node.values[0].version, 123);
 
         let mut iter = node.values.iter();
         if let Some(first_value) = iter.next() {
