@@ -85,6 +85,17 @@ impl<V: Clone> Values<V> {
             }
         }
     }
+
+    pub(crate) fn clear(&mut self) {
+        match self {
+            Values::Single(_) => {
+                *self = Values::Single(None);
+            }
+            Values::Multiple(values) => {
+                values.clear();
+            }
+        }
+    }
 }
 
 impl<'a, V: Clone> Iterator for ValuesIter<'a, V> {
