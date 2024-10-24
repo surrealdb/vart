@@ -331,6 +331,7 @@ pub enum TrieError {
     FixedSizeKeyLengthExceeded,
     VersionIsOld,
     RootIsNotUniquelyOwned,
+    SnapshotOlderThanRoot,
 }
 
 impl Error for TrieError {}
@@ -344,6 +345,7 @@ impl fmt::Display for TrieError {
                 write!(f, "Given version is older than root's current version")
             }
             TrieError::RootIsNotUniquelyOwned => write!(f, "Root arc is not uniquely owned"),
+            TrieError::SnapshotOlderThanRoot => write!(f, "Snapshot is older than root"),
         }
     }
 }
