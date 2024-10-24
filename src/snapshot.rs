@@ -36,6 +36,7 @@ impl<P: KeyTrait, V: Clone> Snapshot<P, V> {
                     value,
                     self.version,
                     ts,
+                    false,
                 )))
             }
         };

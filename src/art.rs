@@ -125,9 +125,20 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     /// Returns a new `Node` instance with a Twig node containing the provided key, value, and version.
     ///
     #[inline]
-    pub(crate) fn new_twig(prefix: P, key: P, value: V, version: u64, ts: u64) -> Node<P, V> {
+    pub(crate) fn new_twig(
+        prefix: P,
+        key: P,
+        value: V,
+        version: u64,
+        ts: u64,
+        is_single: bool,
+    ) -> Node<P, V> {
         // Create a new TwigNode instance using the provided prefix and key.
-        let mut twig = TwigNode::new(prefix, key);
+        let mut twig = if is_single {
+            TwigNode::new_single(prefix, key)
+        } else {
+            TwigNode::new(prefix, key)
+        };
 
         // Insert the provided value into the TwigNode along with the version.
         twig.insert_mut(value, version, ts);
@@ -714,7 +725,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             if is_prefix_match && twig.prefix.len() == key_prefix.len() {
                 let new_twig = if replace {
                     // Create a replacement Twig node with the new value only.
-                    let mut new_twig = TwigNode::new(twig.prefix.clone(), twig.key.clone());
+                    let mut new_twig = TwigNode::new_single(twig.prefix.clone(), twig.key.clone());
                     new_twig.insert_mut(value, commit_version, ts);
                     new_twig
                 } else {
@@ -740,6 +751,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 value,
                 commit_version,
                 ts,
+                replace,
             );
             n4 = n4.add_child(k1, old_node).add_child(k2, new_twig);
 
@@ -770,6 +782,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             value,
             commit_version,
             ts,
+            replace,
         );
         let new_node = cur_node.add_child(k, new_twig);
 
@@ -825,6 +838,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 value,
                 commit_version,
                 ts,
+                replace,
             );
             cur_node.add_child_mut(k1, old_node);
             cur_node.add_child_mut(k2, new_twig);
@@ -856,6 +870,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             value,
             commit_version,
             ts,
+            replace,
         );
         cur_node.add_child_mut(k, new_twig);
     }
@@ -1054,6 +1069,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                     value,
                     commit_version,
                     ts,
+                    replace,
                 ))
             }
             Some(root) => {
@@ -1103,6 +1119,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                 value,
                 commit_version,
                 ts,
+                replace,
             )));
         }
         self.size += 1;

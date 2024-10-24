@@ -68,24 +68,6 @@ impl<V: Clone> Values<V> {
         }
     }
 
-    pub(crate) fn set_single(&mut self, value: Arc<LeafValue<V>>) {
-        *self = Values::Single(Some(value));
-    }
-
-    pub(crate) fn add_multiple(&mut self, value: Arc<LeafValue<V>>) {
-        match self {
-            Values::Single(Some(existing_value)) => {
-                *self = Values::Multiple(vec![existing_value.clone(), value]);
-            }
-            Values::Single(None) => {
-                *self = Values::Multiple(vec![value]);
-            }
-            Values::Multiple(values) => {
-                values.push(value);
-            }
-        }
-    }
-
     pub(crate) fn clear(&mut self) {
         match self {
             Values::Single(_) => {
@@ -155,7 +137,7 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         }
     }
 
-    pub(crate) fn new_unversioned(prefix: K, key: K) -> Self {
+    pub(crate) fn new_single(prefix: K, key: K) -> Self {
         TwigNode {
             prefix,
             key,
