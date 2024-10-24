@@ -3,7 +3,7 @@ use std::cmp::min;
 use std::ops::RangeBounds;
 use std::sync::Arc;
 
-use crate::iter::{Iter, Range};
+use crate::iter::{query_keys_at_node, scan_node, Iter, Range};
 use crate::node::{FlatNode, LeafValue, Node256, Node48, NodeTrait, TwigNode, Version};
 use crate::snapshot::Snapshot;
 use crate::{KeyTrait, TrieError};
@@ -1028,6 +1028,15 @@ impl<P: KeyTrait, V: Clone> Default for Tree<P, V> {
     }
 }
 
+impl<P: KeyTrait, V: Clone> Clone for Tree<P, V> {
+    fn clone(&self) -> Self {
+        Self {
+            root: self.root.as_ref().cloned(),
+            size: self.size,
+        }
+    }
+}
+
 impl<P: KeyTrait, V: Clone> Tree<P, V> {
     pub fn new() -> Self {
         Tree {
@@ -1536,6 +1545,20 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// Returns `true` if the Trie is empty, `false` otherwise.
     pub fn is_empty(&self) -> bool {
         self.size == 0
+    }
+
+    pub fn scan_at_ts<R>(&self, range: R, ts: u64) -> Vec<(Vec<u8>, V)>
+    where
+        R: RangeBounds<P>,
+    {
+        scan_node(self.root.as_ref(), range, QueryType::LatestByTs(ts))
+    }
+
+    pub fn keys_at_ts<R>(&self, range: R, ts: u64) -> Vec<Vec<u8>>
+    where
+        R: RangeBounds<P>,
+    {
+        query_keys_at_node(self.root.as_ref(), range, QueryType::LatestByTs(ts))
     }
 }
 
