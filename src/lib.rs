@@ -2,7 +2,6 @@
 pub mod art;
 pub mod iter;
 pub mod node;
-pub mod snapshot;
 
 use std::cmp::{Ord, Ordering, PartialOrd};
 use std::error::Error;
