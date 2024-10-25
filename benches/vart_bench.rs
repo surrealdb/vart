@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::prelude::SliceRandom;
 use rand::SeedableRng;
 use rand::{rngs::StdRng, Rng};
 
 use vart::art::Tree;
-use vart::FixedSizeKey;
+use vart::{FixedSizeKey, VariableSizeKey};
 
 fn seeded_rng(alter: u64) -> impl Rng {
     StdRng::seed_from_u64(0xEA3C47920F94A980 ^ alter)
@@ -278,13 +278,66 @@ fn gen_keys(l1_prefix: usize, l2_prefix: usize, suffix: usize) -> Vec<String> {
     keys
 }
 
+fn generate_data(
+    num_keys: usize,
+    key_size: usize,
+    value_size: usize,
+) -> Vec<(VariableSizeKey, Vec<u32>)> {
+    let mut data = Vec::with_capacity(num_keys);
+
+    for i in 0..num_keys {
+        // Generate key
+        let mut key = vec![0xFF; key_size];
+        key[0..8.min(key_size)].copy_from_slice(&i.to_le_bytes()[0..8.min(key_size)]);
+
+        // Generate value
+        let value = vec![0x42; value_size];
+
+        data.push((VariableSizeKey::from_slice(&key), value));
+    }
+
+    data
+}
+
+fn variable_size_bulk_insert_mut(c: &mut Criterion) {
+    let mut group = c.benchmark_group("vart_insert");
+
+    // Test different combinations of key sizes, value sizes, and number of keys
+    let key_sizes = vec![16, 32, 64, 128];
+
+    let num_keys_list = vec![100_000, 500_000, 1_000_000];
+
+    for &num_keys in &num_keys_list {
+        for &key_size in &key_sizes {
+            let benchmark_id = BenchmarkId::new(format!("k{}_v{}", key_size, key_size), num_keys);
+
+            group.bench_with_input(benchmark_id, &num_keys, |b, &num_keys| {
+                // Generate test data outside the benchmark loop
+                let data = generate_data(num_keys, key_size, key_size);
+
+                b.iter(|| {
+                    let mut tree = Tree::new();
+                    for (key, value) in data.iter() {
+                        tree.insert_unchecked(key, value, 0, 0)
+                            .expect("insert should succeed");
+                    }
+                    black_box(tree)
+                });
+            });
+        }
+    }
+
+    group.finish();
+}
+
 criterion_group!(delete_benches, seq_delete, rand_delete);
 criterion_group!(
     insert_benches,
     seq_insert,
     seq_insert_mut,
     rand_insert,
-    rand_insert_mut
+    rand_insert_mut,
+    variable_size_bulk_insert_mut
 );
 criterion_group!(read_benches, seq_get, rand_get, rand_get_str);
 criterion_group!(iter_benches, iter_benchmark);
