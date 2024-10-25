@@ -1024,6 +1024,16 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         }
     }
 
+    fn update_version(&mut self, version: u64) {
+        self.version = if version == 0 {
+            self.version + 1
+        } else if version > self.version {
+            version
+        } else {
+            self.version
+        };
+    }
+
     fn insert_common(
         &mut self,
         key: &P,
@@ -1058,13 +1068,8 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 
         self.root = Some(new_root);
         self.size += 1;
-        self.version = if version == 0 {
-            self.version + 1
-        } else if version > self.version {
-            version
-        } else {
-            self.version
-        };
+        self.update_version(version);
+
         Ok(())
     }
 
@@ -1101,13 +1106,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
             )));
         }
         self.size += 1;
-        self.version = if version == 0 {
-            self.version + 1
-        } else if version > self.version {
-            version
-        } else {
-            self.version
-        };
+        self.update_version(version);
 
         Ok(())
     }
