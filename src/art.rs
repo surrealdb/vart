@@ -1323,15 +1323,17 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Node::get_recurse(root, key, QueryType::LatestByVersion(commit_version))
     }
 
-    /// Retrieves the latest version of the Trie.
+    /// Retrieves the latest version inserted in the Trie.
     ///
-    /// This function returns the version of the latest version of the Trie. If the Trie is empty,
-    /// it returns `0`.
+    /// This function returns the latest version inserted in the Trie. This is used internally
+    /// for surrealkv for determining the transaction id. The version only moves forward in time
+    /// and does not get updated upon any removals. This behavior ensures that deletions do not
+    /// roll back version to read at an older snapshot, which is crucial for internal use in
+    /// SurrealKV for snapshot reads.
     ///
     /// # Returns
     ///
-    /// Returns the version of the latest version of the Trie, or `0` if the Trie is empty.
-    ///
+    /// Returns the version of the latest version of the Trie, or `0` if the Trie is empty.    
     pub fn version(&self) -> u64 {
         self.version
     }
@@ -1508,6 +1510,17 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         R: RangeBounds<P>,
     {
         query_keys_at_node(self.root.as_ref(), range, QueryType::LatestByTs(ts))
+    }
+
+    /// Retrieves the maximum version inside the Trie.
+    ///
+    /// This function returns the maximum version found inside the Trie by traversing
+    /// all the nodes. This version could be lesser than the current incremental version.
+    pub fn max_version_in_trie(&self) -> u64 {
+        self.iter()
+            .map(|(_, _, version, _)| *version)
+            .max()
+            .unwrap_or(0)
     }
 }
 
@@ -2038,6 +2051,28 @@ mod tests {
 
         // Check if the max version of the tree is the max of the two inserted versions
         assert_eq!(tree.version(), 15);
+    }
+
+    #[test]
+    fn timed_deletion_check_root_ts() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let key1 = VariableSizeKey::from_str("key_1").unwrap();
+        let key2 = VariableSizeKey::from_str("key_2").unwrap();
+
+        // Initial insertions
+        assert!(tree.insert(&key1, 1, 0, 0).is_ok());
+        assert!(tree.insert(&key2, 1, 0, 0).is_ok());
+        assert_eq!(tree.version(), 2);
+
+        // Deletions
+        assert!(tree.remove(&key1));
+        assert!(tree.remove(&key2));
+
+        // tree version should still be 2
+        assert_eq!(tree.version(), 2);
+
+        // max version in the tree should be 0 post deletions
+        assert_eq!(tree.max_version_in_trie(), 0);
     }
 
     fn from_be_bytes_key(k: &[u8]) -> u64 {

@@ -626,20 +626,6 @@ mod tests {
     use rand::prelude::SliceRandom;
     use std::sync::Arc;
 
-    // macro_rules! impl_timestamp {
-    //     ($($t:ty),*) => {
-    //         $(
-    //             impl Version for $t {
-    //                 fn version(&self) -> u64 {
-    //                     *self as u64
-    //                 }
-    //             }
-    //         )*
-    //     };
-    // }
-
-    // impl_timestamp!(usize, u8, u16, u32, u64);
-
     fn node_test<N: NodeTrait<usize>>(mut node: N, size: usize) {
         for i in 0..size {
             node.add_child(i as u8, i);
