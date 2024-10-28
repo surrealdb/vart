@@ -15,11 +15,6 @@ pub(crate) trait NodeTrait<N> {
     fn num_children(&self) -> usize;
     fn size(&self) -> usize;
     fn replace_child(&self, key: u8, node: Arc<N>) -> Self;
-    fn update_version_to_max_child_version(&mut self);
-}
-
-pub(crate) trait Version {
-    fn version(&self) -> u64;
 }
 
 #[derive(Clone)]
@@ -139,12 +134,6 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
     }
 }
 
-impl<K: KeyTrait + Clone, V: Clone> Version for TwigNode<K, V> {
-    fn version(&self) -> u64 {
-        self.version
-    }
-}
-
 /// Helper functions for TwigNode for timestamp-based queries
 impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     #[inline]
@@ -242,21 +231,19 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
 // keys are stored in a parallel array. The keys are stored in sorted order, so
 // binary search can be used to find a particular key. The FlatNode is used for
 // storing Node4 and Node16 since they have identical layouts.
-pub(crate) struct FlatNode<P: KeyTrait, N: Version, const WIDTH: usize> {
+pub(crate) struct FlatNode<P: KeyTrait, N, const WIDTH: usize> {
     pub(crate) prefix: P,
-    pub(crate) version: u64,
     keys: [u8; WIDTH],
     children: Box<[Option<Arc<N>>; WIDTH]>,
     num_children: u8,
 }
 
-impl<P: KeyTrait, N: Version, const WIDTH: usize> FlatNode<P, N, WIDTH> {
+impl<P: KeyTrait, N, const WIDTH: usize> FlatNode<P, N, WIDTH> {
     pub(crate) fn new(prefix: P) -> Self {
         let children: [Option<Arc<N>>; WIDTH] = std::array::from_fn(|_| None);
 
         Self {
             prefix,
-            version: 0,
             keys: [0; WIDTH],
             children: Box::new(children),
             num_children: 0,
@@ -280,9 +267,7 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> FlatNode<P, N, WIDTH> {
             new_node.keys[i] = self.keys[i];
             new_node.children[i].clone_from(&self.children[i]);
         }
-        new_node.version = self.version;
         new_node.num_children = self.num_children;
-        new_node.update_version();
         new_node
     }
 
@@ -298,7 +283,6 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> FlatNode<P, N, WIDTH> {
                 n48.insert_child(self.keys[i], child.clone());
             }
         }
-        n48.update_version();
         n48
     }
 
@@ -315,35 +299,6 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> FlatNode<P, N, WIDTH> {
     }
 
     #[inline]
-    fn max_child_version(&self) -> u64 {
-        self.children.iter().fold(0, |acc, x| {
-            if let Some(child) = x.as_ref() {
-                std::cmp::max(acc, child.version())
-            } else {
-                acc
-            }
-        })
-    }
-
-    #[inline]
-    fn update_version(&mut self) {
-        // Compute the maximum version among all children
-        let max_child_version = self.max_child_version();
-
-        // If self.version is less than the maximum child version, update it.
-        if self.version < max_child_version {
-            self.version = max_child_version;
-        }
-    }
-
-    #[inline]
-    fn update_if_newer(&mut self, new_version: u64) {
-        if new_version > self.version {
-            self.version = new_version;
-        }
-    }
-
-    #[inline]
     pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = (u8, &Arc<N>)> {
         self.keys
             .iter()
@@ -353,7 +308,7 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> FlatNode<P, N, WIDTH> {
     }
 }
 
-impl<P: KeyTrait, N: Version, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N, WIDTH> {
+impl<P: KeyTrait, N, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N, WIDTH> {
     fn clone(&self) -> Self {
         let mut new_node = Self::new(self.prefix.clone());
         for i in 0..self.num_children as usize {
@@ -361,13 +316,7 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N
             new_node.children[i].clone_from(&self.children[i])
         }
         new_node.num_children = self.num_children;
-        new_node.version = self.version;
         new_node
-    }
-
-    #[inline]
-    fn update_version_to_max_child_version(&mut self) {
-        self.version = self.max_child_version();
     }
 
     fn replace_child(&self, key: u8, node: Arc<N>) -> Self {
@@ -375,16 +324,11 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N
         let idx = new_node.index(key).unwrap();
         new_node.keys[idx] = key;
         new_node.children[idx] = Some(node);
-        new_node.update_version_to_max_child_version();
-
         new_node
     }
 
     fn add_child(&mut self, key: u8, node: N) {
         let idx = self.find_pos(key).expect("node is full");
-
-        // Update the version if the new child has a greater version
-        self.update_if_newer(node.version());
         self.insert_child(idx, key, Arc::new(node));
     }
 
@@ -418,7 +362,6 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N
         new_node.keys[WIDTH - 1] = 0;
         new_node.children[WIDTH - 1] = None;
         new_node.num_children -= 1;
-        new_node.update_version_to_max_child_version();
 
         new_node
     }
@@ -434,12 +377,6 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N
     }
 }
 
-impl<P: KeyTrait, N: Version, const WIDTH: usize> Version for FlatNode<P, N, WIDTH> {
-    fn version(&self) -> u64 {
-        self.version
-    }
-}
-
 // Source: https://www.the-paper-trail.org/post/art-paper-notes/
 //
 // Node48: It can hold up to three times as many keys as a Node16. As the paper says,
@@ -450,19 +387,17 @@ impl<P: KeyTrait, N: Version, const WIDTH: usize> Version for FlatNode<P, N, WID
 // A Node48 is a 256-entry array of pointers to children. The pointers are stored in
 // a Vector Array, which is a Vector of length WIDTH (48) that stores the pointers.
 
-pub(crate) struct Node48<P: KeyTrait, N: Version> {
+pub(crate) struct Node48<P: KeyTrait, N> {
     pub(crate) prefix: P,
-    pub(crate) version: u64,
     keys: Box<[u8; 256]>,
     children: Box<[Option<Arc<N>>; 48]>,
     child_bitmap: u64,
 }
 
-impl<P: KeyTrait, N: Version> Node48<P, N> {
+impl<P: KeyTrait, N> Node48<P, N> {
     pub(crate) fn new(prefix: P) -> Self {
         Self {
             prefix,
-            version: 0,
             keys: Box::new([u8::MAX; 256]),
             children: Box::new(std::array::from_fn(|_| None)),
             child_bitmap: 0,
@@ -490,7 +425,6 @@ impl<P: KeyTrait, N: Version> Node48<P, N> {
             let idx = fnode.find_pos(key as u8).expect("node is full");
             fnode.insert_child(idx, key as u8, child);
         }
-        fnode.update_version();
         fnode
     }
 
@@ -505,35 +439,7 @@ impl<P: KeyTrait, N: Version> Node48<P, N> {
             let child = self.children[*pos as usize].as_ref().unwrap().clone();
             n256.insert_child(key as u8, child);
         }
-        n256.update_version();
         n256
-    }
-
-    #[inline]
-    fn max_child_version(&self) -> u64 {
-        self.children
-            .iter()
-            .filter_map(|x| x.as_ref().map(|x| x.version()))
-            .max()
-            .unwrap_or(0)
-    }
-
-    #[inline]
-    fn update_version(&mut self) {
-        // Compute the maximum version among all children
-        let max_child_version = self.max_child_version();
-
-        // If self.version is less than the maximum child version, update it.
-        if self.version < max_child_version {
-            self.version = max_child_version;
-        }
-    }
-
-    #[inline]
-    fn update_if_newer(&mut self, new_version: u64) {
-        if new_version > self.version {
-            self.version = new_version;
-        }
     }
 
     pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = (u8, &Arc<N>)> {
@@ -545,20 +451,14 @@ impl<P: KeyTrait, N: Version> Node48<P, N> {
     }
 }
 
-impl<P: KeyTrait, N: Version> NodeTrait<N> for Node48<P, N> {
+impl<P: KeyTrait, N> NodeTrait<N> for Node48<P, N> {
     fn clone(&self) -> Self {
         Node48 {
             prefix: self.prefix.clone(),
-            version: self.version,
             keys: self.keys.clone(),
             children: self.children.clone(),
             child_bitmap: self.child_bitmap,
         }
-    }
-
-    #[inline]
-    fn update_version_to_max_child_version(&mut self) {
-        self.version = self.max_child_version();
     }
 
     fn replace_child(&self, key: u8, node: Arc<N>) -> Self {
@@ -566,14 +466,11 @@ impl<P: KeyTrait, N: Version> NodeTrait<N> for Node48<P, N> {
         let idx = new_node.keys[key as usize];
         assert!(idx != u8::MAX);
         new_node.children[idx as usize] = Some(node);
-        new_node.update_version_to_max_child_version();
 
         new_node
     }
 
     fn add_child(&mut self, key: u8, node: N) {
-        // Update the version if the new child has a greater version
-        self.update_if_newer(node.version());
         self.insert_child(key, Arc::new(node));
     }
 
@@ -585,7 +482,6 @@ impl<P: KeyTrait, N: Version> NodeTrait<N> for Node48<P, N> {
         new_node.children[pos as usize] = None;
         new_node.child_bitmap &= !(1 << pos);
 
-        new_node.update_version_to_max_child_version();
         new_node
     }
 
@@ -617,12 +513,6 @@ impl<P: KeyTrait, N: Version> NodeTrait<N> for Node48<P, N> {
     }
 }
 
-impl<P: KeyTrait, N: Version> Version for Node48<P, N> {
-    fn version(&self) -> u64 {
-        self.version
-    }
-}
-
 // Source: https://www.the-paper-trail.org/post/art-paper-notes/
 //
 // Node256: It is the traditional trie node, used when a node has
@@ -632,19 +522,16 @@ impl<P: KeyTrait, N: Version> Version for Node48<P, N> {
 //
 // A Node256 is a 256-entry array of pointers to children. The pointers are stored in
 // a Vector Array, which is a Vector of length WIDTH (256) that stores the pointers.
-pub(crate) struct Node256<P: KeyTrait, N: Version> {
-    pub(crate) prefix: P,    // Prefix associated with the node
-    pub(crate) version: u64, // Version for node256
-
+pub(crate) struct Node256<P: KeyTrait, N> {
+    pub(crate) prefix: P, // Prefix associated with the node
     children: Box<[Option<Arc<N>>; 256]>,
     num_children: usize,
 }
 
-impl<P: KeyTrait, N: Version> Node256<P, N> {
+impl<P: KeyTrait, N> Node256<P, N> {
     pub(crate) fn new(prefix: P) -> Self {
         Self {
             prefix,
-            version: 0,
             children: Box::new(std::array::from_fn(|_| None)),
             num_children: 0,
         }
@@ -661,7 +548,6 @@ impl<P: KeyTrait, N: Version> Node256<P, N> {
         {
             indexed.insert_child(key as u8, v);
         }
-        indexed.update_version();
         indexed
     }
 
@@ -672,33 +558,6 @@ impl<P: KeyTrait, N: Version> Node256<P, N> {
         self.num_children += new_insert as usize;
     }
 
-    #[inline]
-    fn max_child_version(&self) -> u64 {
-        self.children
-            .iter()
-            .filter_map(|x| x.as_ref().map(|x| x.version()))
-            .max()
-            .unwrap_or(0)
-    }
-
-    #[inline]
-    fn update_version(&mut self) {
-        // Compute the maximum version among all children
-        let max_child_version = self.max_child_version();
-
-        // If self.version is less than the maximum child version, update it.
-        if self.version < max_child_version {
-            self.version = max_child_version;
-        }
-    }
-
-    #[inline]
-    fn update_if_newer(&mut self, new_version: u64) {
-        if new_version > self.version {
-            self.version = new_version;
-        }
-    }
-
     pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = (u8, &Arc<N>)> {
         self.children
             .iter()
@@ -707,19 +566,13 @@ impl<P: KeyTrait, N: Version> Node256<P, N> {
     }
 }
 
-impl<P: KeyTrait, N: Version> NodeTrait<N> for Node256<P, N> {
+impl<P: KeyTrait, N> NodeTrait<N> for Node256<P, N> {
     fn clone(&self) -> Self {
         Self {
             prefix: self.prefix.clone(),
-            version: self.version,
             children: self.children.clone(),
             num_children: self.num_children,
         }
-    }
-
-    #[inline]
-    fn update_version_to_max_child_version(&mut self) {
-        self.version = self.max_child_version();
     }
 
     fn replace_child(&self, key: u8, node: Arc<N>) -> Self {
@@ -727,14 +580,11 @@ impl<P: KeyTrait, N: Version> NodeTrait<N> for Node256<P, N> {
         let mut new_node = self.clone();
 
         new_node.children[key as usize] = Some(node);
-        new_node.update_version_to_max_child_version();
         new_node
     }
 
     #[inline]
     fn add_child(&mut self, key: u8, node: N) {
-        // Update the version if the new child has a greater version
-        self.update_if_newer(node.version());
         self.insert_child(key, Arc::new(node));
     }
 
@@ -754,7 +604,6 @@ impl<P: KeyTrait, N: Version> NodeTrait<N> for Node256<P, N> {
         let mut new_node = self.clone();
         let removed = new_node.children[key as usize].take().is_some();
         new_node.num_children -= removed as usize;
-        new_node.update_version_to_max_child_version();
         new_node
     }
 
@@ -769,33 +618,13 @@ impl<P: KeyTrait, N: Version> NodeTrait<N> for Node256<P, N> {
     }
 }
 
-impl<P: KeyTrait, N: Version> Version for Node256<P, N> {
-    fn version(&self) -> u64 {
-        self.version
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::FixedSizeKey;
 
-    use super::{FlatNode, Node256, Node48, NodeTrait, TwigNode, Version};
+    use super::{FlatNode, Node256, Node48, NodeTrait, TwigNode};
     use rand::prelude::SliceRandom;
     use std::sync::Arc;
-
-    macro_rules! impl_timestamp {
-        ($($t:ty),*) => {
-            $(
-                impl Version for $t {
-                    fn version(&self) -> u64 {
-                        *self as u64
-                    }
-                }
-            )*
-        };
-    }
-
-    impl_timestamp!(usize, u8, u16, u32, u64);
 
     fn node_test<N: NodeTrait<usize>>(mut node: N, size: usize) {
         for i in 0..size {
@@ -984,175 +813,6 @@ mod tests {
         for i in 0..48 {
             assert!(matches!(resized.find_child(i), Some(v) if *v == i.into()));
         }
-    }
-
-    #[test]
-    fn flatnode_update_version() {
-        const WIDTH: usize = 4;
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
-
-        // Prepare some child nodes
-        let mut child1 = FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
-        child1.version = 5;
-        let mut child2 = FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
-        child2.version = 10;
-        let mut child3 = FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
-        child3.version = 3;
-        let mut child4 = FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
-        child4.version = 7;
-
-        let mut parent = FlatNode {
-            prefix: dummy_prefix.clone(),
-            version: 6,
-            keys: [0; WIDTH],
-            children: Box::new([
-                Some(Arc::new(child1)),
-                Some(Arc::new(child2)),
-                Some(Arc::new(child3)),
-                None,
-            ]),
-            num_children: 3,
-        };
-        // The maximum version among children is 10 (child2.version), so after calling update_version,
-        // the parent's version should be updated to 10.
-        parent.update_version();
-        assert_eq!(parent.version(), 10);
-
-        // Add a new child with a larger version (15), parent's version should update to 15
-        let mut child5 = FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
-        child5.version = 15;
-        parent.add_child(3, child5);
-        assert_eq!(parent.version(), 15);
-
-        // Delete the child with the largest version, parent's version should update to next max (10)
-        parent = parent.delete_child(3);
-        assert_eq!(parent.version(), 10);
-
-        // Update a child's version to be the largest (20), parent's version should update to 20
-        let mut child6 = FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix);
-        child6.version = 20;
-        parent.children[2] = Some(Arc::new(child6));
-        parent.update_version();
-        assert_eq!(parent.version(), 20);
-    }
-
-    #[test]
-    fn flatnode_repeated_update_version() {
-        const WIDTH: usize = 1;
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
-
-        let child = FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
-        let mut parent: FlatNode<FixedSizeKey<8>, FlatNode<FixedSizeKey<8>, usize, 1>, 1> =
-            FlatNode {
-                prefix: dummy_prefix,
-                version: 6,
-                keys: [0; WIDTH],
-                children: Box::new([Some(Arc::new(child))]),
-                num_children: 1,
-            };
-
-        // Calling update_version once should update the version.
-        parent.update_version();
-        let version_after_first_update = parent.version();
-
-        // Calling update_version again should not change the version.
-        parent.update_version();
-        assert_eq!(parent.version(), version_after_first_update);
-    }
-
-    #[test]
-    fn node48_update_version() {
-        const WIDTH: usize = 4;
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
-
-        // Prepare some child nodes with varying versions
-        let children: Vec<_> = (0..WIDTH)
-            .map(|i| {
-                let mut child =
-                    FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
-                child.version = i as u64;
-                child
-            })
-            .collect();
-
-        let mut parent: Node48<FixedSizeKey<8>, FlatNode<FixedSizeKey<8>, usize, WIDTH>> =
-            Node48::<FixedSizeKey<8>, FlatNode<FixedSizeKey<8>, usize, WIDTH>>::new(dummy_prefix);
-
-        // Add children to parent
-        for (i, child) in children.iter().enumerate() {
-            parent.add_child(i as u8, child.clone());
-        }
-        // The maximum version among children is (WIDTH - 1), so after calling update_version,
-        // the parent's version should be updated to (WIDTH - 1).
-        parent.update_version();
-        assert_eq!(parent.version(), (WIDTH - 1) as u64);
-    }
-
-    #[test]
-    fn node256_update_version() {
-        const WIDTH: usize = 256;
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
-
-        // Prepare some child nodes with varying versions
-        let children: Vec<_> = (0..WIDTH)
-            .map(|i| {
-                let mut child =
-                    FlatNode::<FixedSizeKey<8>, usize, WIDTH>::new(dummy_prefix.clone());
-                child.version = i as u64;
-                child
-            })
-            .collect();
-
-        let mut parent: Node256<FixedSizeKey<8>, FlatNode<FixedSizeKey<8>, usize, WIDTH>> =
-            Node256::<FixedSizeKey<8>, FlatNode<FixedSizeKey<8>, usize, WIDTH>>::new(dummy_prefix);
-
-        // Add children to parent
-        for (i, child) in children.iter().enumerate() {
-            parent.add_child(i as u8, child.clone());
-        }
-
-        // The maximum version among children is (WIDTH - 1), so after calling update_version,
-        // the parent's version should be updated to (WIDTH - 1).
-        parent.update_version();
-        assert_eq!(parent.version(), (WIDTH - 1) as u64);
-    }
-
-    // TODO: add more scenarios to this as twig nodes have the actual data with versions
-    #[test]
-    fn twig_nodes() {
-        const WIDTH: usize = 4;
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
-
-        // Prepare some child nodes
-        let mut twig1 =
-            TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
-        twig1.version = 5;
-        let mut twig2 =
-            TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
-        twig2.version = 10;
-        let mut twig3 =
-            TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
-        twig3.version = 3;
-        let mut twig4 =
-            TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix.clone());
-        twig4.version = 7;
-
-        let mut parent = FlatNode {
-            prefix: dummy_prefix,
-            version: 0,
-            keys: [0; WIDTH],
-            children: Box::new([
-                Some(Arc::new(twig1)),
-                Some(Arc::new(twig2)),
-                Some(Arc::new(twig3)),
-                Some(Arc::new(twig4)),
-            ]),
-            num_children: 3,
-        };
-        // The maximum version among children is 10 (child2.version), so after calling update_version,
-        // the parent's version should be updated to 10.
-        parent.update_version();
-        assert_eq!(parent.version(), 10);
     }
 
     #[test]

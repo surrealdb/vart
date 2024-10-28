@@ -4,7 +4,7 @@ use std::ops::RangeBounds;
 use std::sync::Arc;
 
 use crate::iter::{query_keys_at_node, scan_node, Iter, Range};
-use crate::node::{FlatNode, LeafValue, Node256, Node48, NodeTrait, TwigNode, Version};
+use crate::node::{FlatNode, LeafValue, Node256, Node48, NodeTrait, TwigNode};
 use crate::{KeyTrait, TrieError};
 
 // Minimum and maximum number of children for Node4
@@ -40,18 +40,6 @@ const NODE256MIN: usize = NODE48MAX + 1;
 ///
 pub(crate) struct Node<P: KeyTrait, V: Clone> {
     pub(crate) node_type: NodeType<P, V>, // Type of the node
-}
-
-impl<P: KeyTrait, V: Clone> Version for Node<P, V> {
-    fn version(&self) -> u64 {
-        match &self.node_type {
-            NodeType::Twig(twig) => twig.version(),
-            NodeType::Node4(n) => n.version(),
-            NodeType::Node16(n) => n.version(),
-            NodeType::Node48(n) => n.version(),
-            NodeType::Node256(n) => n.version(),
-        }
-    }
 }
 
 #[derive(Copy, Clone)]
@@ -639,16 +627,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         }
     }
 
-    fn update_version(&mut self) {
-        match &mut self.node_type {
-            NodeType::Node4(n) => n.update_version_to_max_child_version(),
-            NodeType::Node16(n) => n.update_version_to_max_child_version(),
-            NodeType::Node48(n) => n.update_version_to_max_child_version(),
-            NodeType::Node256(n) => n.update_version_to_max_child_version(),
-            NodeType::Twig(_) => {}
-        }
-    }
-
     // Common logic for insert to extract common prefix and key prefix
     fn common_insert_logic<'a>(
         cur_node_prefix: &P,
@@ -844,7 +822,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 depth + longest_common_prefix,
                 replace,
             );
-            cur_node.update_version();
             return;
         }
 
@@ -1002,6 +979,7 @@ pub struct Tree<P: KeyTrait, V: Clone> {
     /// An optional shared reference to the root node of the tree.
     pub(crate) root: Option<Arc<Node<P, V>>>,
     pub size: usize,
+    pub version: u64,
 }
 
 // A type alias for a node reference.
@@ -1032,6 +1010,7 @@ impl<P: KeyTrait, V: Clone> Clone for Tree<P, V> {
         Self {
             root: self.root.as_ref().cloned(),
             size: self.size,
+            version: self.version,
         }
     }
 }
@@ -1041,7 +1020,18 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         Tree {
             root: None,
             size: 0,
+            version: 0,
         }
+    }
+
+    fn update_version(&mut self, version: u64) {
+        self.version = if version == 0 {
+            self.version + 1
+        } else if version > self.version {
+            version
+        } else {
+            self.version
+        };
     }
 
     fn insert_common(
@@ -1065,7 +1055,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                 ))
             }
             Some(root) => {
-                let curr_version = root.version();
+                let curr_version = self.version;
                 let mut commit_version = version;
                 if version == 0 {
                     commit_version = curr_version + 1;
@@ -1078,6 +1068,8 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 
         self.root = Some(new_root);
         self.size += 1;
+        self.update_version(version);
+
         Ok(())
     }
 
@@ -1091,7 +1083,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         replace: bool,
     ) -> Result<(), TrieError> {
         if let Some(root_arc) = self.root.as_mut() {
-            let curr_version = root_arc.version();
+            let curr_version = self.version;
             let mut commit_version = version;
             if version == 0 {
                 commit_version = curr_version + 1;
@@ -1114,6 +1106,8 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
             )));
         }
         self.size += 1;
+        self.update_version(version);
+
         Ok(())
     }
 
@@ -1323,26 +1317,25 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         let root = self.root.as_ref()?;
         let mut commit_version = version;
         if commit_version == 0 {
-            commit_version = root.version();
+            commit_version = self.version;
         }
 
         Node::get_recurse(root, key, QueryType::LatestByVersion(commit_version))
     }
 
-    /// Retrieves the latest version of the Trie.
+    /// Retrieves the latest version inserted in the Trie.
     ///
-    /// This function returns the version of the latest version of the Trie. If the Trie is empty,
-    /// it returns `0`.
+    /// This function returns the latest version inserted in the Trie. This is used internally
+    /// for surrealkv for determining the transaction id. The version only moves forward in time
+    /// and does not get updated upon any removals. This behavior ensures that deletions do not
+    /// roll back version to read at an older snapshot, which is crucial for internal use in
+    /// SurrealKV for snapshot reads.
     ///
     /// # Returns
     ///
-    /// Returns the version of the latest version of the Trie, or `0` if the Trie is empty.
-    ///
+    /// Returns the version of the latest version of the Trie, or `0` if the Trie is empty.    
     pub fn version(&self) -> u64 {
-        match &self.root {
-            None => 0,
-            Some(root) => root.version(),
-        }
+        self.version
     }
 
     /// Creates an iterator over the Trie's key-value pairs.
@@ -1518,6 +1511,17 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     {
         query_keys_at_node(self.root.as_ref(), range, QueryType::LatestByTs(ts))
     }
+
+    /// Retrieves the maximum version inside the Trie.
+    ///
+    /// This function returns the maximum version found inside the Trie by traversing
+    /// all the nodes. This version could be lesser than the current incremental version.
+    pub fn max_version_in_trie(&self) -> u64 {
+        self.iter()
+            .map(|(_, _, version, _)| *version)
+            .max()
+            .unwrap_or(0)
+    }
 }
 
 /*
@@ -1571,8 +1575,6 @@ mod tests {
         } else if let Err(err) = read_words_from_file(file_path) {
             eprintln!("Error reading file: {}", err);
         }
-
-        assert_eq!(tree.version(), 0);
     }
 
     #[test]
@@ -2065,7 +2067,12 @@ mod tests {
         // Deletions
         assert!(tree.remove(&key1));
         assert!(tree.remove(&key2));
-        assert_eq!(tree.version(), 0);
+
+        // tree version should still be 2
+        assert_eq!(tree.version(), 2);
+
+        // max version in the tree should be 0 post deletions
+        assert_eq!(tree.max_version_in_trie(), 0);
     }
 
     fn from_be_bytes_key(k: &[u8]) -> u64 {
