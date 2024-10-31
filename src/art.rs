@@ -836,6 +836,53 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         cur_node.add_child_mut(k, new_twig);
     }
 
+    pub(crate) fn insert_nonrecurse_mut(
+        root: &mut Node<P, V>,
+        key: &P,
+        value: V,
+        version: u64,
+        ts: u64,
+        replace: bool,
+    ) {
+        match Self::navigate_to_mut_node(root, key) {
+            SearchResult::Match(node) => {
+                if let NodeType::Twig(twig) = &mut node.node_type {
+                    if replace {
+                        twig.replace_if_newer_mut(value, version, ts);
+                    } else {
+                        twig.insert_mut(value, version, ts);
+                    }
+                } else {
+                    panic!("must be Twig");
+                }
+            }
+            SearchResult::Parent(parent, k, depth) => {
+                let prefix = key.prefix_after(depth).into();
+                let new_twig = Node::new_twig(prefix, key.clone(), value, version, ts);
+                parent.add_child_mut(k, new_twig);
+            }
+            SearchResult::Split(cur_node, lcp, depth) => {
+                let twig_prefix: P = key.prefix_after(depth + lcp).into();
+                let n4_prefix = cur_node.prefix().prefix_before(lcp).into();
+                let new_cur_node_prefix = cur_node.prefix().prefix_after(lcp).into();
+
+                let n4 = Node::new_node4(n4_prefix);
+
+                let k1 = cur_node.prefix().at(lcp);
+                let k2 = twig_prefix.at(0);
+
+                // Must be set after the calculation of k1 above.
+                cur_node.set_prefix(new_cur_node_prefix);
+
+                let old_node = std::mem::replace(cur_node, n4);
+
+                let new_twig = Node::new_twig(twig_prefix, key.clone(), value, version, ts);
+                cur_node.add_child_mut(k1, old_node);
+                cur_node.add_child_mut(k2, new_twig);
+            }
+        }
+    }
+
     /// Removes a key recursively from the node and its children.
     ///
     /// Recursively removes a key from the current node and its child nodes.
@@ -959,6 +1006,40 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             NodeType::Twig(_) => Box::new(std::iter::empty()),
         }
     }
+
+    fn navigate_to_mut_node<'a>(root: &'a mut Node<P, V>, key: &P) -> SearchResult<'a, P, V> {
+        let mut cur_node = root;
+        let mut depth = 0;
+
+        loop {
+            let key_prefix = key.prefix_after(depth);
+            let prefix = cur_node.prefix();
+            let lcp = prefix.longest_common_prefix(key_prefix);
+
+            if lcp != prefix.len() {
+                return SearchResult::Split(cur_node, lcp, depth);
+            }
+
+            if prefix.len() == key_prefix.len() {
+                return SearchResult::Match(cur_node);
+            }
+
+            depth += prefix.len();
+            let k = key.at(depth);
+            // Both find_child() and find_child_mut() are used because
+            // the borrow checker does not allow only find_child_mut().
+            if cur_node.find_child(k).is_none() {
+                return SearchResult::Parent(cur_node, k, depth);
+            }
+            cur_node = cur_node.find_child_mut(k).unwrap();
+        }
+    }
+}
+
+enum SearchResult<'a, P: KeyTrait, V: Clone> {
+    Match(&'a mut Node<P, V>),
+    Parent(&'a mut Node<P, V>, u8, usize),
+    Split(&'a mut Node<P, V>, usize, usize),
 }
 
 /// A struct representing an Adaptive Radix Trie.
@@ -1091,7 +1172,8 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                 return Err(TrieError::VersionIsOld);
             }
             if let Some(root) = Arc::get_mut(root_arc) {
-                Node::insert_recurse_mut(root, key, value, commit_version, ts, 0, replace)
+                Node::insert_nonrecurse_mut(root, key, value, commit_version, ts, replace)
+                // Node::insert_recurse_mut(root, key, value, commit_version, ts, 0, replace)
             } else {
                 return Err(TrieError::RootIsNotUniquelyOwned);
             }
