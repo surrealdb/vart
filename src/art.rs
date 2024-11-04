@@ -836,65 +836,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         cur_node.add_child_mut(k, new_twig);
     }
 
-    /// Removes a key recursively from the node and its children.
-    ///
-    /// Recursively removes a key from the current node and its child nodes.
-    ///
-    /// # Parameters
-    ///
-    /// - `cur_node`: A reference to the current node.
-    /// - `key`: The key to be removed.
-    /// - `depth`: The depth of the removal process.
-    ///
-    /// # Returns
-    ///
-    /// Returns a tuple containing the updated node (or `None`) and a flag indicating if the key was removed.
-    ///
-    pub(crate) fn remove_recurse(
-        cur_node: &Arc<Node<P, V>>,
-        key: &P,
-        depth: usize,
-    ) -> (Option<Arc<Node<P, V>>>, bool) {
-        let k = key.at(depth);
-
-        // Search for a child node corresponding to the key's character.
-        let child = cur_node.find_child(k);
-        if let Some(child_node) = child {
-            let prefix = child_node.prefix().clone();
-
-            // Determine the prefix of the key after the current depth.
-            let key_prefix = key.prefix_after(depth);
-
-            // Find the longest common prefix between the current node's prefix and the key's prefix.
-            let longest_common_prefix = prefix.longest_common_prefix(key_prefix);
-            if longest_common_prefix != prefix.len() {
-                return (None, false);
-            }
-
-            if child_node.is_twig() {
-                let prefix_len = key.len() - depth;
-                if child_node.prefix().len() != prefix_len {
-                    return (None, false);
-                }
-
-                let new_node = cur_node.delete_child(k);
-                return (Some(Arc::new(new_node)), true);
-            }
-
-            // Recursively attempt to remove the key from the child node.
-            let (new_child, removed) =
-                Node::remove_recurse(child_node, key, depth + longest_common_prefix);
-            if removed {
-                // If the key was successfully removed from the child node, update the current node's child pointer.
-                let new_node = cur_node.replace_child(k, new_child.unwrap());
-                return (Some(Arc::new(new_node)), true);
-            }
-        }
-
-        // If the key was not found at this level, return the current node as-is.
-        (Some(cur_node.clone()), false)
-    }
-
     fn navigate_to_node<'a>(cur_node: &'a Node<P, V>, key: &P) -> Option<&'a Node<P, V>> {
         let mut cur_node = cur_node;
         let mut depth = 0;
@@ -1221,54 +1162,66 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         self.insert_common_mut(key, value, version, ts, false, true)
     }
 
-    pub(crate) fn remove_from_node(
-        node: Option<&Arc<Node<P, V>>>,
+    /// Removes the key from the current node or one of its child nodes
+    /// while building an updated copy of the Tree on its way up the recursion.
+    ///
+    /// # Parameters
+    ///
+    /// - `cur_node`: A reference to the current node.
+    /// - `key`: The key to be removed.
+    /// - `depth`: The depth of the removal process.
+    ///
+    /// # Returns
+    ///
+    /// Returns a tuple containing the updated node (or `None`) and a flag
+    /// indicating if the key was removed.
+    fn remove_recursive(
+        cur_node: &Node<P, V>,
         key: &P,
+        depth: usize,
     ) -> (Option<Arc<Node<P, V>>>, bool) {
-        // Directly match on the root to simplify logic
-        let (new_root, is_deleted) = match &node {
-            Some(root) if !root.is_twig() => {
-                // Determine the prefix of the key after the current depth.
-                let key_prefix = key.prefix_after(0);
-                // Find the longest common prefix between the current node's prefix and the key's prefix.
-                let longest_common_prefix = root.prefix().longest_common_prefix(key_prefix);
+        let key_prefix = key.prefix_after(depth);
+        let prefix = cur_node.prefix();
+        let lcp = prefix.longest_common_prefix(key_prefix);
 
-                if longest_common_prefix != root.prefix().len() {
-                    // If the longest common prefix doesn't match the root's prefix length, no deletion occurs.
-                    (Some(Arc::clone(root)), false)
-                } else {
-                    // Proceed with recursive removal if the prefixes match.
-                    let (new_root, removed) =
-                        Node::remove_recurse(root, key, longest_common_prefix);
+        // Current node's prefix does not match the remainder of the
+        // key. This means there's no key in the Tree, so recourse up
+        // with nothing. This will keep the original Tree root unaffected.
+        if lcp != prefix.len() {
+            return (None, false);
+        }
 
-                    if removed
-                        && new_root.as_ref().unwrap().is_inner()
-                        && new_root.as_ref().unwrap().num_children() == 0
-                    {
-                        // If the node was deleted and it has no children, return None as the new root.
-                        (None, removed)
-                    } else {
-                        (new_root, removed)
-                    }
+        // Current node's prefix completely matches the remainder of the key.
+        // This must be the Twig node. Its copy-on-write removed by returning
+        // (None, true). This will signal the caller to remove the associated
+        // child link from the parent inner node.
+        if prefix.len() == key_prefix.len() {
+            assert!(cur_node.is_twig());
+            return (None, true);
+        }
+
+        // Current node's prefix matches the prefix of the remainder
+        // of the key. Continue the search down the Tree while building
+        // its copy.
+        let new_depth = depth + prefix.len();
+        let k = key.at(new_depth);
+        if let Some(child) = cur_node.find_child(k) {
+            match Self::remove_recursive(child, key, new_depth) {
+                (Some(new_child), true) => {
+                    let new_node = cur_node.replace_child(k, new_child);
+                    return (Some(Arc::new(new_node)), true);
                 }
-            }
-            Some(root) => {
-                // case where the root is a twig.
-                // Determine the prefix of the key after the current depth.
-                let key_prefix = key.prefix_after(0);
-                // Find the longest common prefix between the current node's prefix and the key's prefix.
-                let longest_common_prefix = root.prefix().longest_common_prefix(key_prefix);
-
-                if longest_common_prefix != root.prefix().len() {
-                    (None, false)
-                } else {
-                    (None, true)
+                (None, true) => {
+                    // The key has been found, so remove the corresponding
+                    // child link from the current node.
+                    let new_node = cur_node.delete_child(k);
+                    return (Some(Arc::new(new_node)), true);
                 }
+                _ => {}
             }
-            None => (None, false), // case where there is no root.
-        };
+        }
 
-        (new_root, is_deleted)
+        (None, false)
     }
 
     /// Removes a key with all the versions associated with it from the Trie.
@@ -1283,8 +1236,12 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     ///
     /// Returns `true` if the key was successfully removed, `false` otherwise.
     pub fn remove(&mut self, key: &P) -> bool {
-        // Directly match on the root to simplify logic
-        let (new_root, is_deleted) = Tree::remove_from_node(self.root.as_ref(), key);
+        let root = match self.root.as_deref() {
+            Some(root) => root,
+            None => return false,
+        };
+
+        let (new_root, is_deleted) = Tree::remove_recursive(root, key, 0);
 
         // Update the root and return the deletion status.
         if is_deleted {
