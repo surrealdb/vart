@@ -6,7 +6,7 @@ use crate::art::{Node, NodeType, QueryType};
 use crate::node::{LeafValue, TwigNode};
 use crate::KeyTrait;
 
-type NodeIterator<'a, P, V> = Box<dyn DoubleEndedIterator<Item = (u8, &'a Arc<Node<P, V>>)> + 'a>;
+type NodeIterator<'a, P, V> = Box<dyn DoubleEndedIterator<Item = &'a Arc<Node<P, V>>> + 'a>;
 
 /// An iterator over the nodes in the Trie.
 struct NodeIter<'a, P: KeyTrait, V: Clone> {
@@ -22,7 +22,7 @@ impl<'a, P: KeyTrait, V: Clone> NodeIter<'a, P, V> {
     ///
     fn new<I>(iter: I) -> Self
     where
-        I: DoubleEndedIterator<Item = (u8, &'a Arc<Node<P, V>>)> + 'a,
+        I: DoubleEndedIterator<Item = &'a Arc<Node<P, V>>> + 'a,
     {
         Self {
             node: Box::new(iter),
@@ -31,7 +31,7 @@ impl<'a, P: KeyTrait, V: Clone> NodeIter<'a, P, V> {
 }
 
 impl<'a, P: KeyTrait, V: Clone> Iterator for NodeIter<'a, P, V> {
-    type Item = (u8, &'a Arc<Node<P, V>>);
+    type Item = &'a Arc<Node<P, V>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.node.next()
@@ -114,7 +114,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
                     self.forward.iters.pop();
                 }
                 Some(other) => {
-                    if let NodeType::Twig(twig) = &other.1.node_type {
+                    if let NodeType::Twig(twig) = &other.node_type {
                         if self.forward.is_versioned {
                             for leaf in twig.iter() {
                                 self.forward.leafs.push_back(Leaf(&twig.key, leaf));
@@ -124,7 +124,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
                         }
                         break;
                     } else {
-                        self.forward.iters.push(NodeIter::new(other.1.iter()));
+                        self.forward.iters.push(NodeIter::new(other.iter()));
                     }
                 }
             }
@@ -161,7 +161,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> DoubleEndedIterator for Iter<'a, P, V> {
                     self.backward.iters.pop();
                 }
                 Some(other) => {
-                    if let NodeType::Twig(twig) = &other.1.node_type {
+                    if let NodeType::Twig(twig) = &other.node_type {
                         if self.backward.is_versioned {
                             for leaf in twig.iter() {
                                 self.backward.leafs.push(Leaf(&twig.key, leaf));
@@ -171,7 +171,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> DoubleEndedIterator for Iter<'a, P, V> {
                         }
                         break;
                     } else {
-                        self.backward.iters.push(NodeIter::new(other.1.iter()));
+                        self.backward.iters.push(NodeIter::new(other.iter()));
                     }
                 }
             }
@@ -498,7 +498,7 @@ impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(node) = self.forward.iters.last_mut() {
             if let Some(other) = node.next() {
-                if let NodeType::Twig(twig) = &other.1.node_type {
+                if let NodeType::Twig(twig) = &other.node_type {
                     if self.range.contains(&twig.key) {
                         self.handle_twig(twig);
                         break;
@@ -510,7 +510,7 @@ impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K
                         &mut self.prefix,
                         &mut self.prefix_lengths,
                         &self.range,
-                        other.1,
+                        other,
                         &mut self.forward.iters,
                     );
                 }
@@ -589,7 +589,7 @@ where
         let e = node.next();
         match e {
             Some(other) => {
-                if let NodeType::Twig(twig) = &other.1.node_type {
+                if let NodeType::Twig(twig) = &other.node_type {
                     if range.contains(&twig.key) {
                         // Iterate through leaves of the twig
                         if let Some(leaf) = twig.get_leaf_by_query(query_type) {
@@ -609,7 +609,7 @@ where
                         &mut prefix,
                         &mut prefix_lengths,
                         &range,
-                        other.1,
+                        other,
                         &mut forward.iters,
                     );
                 }

@@ -890,8 +890,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     ///
     /// Returns a boxed iterator that yields tuples containing keys and references to child nodes.
     ///
-    #[allow(dead_code)]
-    pub(crate) fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = (u8, &Arc<Self>)> + '_> {
+    pub(crate) fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = &Arc<Self>> + '_> {
         match &self.node_type {
             NodeType::Node4(n) => Box::new(n.iter()),
             NodeType::Node16(n) => Box::new(n.iter()),
