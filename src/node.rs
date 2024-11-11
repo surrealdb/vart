@@ -299,12 +299,11 @@ impl<P: KeyTrait, N, const WIDTH: usize> FlatNode<P, N, WIDTH> {
     }
 
     #[inline]
-    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = (u8, &Arc<N>)> {
-        self.keys
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &Arc<N>> {
+        self.children
             .iter()
-            .zip(self.children.iter())
             .take(self.num_children as usize)
-            .filter_map(|(&k, c)| c.as_ref().map(|child| (k, child)))
+            .filter_map(|child| child.as_ref())
     }
 }
 
@@ -442,12 +441,11 @@ impl<P: KeyTrait, N> Node48<P, N> {
         n256
     }
 
-    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = (u8, &Arc<N>)> {
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &Arc<N>> {
         self.keys
             .iter()
-            .enumerate()
-            .filter(|(_, x)| **x != u8::MAX)
-            .map(move |(key, pos)| (key as u8, self.children[*pos as usize].as_ref().unwrap()))
+            .filter(|key| **key != u8::MAX)
+            .map(move |pos| self.children[*pos as usize].as_ref().unwrap())
     }
 }
 
@@ -558,11 +556,8 @@ impl<P: KeyTrait, N> Node256<P, N> {
         self.num_children += new_insert as usize;
     }
 
-    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = (u8, &Arc<N>)> {
-        self.children
-            .iter()
-            .enumerate()
-            .filter_map(|(key, node)| node.as_ref().map(|x| (key as u8, x)))
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &Arc<N>> {
+        self.children.iter().filter_map(|node| node.as_ref())
     }
 }
 
@@ -885,7 +880,7 @@ mod tests {
         }
 
         for child in node.iter() {
-            assert_eq!(Arc::strong_count(child.1), 1);
+            assert_eq!(Arc::strong_count(child), 1);
         }
 
         // Create and test Node48
@@ -895,7 +890,7 @@ mod tests {
         }
 
         for child in n48.iter() {
-            assert_eq!(Arc::strong_count(child.1), 1);
+            assert_eq!(Arc::strong_count(child), 1);
         }
 
         // Create and test Node256
@@ -905,7 +900,7 @@ mod tests {
         }
 
         for child in n256.iter() {
-            assert_eq!(Arc::strong_count(child.1), 1);
+            assert_eq!(Arc::strong_count(child), 1);
         }
     }
 
