@@ -92,6 +92,36 @@ impl<P: KeyTrait, V: Clone> NodeType<P, V> {
             NodeType::Twig(n) => n.prefix = prefix,
         }
     }
+
+    fn get_inner_twig(&self) -> Option<&Node<P, V>> {
+        match self {
+            NodeType::Node4(n) => n.inner_twig.as_deref(),
+            NodeType::Node16(n) => n.inner_twig.as_deref(),
+            NodeType::Node48(n) => n.inner_twig.as_deref(),
+            NodeType::Node256(n) => n.inner_twig.as_deref(),
+            NodeType::Twig(_) => panic!("Unexpected Twig node encountered in get_leaf()"),
+        }
+    }
+
+    fn get_inner_twig_mut(&mut self) -> Option<&mut Node<P, V>> {
+        match self {
+            NodeType::Node4(n) => Arc::get_mut(n.inner_twig.as_mut()?),
+            NodeType::Node16(n) => Arc::get_mut(n.inner_twig.as_mut()?),
+            NodeType::Node48(n) => Arc::get_mut(n.inner_twig.as_mut()?),
+            NodeType::Node256(n) => Arc::get_mut(n.inner_twig.as_mut()?),
+            NodeType::Twig(_) => panic!("Unexpected Twig node encountered in get_leaf_mut()"),
+        }
+    }
+
+    fn clone_inner_twig(&self) -> Option<Arc<Node<P, V>>> {
+        match self {
+            NodeType::Node4(n) => n.inner_twig.clone(),
+            NodeType::Node16(n) => n.inner_twig.clone(),
+            NodeType::Node48(n) => n.inner_twig.clone(),
+            NodeType::Node256(n) => n.inner_twig.clone(),
+            NodeType::Twig(_) => panic!("Unexpected Twig node encountered in clone_leaf()"),
+        }
+    }
 }
 
 impl<P: KeyTrait, V: Clone> Node<P, V> {
@@ -566,6 +596,71 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         }
     }
 
+    fn set_inner_twig(&mut self, leaf: TwigNode<P, V>) {
+        let node = Node {
+            node_type: NodeType::Twig(leaf),
+        };
+        let new_leaf = Some(Arc::new(node));
+        match &mut self.node_type {
+            NodeType::Node4(n) => {
+                n.inner_twig = new_leaf;
+            }
+            NodeType::Node16(n) => {
+                n.inner_twig = new_leaf;
+            }
+            NodeType::Node48(n) => {
+                n.inner_twig = new_leaf;
+            }
+            NodeType::Node256(n) => {
+                n.inner_twig = new_leaf;
+            }
+            NodeType::Twig(_) => panic!("Unexpected Twig node encountered in set_inner_twig()"),
+        }
+    }
+
+    fn get_inner_twig(&self) -> Option<&TwigNode<P, V>> {
+        let leaf_node = self.node_type.get_inner_twig()?;
+        match &leaf_node.node_type {
+            NodeType::Twig(twig) => Some(twig),
+            _ => panic!("Unexpected non-Twig node encountered in get_inner_twig()"),
+        }
+    }
+
+    fn get_inner_twig_mut(&mut self) -> Option<&mut TwigNode<P, V>> {
+        let leaf_node = self.node_type.get_inner_twig_mut()?;
+        match &mut leaf_node.node_type {
+            NodeType::Twig(twig) => Some(twig),
+            _ => panic!("Unexpected non-Twig node encountered in get_inner_twig_mut()"),
+        }
+    }
+
+    fn delete_inner_twig(&self) -> Self {
+        let node_type = match &self.node_type {
+            NodeType::Node4(n) => {
+                let mut cloned = n.clone();
+                cloned.inner_twig.take();
+                NodeType::Node4(cloned)
+            }
+            NodeType::Node16(n) => {
+                let mut cloned = n.clone();
+                cloned.inner_twig.take();
+                NodeType::Node16(cloned)
+            }
+            NodeType::Node48(n) => {
+                let mut cloned = n.clone();
+                cloned.inner_twig.take();
+                NodeType::Node48(cloned)
+            }
+            NodeType::Node256(n) => {
+                let mut cloned = n.clone();
+                cloned.inner_twig.take();
+                NodeType::Node256(cloned)
+            }
+            NodeType::Twig(_) => panic!("Unexpected Twig node encountered in delete_inner_twig()"),
+        };
+        Self { node_type }
+    }
+
     #[inline]
     pub(crate) fn num_children(&self) -> usize {
         match &self.node_type {
@@ -579,9 +674,12 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
     #[inline]
     pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<Arc<LeafValue<V>>> {
-        // Unwrap the NodeType::Twig to access the TwigNode instance.
-        let NodeType::Twig(twig) = &self.node_type else {
-            return None;
+        let twig = if let NodeType::Twig(twig) = &self.node_type {
+            // For a Twig node simply use its inner value.
+            twig
+        } else {
+            // For an interior node, use its inner Twig if exists.
+            self.get_inner_twig()?
         };
 
         twig.get_leaf_by_query(query_type)
@@ -642,7 +740,13 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         let longest_common_prefix = cur_node_prefix.longest_common_prefix(key_prefix);
 
         // Create a new key that represents the remaining part of the current node's prefix after the common prefix.
-        let new_key = cur_node_prefix.prefix_after(longest_common_prefix).into();
+        let mut new_key = cur_node_prefix.prefix_after(longest_common_prefix);
+        if new_key.is_empty() {
+            // In the case where the current node's prefix is shorter than the key,
+            // the suffix comes from the key_prefix. For example, cur_node.prefix="key"
+            // and key="keyboard", then new_key should be "board".
+            new_key = &key_prefix[longest_common_prefix..];
+        }
         // Extract the prefix of the current node up to the common prefix.
         let prefix = cur_node_prefix.prefix_before(longest_common_prefix).into();
         // Determine whether the current node's prefix and the key's prefix match up to the common prefix.
@@ -650,7 +754,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
         (
             key_prefix,
-            new_key,
+            new_key.into(),
             prefix,
             is_prefix_match,
             longest_common_prefix,
@@ -685,22 +789,66 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         let (key_prefix, new_key, prefix, is_prefix_match, longest_common_prefix) =
             Self::common_insert_logic(cur_node.prefix(), key, depth);
 
-        // If the current node is a Twig node and the prefixes match up to the end of both prefixes,
-        // update the existing value in the Twig node.
-        if let NodeType::Twig(ref twig) = &cur_node.node_type {
-            if is_prefix_match && twig.prefix.len() == key_prefix.len() {
-                let new_twig = if replace {
-                    // Create a replacement Twig node with the new value only.
-                    let mut new_twig = TwigNode::new(twig.prefix.clone(), twig.key.clone());
-                    new_twig.insert_mut(value, commit_version, ts);
-                    new_twig
-                } else {
-                    twig.insert(value, commit_version, ts)
-                };
+        // This is the exact key match.
+        if is_prefix_match && cur_node.prefix().len() == key_prefix.len() {
+            // If the current node is a Twig node and the prefixes match up to the end of both prefixes,
+            // update the existing value in the Twig node.
+            if let NodeType::Twig(twig) = &cur_node.node_type {
+                let new_twig = twig.insert_or_replace(value, commit_version, ts, replace);
                 return Arc::new(Node {
                     node_type: NodeType::Twig(new_twig),
                 });
+            } else {
+                // If the current node is an inner node, then either insert the new value
+                // in its existing inner Twig node, or create new one.
+                let leaf = match cur_node.get_inner_twig() {
+                    Some(twig) => twig.insert_or_replace(value, commit_version, ts, replace),
+                    None => {
+                        let mut new_twig =
+                            TwigNode::new(cur_node.prefix().clone(), key.as_slice().into());
+                        new_twig.insert_mut(value, commit_version, ts);
+                        new_twig
+                    }
+                };
+                let mut new_node = cur_node.clone_node();
+                new_node.set_inner_twig(leaf);
+                return Arc::new(new_node);
             }
+        }
+
+        // The current node is Twig and there is a prefix match and the current node's
+        // prefix is shorter than the remainder of the key, e.g. current node is "key1"
+        // and "key123" is inserted.
+        // Current Twig must be replaced by a Node4, made its inner Twig node, and a new
+        // Twig node created as a normal child node with a prefix being the reminder of
+        // the new key.
+        if is_prefix_match && cur_node.prefix().len() < key_prefix.len() {
+            if let NodeType::Twig(twig) = &cur_node.node_type {
+                let mut n4 = Node::new_node4(prefix);
+                n4.set_inner_twig(twig.clone());
+                let new_twig_key = key_prefix[longest_common_prefix];
+                let new_twig = Node::new_twig(new_key, key.clone(), value, commit_version, ts);
+                n4.add_child_mut(new_twig_key, new_twig);
+                return Arc::new(n4);
+            }
+        }
+
+        // Similar to the case above, but this time the current node's prefix is longer
+        // than the remainder of the key, e.g. current node is "key123" and "key1" is
+        // inserted.
+        // Current Twig is also replaced by a new Node4, but this time its prefix is
+        // adjusted and it becomes the Node4's child, while the new Twig node becomes
+        // Node4's inner Twig.
+        if is_prefix_match && cur_node.prefix().len() > key_prefix.len() && cur_node.is_twig() {
+            let mut n4 = Node::new_node4(key_prefix.into());
+            let mut inner_twig = TwigNode::new(key_prefix.into(), key.clone());
+            inner_twig.insert_mut(value, commit_version, ts);
+            n4.set_inner_twig(inner_twig);
+            let old_twig_key = new_key.at(0);
+            let mut old_twig = cur_node.clone_node();
+            old_twig.set_prefix(new_key);
+            n4.add_child_mut(old_twig_key, old_twig);
+            return Arc::new(n4);
         }
 
         // If the prefixes don't match, create a new Node4 with the old node and a new Twig as children.
@@ -765,10 +913,11 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         let (key_prefix, new_key, prefix, is_prefix_match, longest_common_prefix) =
             Self::common_insert_logic(cur_node.prefix(), key, depth);
 
-        // If the current node is a Twig node and the prefixes match up to the end of both prefixes,
-        // update the existing value in the Twig node.
-        if let NodeType::Twig(ref mut twig) = &mut cur_node.node_type {
-            if is_prefix_match && twig.prefix.len() == key_prefix.len() {
+        // This is the exact key match.
+        if is_prefix_match && cur_node.prefix().len() == key_prefix.len() {
+            // If the current node is a Twig node and the prefixes match up to the
+            // end of both prefixes, update the existing value in the Twig node.
+            if let NodeType::Twig(ref mut twig) = &mut cur_node.node_type {
                 if replace {
                     // Only replace if the provided value is more recent than
                     // the existing ones. This is important because this method
@@ -780,8 +929,63 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 } else {
                     twig.insert_mut(value, commit_version, ts);
                 }
-                return;
+            } else {
+                // If the current node is an inner node, then either insert the new value
+                // in its existing inner Twig node, or create new one.
+                match cur_node.get_inner_twig_mut() {
+                    Some(twig) => {
+                        if replace {
+                            twig.replace_if_newer_mut(value, commit_version, ts);
+                        } else {
+                            twig.insert_mut(value, commit_version, ts);
+                        }
+                    }
+                    None => {
+                        let mut new_twig =
+                            TwigNode::new(cur_node.prefix().clone(), key.as_slice().into());
+                        new_twig.insert_mut(value, commit_version, ts);
+                        cur_node.set_inner_twig(new_twig);
+                    }
+                }
             }
+            return;
+        }
+
+        // The current node is Twig and there is a prefix match and the current node's
+        // prefix is shorter than the remainder of the key, e.g. current node is "key1"
+        // and "key123" is inserted.
+        // Current Twig must be replaced by a Node4, made its inner Twig node, and a new
+        // Twig node created as a normal child node with a prefix being the reminder of
+        // the new key.
+        if is_prefix_match && cur_node.prefix().len() < key_prefix.len() && cur_node.is_twig() {
+            let n4 = Node::new_node4(prefix);
+            let old_twig = std::mem::replace(cur_node, n4);
+            match old_twig.node_type {
+                NodeType::Twig(n) => cur_node.set_inner_twig(n),
+                _ => panic!("must be Twig"),
+            }
+            let new_twig_key = key_prefix[longest_common_prefix];
+            let new_twig = Node::new_twig(new_key, key.clone(), value, commit_version, ts);
+            cur_node.add_child_mut(new_twig_key, new_twig);
+            return;
+        }
+
+        // Similar to the case above, but this time the current node's prefix is longer
+        // than the remainder of the key, e.g. current node is "key123" and "key1" is
+        // inserted.
+        // Current Twig is also replaced by a new Node4, but this time its prefix is
+        // adjusted and it becomes the Node4's child, while the new Twig node becomes
+        // Node4's inner Twig.
+        if is_prefix_match && cur_node.prefix().len() > key_prefix.len() && cur_node.is_twig() {
+            let n4 = Node::new_node4(key_prefix.into());
+            let mut old_twig = std::mem::replace(cur_node, n4);
+            let mut inner_twig = TwigNode::new(key_prefix.into(), key.clone());
+            inner_twig.insert_mut(value, commit_version, ts);
+            cur_node.set_inner_twig(inner_twig);
+            let old_twig_key = new_key.at(0);
+            old_twig.set_prefix(new_key);
+            cur_node.add_child_mut(old_twig_key, old_twig);
+            return;
         }
 
         // If the prefixes don't match, create a new Node4 with the old node and a new Twig as children.
@@ -1191,12 +1395,26 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         }
 
         // Current node's prefix completely matches the remainder of the key.
-        // This must be the Twig node. Its copy-on-write removed by returning
+        // This must be the Twig node. It's copy-on-write removed by returning
         // (None, true). This will signal the caller to remove the associated
         // child link from the parent inner node.
         if prefix.len() == key_prefix.len() {
-            assert!(cur_node.is_twig());
-            return (None, true);
+            if cur_node.is_twig() {
+                return (None, true);
+            } else if cur_node.get_inner_twig().is_some() {
+                let mut node_without_leaf = cur_node.delete_inner_twig();
+                if node_without_leaf.num_children() == 1 {
+                    // If this inner node has only one child, then it must
+                    // be Node4. Its shrink() implementation is special in
+                    // that for a single child it will pull the child up
+                    // and replace itself with it.
+                    node_without_leaf.shrink();
+                }
+                return (Some(Arc::new(node_without_leaf)), true);
+            } else {
+                // This is an inner node without a leaf, so no match.
+                return (None, false);
+            }
         }
 
         // Current node's prefix matches the prefix of the remainder
@@ -1211,10 +1429,22 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                     return (Some(Arc::new(new_node)), true);
                 }
                 (None, true) => {
-                    // The key has been found, so remove the corresponding
-                    // child link from the current node.
-                    let new_node = cur_node.delete_child(k);
-                    return (Some(Arc::new(new_node)), true);
+                    // The key has been found, so either remove the corresponding
+                    // child link from the current node if that's not its
+                    // last child, or pull up its inner Twig node into this
+                    // position in the tree, or simply return (None, true)
+                    // if there's nothing to occupy this position.
+                    if cur_node.num_children() == 1 {
+                        if cur_node.get_inner_twig().is_some() {
+                            let cloned_twig = cur_node.node_type.clone_inner_twig();
+                            return (cloned_twig, true);
+                        } else {
+                            return (None, true);
+                        }
+                    } else {
+                        let new_node = cur_node.delete_child(k);
+                        return (Some(Arc::new(new_node)), true);
+                    }
                 }
                 _ => {}
             }
@@ -2553,7 +2783,7 @@ mod tests {
         let mut tree = Tree::<VariableSizeKey, i32>::new();
 
         // Define keys in random order
-        let insert_words = ["test3", "test1", "test5", "test4", "test2"];
+        let insert_words = ["test3", "test1", "test5", "test4", "test2", "test11"];
 
         // Insert keys into the tree
         for word in &insert_words {
@@ -2562,22 +2792,20 @@ mod tests {
         }
 
         // Define a range that encompasses all keys
-        let range = VariableSizeKey::from_slice_with_termination("test1".as_bytes())
-            ..=VariableSizeKey::from_slice_with_termination("test5".as_bytes());
+        let range = VariableSizeKey::from_slice("test1".as_bytes())
+            ..=VariableSizeKey::from_slice("test5".as_bytes());
 
         // Collect results of the range scan
         let results: Vec<_> = tree.range(range).collect();
         assert_eq!(results.len(), insert_words.len());
 
         // Expected order
-        let expected_order = ["test1", "test2", "test3", "test4", "test5"];
+        let expected_order = ["test1", "test11", "test2", "test3", "test4", "test5"];
 
         // Assert that results are in expected order
         for (i, result) in results.iter().enumerate() {
             let result_str = std::str::from_utf8(result.0.as_slice()).expect("Invalid UTF-8");
-            // The variable size key has a trailing null byte, so we need to trim it
-            let result_str_trimmed = &result_str[..result_str.len() - 1];
-            assert_eq!(result_str_trimmed, expected_order[i]);
+            assert_eq!(result_str, expected_order[i]);
         }
     }
 
@@ -2988,8 +3216,8 @@ mod tests {
             tree.insert(&VariableSizeKey::from_str(key).unwrap(), 1, 0, 0)
                 .unwrap();
         }
-        let range = VariableSizeKey::from_slice_with_termination("key_1".as_bytes())
-            ..=VariableSizeKey::from_slice_with_termination("key_2".as_bytes());
+        let range = VariableSizeKey::from_slice("key_1".as_bytes())
+            ..=VariableSizeKey::from_slice("key_2".as_bytes());
         let values = tree.scan_at_ts(range, 0);
         assert_eq!(values.len(), 2);
     }
@@ -3014,8 +3242,8 @@ mod tests {
             tree.insert(&VariableSizeKey::from_str(key).unwrap(), 1, 0, 0)
                 .unwrap();
         }
-        let range = VariableSizeKey::from_slice_with_termination("key_4".as_bytes())
-            ..VariableSizeKey::from_slice_with_termination("key_5".as_bytes());
+        let range = VariableSizeKey::from_slice("key_4".as_bytes())
+            ..VariableSizeKey::from_slice("key_5".as_bytes());
         let values = tree.scan_at_ts(range, 0);
         assert!(values.is_empty());
     }
@@ -3111,8 +3339,8 @@ mod tests {
             tree.insert(&VariableSizeKey::from_str(key).unwrap(), 1, 0, 0)
                 .unwrap();
         }
-        let range = VariableSizeKey::from_slice_with_termination("key_1".as_bytes())
-            ..=VariableSizeKey::from_slice_with_termination("key_2".as_bytes());
+        let range = VariableSizeKey::from_slice("key_1".as_bytes())
+            ..=VariableSizeKey::from_slice("key_2".as_bytes());
         let keys = tree.keys_at_ts(range, 0);
         assert_eq!(keys.len(), 2);
     }
@@ -3253,5 +3481,69 @@ mod tests {
         // Keys inserted after snapshot creation should not be visible to other snapshots
         assert!(snap1.get(&key_3_snap2, 0).is_none());
         assert!(snap2.get(&key_3_snap1, 0).is_none());
+    }
+
+    #[test]
+    fn insert_with_prefix_match() {
+        let key1 = VariableSizeKey::from_slice(b"key1");
+        let key17 = VariableSizeKey::from_slice(b"key17");
+
+        // Ascending order
+        {
+            let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+            tree.insert(&key1, 1, 1, 1).unwrap();
+            tree.insert(&key17, 17, 17, 17).unwrap();
+
+            assert_eq!(tree.get(&key1, 1).unwrap(), (1, 1, 1));
+            assert_eq!(tree.get(&key17, 17).unwrap(), (17, 17, 17));
+
+            assert!(tree.remove(&key1));
+            assert!(tree.remove(&key17));
+        }
+
+        // Descending order
+        {
+            let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+            tree.insert(&key17, 17, 1, 1).unwrap();
+            tree.insert(&key1, 1, 2, 2).unwrap();
+
+            assert_eq!(tree.get(&key17, 1).unwrap(), (17, 1, 1));
+            assert_eq!(tree.get(&key1, 2).unwrap(), (1, 2, 2));
+
+            assert!(tree.remove(&key17));
+            assert!(tree.remove(&key1));
+        }
+    }
+
+    #[test]
+    fn insert_mut_with_prefix_match() {
+        let key1 = VariableSizeKey::from_slice(b"key1");
+        let key17 = VariableSizeKey::from_slice(b"key17");
+
+        // Ascending order
+        {
+            let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+            tree.insert_unchecked(&key1, 1, 1, 1).unwrap();
+            tree.insert_unchecked(&key17, 17, 17, 17).unwrap();
+
+            assert_eq!(tree.get(&key1, 1).unwrap(), (1, 1, 1));
+            assert_eq!(tree.get(&key17, 17).unwrap(), (17, 17, 17));
+
+            assert!(tree.remove(&key1));
+            assert!(tree.remove(&key17));
+        }
+
+        // Descending order
+        {
+            let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+            tree.insert_unchecked(&key17, 17, 1, 1).unwrap();
+            tree.insert_unchecked(&key1, 1, 2, 2).unwrap();
+
+            assert_eq!(tree.get(&key17, 1).unwrap(), (17, 1, 1));
+            assert_eq!(tree.get(&key1, 2).unwrap(), (1, 2, 2));
+
+            assert!(tree.remove(&key17));
+            assert!(tree.remove(&key1));
+        }
     }
 }

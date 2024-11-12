@@ -1,3 +1,4 @@
+use std::slice::from_ref;
 use std::sync::Arc;
 
 use crate::{art::QueryType, KeyTrait};
@@ -129,6 +130,23 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         }
     }
 
+    pub(crate) fn insert_or_replace(
+        &self,
+        value: V,
+        version: u64,
+        ts: u64,
+        replace: bool,
+    ) -> TwigNode<K, V> {
+        if replace {
+            // Create a replacement Twig node with the new value only.
+            let mut new_twig = TwigNode::new(self.prefix.clone(), self.key.clone());
+            new_twig.insert_mut(value, version, ts);
+            new_twig
+        } else {
+            self.insert(value, version, ts)
+        }
+    }
+
     pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &Arc<LeafValue<V>>> {
         self.values.iter()
     }
@@ -235,6 +253,7 @@ pub(crate) struct FlatNode<P: KeyTrait, N, const WIDTH: usize> {
     pub(crate) prefix: P,
     keys: [u8; WIDTH],
     children: Box<[Option<Arc<N>>; WIDTH]>,
+    pub(crate) inner_twig: Option<Arc<N>>,
     num_children: u8,
 }
 
@@ -246,6 +265,7 @@ impl<P: KeyTrait, N, const WIDTH: usize> FlatNode<P, N, WIDTH> {
             prefix,
             keys: [0; WIDTH],
             children: Box::new(children),
+            inner_twig: None,
             num_children: 0,
         }
     }
@@ -267,6 +287,7 @@ impl<P: KeyTrait, N, const WIDTH: usize> FlatNode<P, N, WIDTH> {
             new_node.keys[i] = self.keys[i];
             new_node.children[i].clone_from(&self.children[i]);
         }
+        new_node.inner_twig = self.inner_twig.clone();
         new_node.num_children = self.num_children;
         new_node
     }
@@ -283,6 +304,7 @@ impl<P: KeyTrait, N, const WIDTH: usize> FlatNode<P, N, WIDTH> {
                 n48.insert_child(self.keys[i], child.clone());
             }
         }
+        n48.inner_twig = self.inner_twig.clone();
         n48
     }
 
@@ -300,10 +322,12 @@ impl<P: KeyTrait, N, const WIDTH: usize> FlatNode<P, N, WIDTH> {
 
     #[inline]
     pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &Arc<N>> {
-        self.children
-            .iter()
-            .take(self.num_children as usize)
-            .filter_map(|child| child.as_ref())
+        let leaf_iter = from_ref(&self.inner_twig).iter();
+        let children_iter = self.children.iter().take(self.num_children as usize);
+
+        leaf_iter
+            .chain(children_iter)
+            .filter_map(|node| node.as_ref())
     }
 }
 
@@ -314,6 +338,7 @@ impl<P: KeyTrait, N, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N, WIDTH> 
             new_node.keys[i] = self.keys[i];
             new_node.children[i].clone_from(&self.children[i])
         }
+        new_node.inner_twig = self.inner_twig.clone();
         new_node.num_children = self.num_children;
         new_node
     }
@@ -390,6 +415,7 @@ pub(crate) struct Node48<P: KeyTrait, N> {
     pub(crate) prefix: P,
     keys: Box<[u8; 256]>,
     children: Box<[Option<Arc<N>>; 48]>,
+    pub(crate) inner_twig: Option<Arc<N>>,
     child_bitmap: u64,
 }
 
@@ -399,6 +425,7 @@ impl<P: KeyTrait, N> Node48<P, N> {
             prefix,
             keys: Box::new([u8::MAX; 256]),
             children: Box::new(std::array::from_fn(|_| None)),
+            inner_twig: None,
             child_bitmap: 0,
         }
     }
@@ -424,6 +451,7 @@ impl<P: KeyTrait, N> Node48<P, N> {
             let idx = fnode.find_pos(key as u8).expect("node is full");
             fnode.insert_child(idx, key as u8, child);
         }
+        fnode.inner_twig = self.inner_twig.clone();
         fnode
     }
 
@@ -438,14 +466,22 @@ impl<P: KeyTrait, N> Node48<P, N> {
             let child = self.children[*pos as usize].as_ref().unwrap().clone();
             n256.insert_child(key as u8, child);
         }
+        n256.inner_twig = self.inner_twig.clone();
         n256
     }
 
     pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &Arc<N>> {
-        self.keys
+        let leaf_iter = from_ref(&self.inner_twig)
+            .iter()
+            .filter_map(|node| node.as_ref());
+
+        let children_iter = self
+            .keys
             .iter()
             .filter(|key| **key != u8::MAX)
-            .map(move |pos| self.children[*pos as usize].as_ref().unwrap())
+            .map(move |pos| self.children[*pos as usize].as_ref().unwrap());
+
+        leaf_iter.chain(children_iter)
     }
 }
 
@@ -455,6 +491,7 @@ impl<P: KeyTrait, N> NodeTrait<N> for Node48<P, N> {
             prefix: self.prefix.clone(),
             keys: self.keys.clone(),
             children: self.children.clone(),
+            inner_twig: self.inner_twig.clone(),
             child_bitmap: self.child_bitmap,
         }
     }
@@ -523,6 +560,7 @@ impl<P: KeyTrait, N> NodeTrait<N> for Node48<P, N> {
 pub(crate) struct Node256<P: KeyTrait, N> {
     pub(crate) prefix: P, // Prefix associated with the node
     children: Box<[Option<Arc<N>>; 256]>,
+    pub(crate) inner_twig: Option<Arc<N>>,
     num_children: usize,
 }
 
@@ -531,6 +569,7 @@ impl<P: KeyTrait, N> Node256<P, N> {
         Self {
             prefix,
             children: Box::new(std::array::from_fn(|_| None)),
+            inner_twig: None,
             num_children: 0,
         }
     }
@@ -546,6 +585,7 @@ impl<P: KeyTrait, N> Node256<P, N> {
         {
             indexed.insert_child(key as u8, v);
         }
+        indexed.inner_twig = self.inner_twig.clone();
         indexed
     }
 
@@ -557,7 +597,12 @@ impl<P: KeyTrait, N> Node256<P, N> {
     }
 
     pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &Arc<N>> {
-        self.children.iter().filter_map(|node| node.as_ref())
+        let leaf_iter = from_ref(&self.inner_twig).iter();
+        let children_iter = self.children.iter();
+
+        leaf_iter
+            .chain(children_iter)
+            .filter_map(|node| node.as_ref())
     }
 }
 
@@ -566,6 +611,7 @@ impl<P: KeyTrait, N> NodeTrait<N> for Node256<P, N> {
         Self {
             prefix: self.prefix.clone(),
             children: self.children.clone(),
+            inner_twig: self.inner_twig.clone(),
             num_children: self.num_children,
         }
     }

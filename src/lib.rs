@@ -221,10 +221,7 @@ pub struct VariableSizeKey {
 
 impl VariableSizeKey {
     pub fn key(src: &[u8]) -> Self {
-        let mut data = Vec::with_capacity(src.len() + 1);
-        data.extend_from_slice(src);
-        data.push(0);
-        Self { data }
+        Self::from_slice(src)
     }
 
     pub fn from_slice(src: &[u8]) -> Self {
@@ -237,28 +234,11 @@ impl VariableSizeKey {
         &self.data
     }
 
-    pub fn terminate(&self) -> Self {
-        let mut data = Vec::with_capacity(self.data.len() + 1);
-        data.extend_from_slice(&self.data);
-        data.push(0);
-        Self { data }
-    }
-
     pub fn from_string(s: &String) -> Self {
-        let mut data = Vec::with_capacity(s.len() + 1);
-        data.extend_from_slice(s.as_bytes());
-        data.push(0);
-        Self { data }
+        Self::from_slice(s.as_bytes())
     }
 
     pub fn from(data: Vec<u8>) -> Self {
-        Self { data }
-    }
-
-    pub fn from_slice_with_termination(src: &[u8]) -> Self {
-        let mut data = Vec::with_capacity(src.len() + 1);
-        data.extend_from_slice(src);
-        data.push(0);
         Self { data }
     }
 }
@@ -267,10 +247,8 @@ impl FromStr for VariableSizeKey {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut data = Vec::with_capacity(s.len() + 1);
-        data.extend_from_slice(s.as_bytes());
-        data.push(0);
-        Ok(Self { data })
+        let k = Self::from_slice(s.as_bytes());
+        Ok(k)
     }
 }
 
