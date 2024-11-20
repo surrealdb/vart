@@ -578,7 +578,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     }
 
     #[inline]
-    pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<Arc<LeafValue<V>>> {
+    pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<LeafValue<V>> {
         // Unwrap the NodeType::Twig to access the TwigNode instance.
         let NodeType::Twig(twig) = &self.node_type else {
             return None;
@@ -3227,7 +3227,7 @@ mod tests {
 
         let start = std::time::Instant::now();
         // Insert 1 million versions
-        for version in 1..=20000 {
+        for version in 1..=50000 {
             tree.insert(&key, version as i32, 0, 0).unwrap();
         }
         println!("Insertion time: {:?}", start.elapsed());

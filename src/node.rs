@@ -22,7 +22,7 @@ pub(crate) trait NodeTrait<N> {
 pub(crate) struct TwigNode<K: KeyTrait, V: Clone> {
     pub(crate) prefix: K,
     pub(crate) key: K,
-    pub(crate) values: Vector<Arc<LeafValue<V>>>,
+    pub(crate) values: Vector<LeafValue<V>>,
     pub(crate) version: u64, // Version for the twig node
 }
 
@@ -65,7 +65,7 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
             .unwrap_or(self.version)
     }
 
-    fn insert_common(values: &mut Vector<Arc<LeafValue<V>>>, value: V, version: u64, ts: u64) {
+    fn insert_common(values: &mut Vector<LeafValue<V>>, value: V, version: u64, ts: u64) {
         let new_leaf_value = LeafValue::new(value, version, ts);
 
         // Check if a LeafValue with the same version exists and update or insert accordingly
@@ -73,7 +73,7 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
             Ok(index) => {
                 // If an entry with the same version and timestamp exists, just put the same value
                 if values[index].ts == ts {
-                    values[index] = Arc::new(new_leaf_value);
+                    values[index] = new_leaf_value;
                 } else {
                     // If an entry with the same version and different timestamp exists, add a new entry
                     // Determine the direction to scan based on the comparison of timestamps
@@ -90,12 +90,12 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
                     //         .take_while(|v| v.ts >= ts)
                     //         .count();
                     // }
-                    values.insert(insert_position, Arc::new(new_leaf_value));
+                    values.insert(insert_position, new_leaf_value);
                 }
             }
             Err(index) => {
                 // If no entry with the same version exists, insert the new value at the correct position
-                values.insert(index, Arc::new(new_leaf_value));
+                values.insert(index, new_leaf_value);
             }
         }
     }
@@ -130,7 +130,7 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         }
     }
 
-    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &Arc<LeafValue<V>>> {
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &LeafValue<V>> {
         self.values.iter()
     }
 }
@@ -138,7 +138,7 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
 /// Helper functions for TwigNode for timestamp-based queries
 impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     #[inline]
-    pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<Arc<LeafValue<V>>> {
+    pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<LeafValue<V>> {
         self.get_leaf_by_query_ref(query_type).cloned()
     }
 
@@ -146,7 +146,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     pub(crate) fn get_leaf_by_query_ref(
         &self,
         query_type: QueryType,
-    ) -> Option<&Arc<LeafValue<V>>> {
+    ) -> Option<&LeafValue<V>> {
         match query_type {
             QueryType::LatestByVersion(version) => self.get_leaf_by_version(version),
             QueryType::LatestByTs(ts) => self.get_leaf_by_ts(ts),
@@ -158,12 +158,12 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     }
 
     #[inline]
-    pub(crate) fn get_latest_leaf(&self) -> Option<&Arc<LeafValue<V>>> {
+    pub(crate) fn get_latest_leaf(&self) -> Option<&LeafValue<V>> {
         self.values.iter().max_by_key(|value| value.version)
     }
 
     #[inline]
-    pub(crate) fn get_leaf_by_version(&self, version: u64) -> Option<&Arc<LeafValue<V>>> {
+    pub(crate) fn get_leaf_by_version(&self, version: u64) -> Option<&LeafValue<V>> {
         self.values
             .iter()
             .filter(|value| value.version <= version)
@@ -171,7 +171,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     }
 
     #[inline]
-    pub(crate) fn get_leaf_by_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
+    pub(crate) fn get_leaf_by_ts(&self, ts: u64) -> Option<&LeafValue<V>> {
         self.values
             .iter()
             .filter(|value| value.ts <= ts)
@@ -187,7 +187,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     }
 
     #[inline]
-    pub(crate) fn last_less_than_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
+    pub(crate) fn last_less_than_ts(&self, ts: u64) -> Option<&LeafValue<V>> {
         self.values
             .iter()
             .filter(|value| value.ts < ts)
@@ -195,12 +195,12 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     }
 
     #[inline]
-    pub(crate) fn last_less_or_equal_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
+    pub(crate) fn last_less_or_equal_ts(&self, ts: u64) -> Option<&LeafValue<V>> {
         self.get_leaf_by_ts(ts)
     }
 
     #[inline]
-    pub(crate) fn first_greater_than_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
+    pub(crate) fn first_greater_than_ts(&self, ts: u64) -> Option<&LeafValue<V>> {
         self.values
             .iter()
             .filter(|value| value.ts > ts)
@@ -208,7 +208,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     }
 
     #[inline]
-    pub(crate) fn first_greater_or_equal_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
+    pub(crate) fn first_greater_or_equal_ts(&self, ts: u64) -> Option<&LeafValue<V>> {
         self.values
             .iter()
             .filter(|value| value.ts >= ts)
