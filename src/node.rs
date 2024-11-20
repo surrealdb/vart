@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use imbl::Vector;
 
 use crate::{art::QueryType, KeyTrait};
 
@@ -21,7 +22,7 @@ pub(crate) trait NodeTrait<N> {
 pub(crate) struct TwigNode<K: KeyTrait, V: Clone> {
     pub(crate) prefix: K,
     pub(crate) key: K,
-    pub(crate) values: Vec<Arc<LeafValue<V>>>,
+    pub(crate) values: Vector<Arc<LeafValue<V>>>,
     pub(crate) version: u64, // Version for the twig node
 }
 
@@ -51,7 +52,7 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         TwigNode {
             prefix,
             key,
-            values: Vec::new(),
+            values: Vector::new(),
             version: 0,
         }
     }
@@ -64,7 +65,7 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
             .unwrap_or(self.version)
     }
 
-    fn insert_common(values: &mut Vec<Arc<LeafValue<V>>>, value: V, version: u64, ts: u64) {
+    fn insert_common(values: &mut Vector<Arc<LeafValue<V>>>, value: V, version: u64, ts: u64) {
         let new_leaf_value = LeafValue::new(value, version, ts);
 
         // Check if a LeafValue with the same version exists and update or insert accordingly
@@ -77,18 +78,18 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
                     // If an entry with the same version and different timestamp exists, add a new entry
                     // Determine the direction to scan based on the comparison of timestamps
                     let mut insert_position = index;
-                    if values[index].ts < ts {
-                        // Scan forward to find the first entry with a timestamp greater than the new entry's timestamp
-                        insert_position +=
-                            values[index..].iter().take_while(|v| v.ts <= ts).count();
-                    } else {
-                        // Scan backward to find the insertion point before the first entry with a timestamp less than the new entry's timestamp
-                        insert_position -= values[..index]
-                            .iter()
-                            .rev()
-                            .take_while(|v| v.ts >= ts)
-                            .count();
-                    }
+                    // if values[index].ts < ts {
+                    //     // Scan forward to find the first entry with a timestamp greater than the new entry's timestamp
+                    //     insert_position +=
+                    //         values[index..].iter().take_while(|v| v.ts <= ts).count();
+                    // } else {
+                    //     // Scan backward to find the insertion point before the first entry with a timestamp less than the new entry's timestamp
+                    //     insert_position -= values[..index]
+                    //         .iter()
+                    //         .rev()
+                    //         .take_while(|v| v.ts >= ts)
+                    //         .count();
+                    // }
                     values.insert(insert_position, Arc::new(new_leaf_value));
                 }
             }

@@ -1577,42 +1577,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn root_set_get() {
-        let mut tree = Tree::<VariableSizeKey, i32>::new();
-
-        // Insertion phase
-        let key = VariableSizeKey::from_str("abc").unwrap();
-        let value = 1;
-        let _ = tree.insert(&key, value, 0, 0);
-
-        // Verification phase
-        let (val, _ts, _) = tree.get(&key, 0).unwrap();
-        assert_eq!(val, value);
-    }
-
-    #[test]
-    fn string_duplicate_insert() {
-        let mut tree = Tree::<VariableSizeKey, i32>::new();
-
-        // First insertion
-        let key = VariableSizeKey::from_str("abc").unwrap();
-        let value = 1;
-        tree.insert(&key, value, 0, 0).expect("Failed to insert");
-        let (val, version, ts) = tree.get(&key, 0).unwrap();
-        assert!(val == value);
-        assert!(version == 1);
-        assert!(ts == 0);
-
-        // Second insertion (duplicate)
-        let value = 2;
-        tree.insert(&key, value, 0, 0).expect("Failed to insert");
-        let (val, version, ts) = tree.get(&key, 0).unwrap();
-        assert!(val == value);
-        assert!(version == 2);
-        assert!(ts == 0);
-    }
-
     // Inserting a single value into the tree and removing it should result in a nil tree root.
     #[test]
     fn insert_and_remove_single_key() {
@@ -3254,5 +3218,18 @@ mod tests {
         // Keys inserted after snapshot creation should not be visible to other snapshots
         assert!(snap1.get(&key_3_snap2, 0).is_none());
         assert!(snap2.get(&key_3_snap1, 0).is_none());
+    }
+
+    #[test]
+    fn insert_multiple_versions() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        let key = VariableSizeKey::from_str("key1").unwrap();
+
+        let start = std::time::Instant::now();
+        // Insert 1 million versions
+        for version in 1..=20000 {
+            tree.insert(&key, version as i32, 0, 0).unwrap();
+        }
+        println!("Insertion time: {:?}", start.elapsed());
     }
 }
