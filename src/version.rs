@@ -6,19 +6,19 @@ const B: usize = 6; // B-tree degree (max children = 2B)
 
 #[derive(Clone)]
 pub(crate) struct BTree<V: Clone> {
-    root: Option<Arc<BNode<V>>>,
+    root: Option<Arc<Node<V>>>,
 }
 
 #[derive(Clone)]
-pub(crate) struct BNode<V: Clone> {
+pub(crate) struct Node<V: Clone> {
     entries: Vec<LeafValue<V>>,
-    children: Vec<Arc<BNode<V>>>,
+    children: Vec<Arc<Node<V>>>,
     is_leaf: bool,
 }
 
-impl<V: Clone> BNode<V> {
+impl<V: Clone> Node<V> {
     fn new(is_leaf: bool) -> Self {
-        BNode {
+        Node {
             entries: Vec::with_capacity(2 * B - 1),
             children: if is_leaf {
                 Vec::new()
@@ -43,13 +43,13 @@ impl<V: Clone> BTree<V> {
         let leaf_value = LeafValue::new(value, version, ts);
         match self.root.take() {
             None => {
-                let mut root = BNode::new(true);
+                let mut root = Node::new(true);
                 root.entries.push(leaf_value);
                 self.root = Some(Arc::new(root));
             }
             Some(root) => {
                 if root.is_full() {
-                    let mut new_root = BNode::new(false);
+                    let mut new_root = Node::new(false);
                     new_root.children.push(root);
                     self.split_child(&mut new_root, 0);
                     self.insert_non_full(&mut new_root, leaf_value);
@@ -63,9 +63,9 @@ impl<V: Clone> BTree<V> {
         }
     }
 
-    fn split_child(&self, parent: &mut BNode<V>, index: usize) {
+    fn split_child(&self, parent: &mut Node<V>, index: usize) {
         let child = Arc::clone(&parent.children[index]);
-        let mut new_child = BNode::new(child.is_leaf);
+        let mut new_child = Node::new(child.is_leaf);
 
         let mid = (child.entries.len() - 1) / 2;
         new_child.entries = child.entries[mid + 1..].to_vec();
@@ -84,7 +84,7 @@ impl<V: Clone> BTree<V> {
         parent.children.insert(index + 1, Arc::new(new_child));
     }
 
-    fn insert_non_full(&self, node: &mut BNode<V>, leaf_value: LeafValue<V>) {
+    fn insert_non_full(&self, node: &mut Node<V>, leaf_value: LeafValue<V>) {
         let mut i = node.entries.len();
 
         if node.is_leaf {
@@ -130,7 +130,7 @@ impl<V: Clone> BTree<V> {
 
     fn search_node<'a>(
         &'a self,
-        node: &'a BNode<V>,
+        node: &'a Node<V>,
         version: u64,
         ts: u64,
     ) -> Option<&'a LeafValue<V>> {
@@ -157,7 +157,7 @@ impl<V: Clone> BTree<V> {
 
     fn last_less_or_equal_ts_node<'a>(
         &'a self,
-        node: &'a BNode<V>,
+        node: &'a Node<V>,
         ts: u64,
         mut best_so_far: Option<&'a LeafValue<V>>,
     ) -> Option<&'a LeafValue<V>> {
@@ -180,11 +180,10 @@ impl<V: Clone> BTree<V> {
         best_so_far
     }
 
-    // Add an iterator that yields LeafValue references
     pub fn iter(&self) -> Box<dyn Iterator<Item = &LeafValue<V>> + '_> {
         match &self.root {
             None => Box::new(std::iter::empty()),
-            Some(root) => Box::new(BNodeIterator::new(root)),
+            Some(root) => Box::new(NodeIterator::new(root)),
         }
     }
 
@@ -193,19 +192,19 @@ impl<V: Clone> BTree<V> {
     }
 }
 
-// Iterator for BNode
-struct BNodeIterator<'a, V: Clone> {
-    stack: Vec<(&'a BNode<V>, usize)>,
+// Iterator for Node
+struct NodeIterator<'a, V: Clone> {
+    stack: Vec<(&'a Node<V>, usize)>,
 }
 
-impl<'a, V: Clone> BNodeIterator<'a, V> {
-    fn new(root: &'a Arc<BNode<V>>) -> Self {
-        let mut iter = BNodeIterator { stack: Vec::new() };
+impl<'a, V: Clone> NodeIterator<'a, V> {
+    fn new(root: &'a Arc<Node<V>>) -> Self {
+        let mut iter = NodeIterator { stack: Vec::new() };
         iter.push_left(root);
         iter
     }
 
-    fn push_left(&mut self, node: &'a Arc<BNode<V>>) {
+    fn push_left(&mut self, node: &'a Arc<Node<V>>) {
         let mut current = node;
         while let Some(first_child) = current.children.first() {
             self.stack.push((current, 0));
@@ -215,7 +214,7 @@ impl<'a, V: Clone> BNodeIterator<'a, V> {
     }
 }
 
-impl<'a, V: Clone> Iterator for BNodeIterator<'a, V> {
+impl<'a, V: Clone> Iterator for NodeIterator<'a, V> {
     type Item = &'a LeafValue<V>;
 
     fn next(&mut self) -> Option<Self::Item> {
