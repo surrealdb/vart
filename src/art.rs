@@ -3264,7 +3264,7 @@ mod tests {
 
         for i in 0..1_000_000 {
             let key = VariableSizeKey::from_str(&format!("key_{}", i)).unwrap();
-            tree.insert_unchecked(&key, i as i32, 0, 0).unwrap();
+            tree.insert_unchecked(&key, i, 0, 0).unwrap();
         }
 
         println!("Insertion time for 1M unique keys: {:?}", start.elapsed());
@@ -3277,14 +3277,14 @@ mod tests {
         let start = std::time::Instant::now();
 
         let num_keys = 100; // Number of keys
-        let versions_per_key = 100_00; // Number of versions per key
+        let versions_per_key = 10_000; // Number of versions per key
 
         // Insert 100,00 versions for each of the 100 keys
         for key_index in 0..num_keys {
             let key = VariableSizeKey::from_str(&format!("key_{}", key_index)).unwrap();
 
             for version_index in 0..versions_per_key {
-                let value = (key_index * versions_per_key + version_index) as i32; // Value for versioning
+                let value = key_index * versions_per_key + version_index; // Value for versioning
                 tree.insert_unchecked(&key, value, 0, 0).unwrap();
             }
         }

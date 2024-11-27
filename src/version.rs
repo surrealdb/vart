@@ -123,7 +123,8 @@ impl<V: Clone> BTree<V> {
         }
     }
 
-    pub fn search(&self, version: u64, ts: u64) -> Option<&LeafValue<V>> {
+    #[allow(unused)]
+    fn search(&self, version: u64, ts: u64) -> Option<&LeafValue<V>> {
         let root = self.root.as_ref()?;
         self.search_node(root, version, ts)
     }
@@ -152,11 +153,10 @@ impl<V: Clone> BTree<V> {
 
     pub fn last_less_or_equal_ts(&self, ts: u64) -> Option<&LeafValue<V>> {
         let root = self.root.as_ref()?;
-        self.last_less_or_equal_ts_node(root, ts, None)
+        Self::last_less_or_equal_ts_node(root, ts, None)
     }
 
     fn last_less_or_equal_ts_node<'a>(
-        &'a self,
         node: &'a Node<V>,
         ts: u64,
         mut best_so_far: Option<&'a LeafValue<V>>,
@@ -173,7 +173,7 @@ impl<V: Clone> BTree<V> {
 
         if !node.is_leaf {
             for child in &node.children {
-                best_so_far = self.last_less_or_equal_ts_node(child, ts, best_so_far);
+                best_so_far = Self::last_less_or_equal_ts_node(child, ts, best_so_far);
             }
         }
 
@@ -185,10 +185,6 @@ impl<V: Clone> BTree<V> {
             None => Box::new(std::iter::empty()),
             Some(root) => Box::new(NodeIterator::new(root)),
         }
-    }
-
-    pub fn clear(&mut self) {
-        self.root = None;
     }
 }
 
