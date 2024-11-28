@@ -578,7 +578,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     }
 
     #[inline]
-    pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<Arc<LeafValue<V>>> {
+    pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<LeafValue<V>> {
         // Unwrap the NodeType::Twig to access the TwigNode instance.
         let NodeType::Twig(twig) = &self.node_type else {
             return None;
@@ -3253,5 +3253,44 @@ mod tests {
         // Keys inserted after snapshot creation should not be visible to other snapshots
         assert!(snap1.get(&key_3_snap2, 0).is_none());
         assert!(snap2.get(&key_3_snap1, 0).is_none());
+    }
+
+    #[test]
+    fn test_insert_million_keys() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+
+        let start = std::time::Instant::now();
+
+        for i in 0..1_000_000 {
+            let key = VariableSizeKey::from_str(&format!("key_{}", i)).unwrap();
+            tree.insert_unchecked(&key, i, 0, 0).unwrap();
+        }
+
+        println!("Insertion time for 1M unique keys: {:?}", start.elapsed());
+    }
+
+    #[test]
+    fn test_insert_multiple_version_keys() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+
+        let start = std::time::Instant::now();
+
+        let num_keys = 100; // Number of keys
+        let versions_per_key = 10_000; // Number of versions per key
+
+        // Insert 100,00 versions for each of the 100 keys
+        for key_index in 0..num_keys {
+            let key = VariableSizeKey::from_str(&format!("key_{}", key_index)).unwrap();
+
+            for version_index in 0..versions_per_key {
+                let value = key_index * versions_per_key + version_index; // Value for versioning
+                tree.insert_unchecked(&key, value, 0, 0).unwrap();
+            }
+        }
+
+        println!(
+            "Insertion time for 1M key-version pairs: {:?}",
+            start.elapsed()
+        );
     }
 }
