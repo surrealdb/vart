@@ -1018,18 +1018,18 @@ mod tests {
     #[test]
     fn test_range_scan_full_range() {
         let trie = setup_trie();
-        let range = VariableSizeKey::from_slice_with_termination("berry".as_bytes())
-            ..=VariableSizeKey::from_slice_with_termination("kiwi".as_bytes());
+        let range = VariableSizeKey::from_slice("berry".as_bytes())
+            ..=VariableSizeKey::from_slice("kiwi".as_bytes());
         let results: Vec<_> = trie.range(range).collect();
 
         let expected = vec![
-            (b"blackberry\0".to_vec(), &4, &4, &0),
-            (b"blueberry\0".to_vec(), &5, &5, &0),
-            (b"cherry\0".to_vec(), &6, &6, &0),
-            (b"date\0".to_vec(), &7, &7, &0),
-            (b"fig\0".to_vec(), &8, &8, &0),
-            (b"grape\0".to_vec(), &9, &9, &0),
-            (b"kiwi\0".to_vec(), &10, &10, &0),
+            (b"blackberry".to_vec(), &4, &4, &0),
+            (b"blueberry".to_vec(), &5, &5, &0),
+            (b"cherry".to_vec(), &6, &6, &0),
+            (b"date".to_vec(), &7, &7, &0),
+            (b"fig".to_vec(), &8, &8, &0),
+            (b"grape".to_vec(), &9, &9, &0),
+            (b"kiwi".to_vec(), &10, &10, &0),
         ];
 
         assert_eq!(results, expected);
@@ -1062,8 +1062,8 @@ mod tests {
         let trie = setup_trie();
         let btree = setup_btree();
 
-        let range_start = VariableSizeKey::from_slice_with_termination("berry".as_bytes());
-        let range_end = VariableSizeKey::from_slice_with_termination("kiwi".as_bytes());
+        let range_start = VariableSizeKey::from_slice("berry".as_bytes());
+        let range_end = VariableSizeKey::from_slice("kiwi".as_bytes());
         let trie_results: Vec<_> = trie.range(range_start..=range_end).collect();
 
         let btree_range = b"berry".to_vec()..=b"kiwi".to_vec();
@@ -1074,10 +1074,7 @@ mod tests {
 
         let trie_expected: Vec<_> = trie_results
             .iter()
-            .map(|(k, v, _, _)| {
-                let key_without_last_byte = &k[..k.len() - 1];
-                (key_without_last_byte.to_vec(), **v)
-            })
+            .map(|(k, v, _, _)| (k.to_vec(), **v))
             .collect();
 
         assert_eq!(trie_expected, btree_results);
@@ -1097,8 +1094,8 @@ mod tests {
         }
 
         // Define a range within the dataset
-        let range_start = VariableSizeKey::from_slice_with_termination("word05000".as_bytes());
-        let range_end = VariableSizeKey::from_slice_with_termination("word05999".as_bytes());
+        let range_start = VariableSizeKey::from_slice("word05000".as_bytes());
+        let range_end = VariableSizeKey::from_slice("word05999".as_bytes());
         let trie_results: Vec<_> = trie.range(range_start..=range_end).collect();
 
         let btree_range = b"word05000".to_vec()..=b"word05999".to_vec();
@@ -1109,10 +1106,7 @@ mod tests {
 
         let trie_expected: Vec<_> = trie_results
             .iter()
-            .map(|(k, v, _, _)| {
-                let key_without_last_byte = &k[..k.len() - 1];
-                (key_without_last_byte.to_vec(), **v)
-            })
+            .map(|(k, v, _, _)| (k.to_vec(), **v))
             .collect();
 
         assert_eq!(trie_expected, btree_results);
@@ -1171,8 +1165,8 @@ mod tests {
         ];
 
         for (start, end) in range_tests {
-            let range_start = VariableSizeKey::from_slice_with_termination(start.as_bytes());
-            let range_end = VariableSizeKey::from_slice_with_termination(end.as_bytes());
+            let range_start = VariableSizeKey::from_slice(start.as_bytes());
+            let range_end = VariableSizeKey::from_slice(end.as_bytes());
 
             // Inclusive-Inclusive
             let trie_results_incl_incl: Vec<_> = trie
@@ -1184,10 +1178,7 @@ mod tests {
                 .collect();
             let trie_expected_incl_incl: Vec<_> = trie_results_incl_incl
                 .iter()
-                .map(|(k, v, _, _)| {
-                    let key_without_last_byte = &k[..k.len() - 1];
-                    (key_without_last_byte.to_vec(), **v)
-                })
+                .map(|(k, v, _, _)| (k.to_vec(), **v))
                 .collect();
             assert_eq!(
                 trie_expected_incl_incl, btree_results_incl_incl,
@@ -1204,10 +1195,7 @@ mod tests {
                 .collect();
             let trie_expected_incl_excl: Vec<_> = trie_results_incl_excl
                 .iter()
-                .map(|(k, v, _, _)| {
-                    let key_without_last_byte = &k[..k.len() - 1];
-                    (key_without_last_byte.to_vec(), **v)
-                })
+                .map(|(k, v, _, _)| (k.to_vec(), **v))
                 .collect();
             assert_eq!(
                 trie_expected_incl_excl, btree_results_incl_excl,
@@ -1292,8 +1280,8 @@ mod tests {
         let range_tests = generate_random_ranges(&words, 100);
 
         for (start, end) in range_tests {
-            let range_start = VariableSizeKey::from_slice_with_termination(start.as_bytes());
-            let range_end = VariableSizeKey::from_slice_with_termination(end.as_bytes());
+            let range_start = VariableSizeKey::from_slice(start.as_bytes());
+            let range_end = VariableSizeKey::from_slice(end.as_bytes());
 
             // Inclusive-Inclusive
             let trie_results_incl_incl: Vec<_> = trie
@@ -1305,10 +1293,7 @@ mod tests {
                 .collect();
             let trie_expected_incl_incl: Vec<_> = trie_results_incl_incl
                 .iter()
-                .map(|(k, v, _, _)| {
-                    let key_without_last_byte = &k[..k.len() - 1];
-                    (key_without_last_byte.to_vec(), **v)
-                })
+                .map(|(k, v, _, _)| (k.to_vec(), **v))
                 .collect();
             assert_eq!(
                 trie_expected_incl_incl, btree_results_incl_incl,
@@ -1325,10 +1310,7 @@ mod tests {
                 .collect();
             let trie_expected_incl_excl: Vec<_> = trie_results_incl_excl
                 .iter()
-                .map(|(k, v, _, _)| {
-                    let key_without_last_byte = &k[..k.len() - 1];
-                    (key_without_last_byte.to_vec(), **v)
-                })
+                .map(|(k, v, _, _)| (k.to_vec(), **v))
                 .collect();
             assert_eq!(
                 trie_expected_incl_excl, btree_results_incl_excl,
@@ -1384,8 +1366,8 @@ mod tests {
         let range_tests = generate_random_ranges(&words, 100);
 
         for (start, end) in range_tests {
-            let range_start = VariableSizeKey::from_slice_with_termination(start.as_bytes());
-            let range_end = VariableSizeKey::from_slice_with_termination(end.as_bytes());
+            let range_start = VariableSizeKey::from_slice(start.as_bytes());
+            let range_end = VariableSizeKey::from_slice(end.as_bytes());
 
             // Inclusive-Inclusive
             let trie_results_incl_incl: Vec<_> = trie
@@ -1397,10 +1379,7 @@ mod tests {
                 .collect();
             let trie_expected_incl_incl: Vec<_> = trie_results_incl_incl
                 .iter()
-                .map(|(k, v, _, _)| {
-                    let key_without_last_byte = &k[..k.len() - 1];
-                    (key_without_last_byte.to_vec(), **v)
-                })
+                .map(|(k, v, _, _)| (k.to_vec(), **v))
                 .collect();
             assert_eq!(
                 trie_expected_incl_incl, btree_results_incl_incl,
@@ -1417,10 +1396,7 @@ mod tests {
                 .collect();
             let trie_expected_incl_excl: Vec<_> = trie_results_incl_excl
                 .iter()
-                .map(|(k, v, _, _)| {
-                    let key_without_last_byte = &k[..k.len() - 1];
-                    (key_without_last_byte.to_vec(), **v)
-                })
+                .map(|(k, v, _, _)| (k.to_vec(), **v))
                 .collect();
             assert_eq!(
                 trie_expected_incl_excl, btree_results_incl_excl,
