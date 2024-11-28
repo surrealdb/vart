@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::node::LeafValue;
 
-const B: usize = 6; // B-tree degree (max children = 2B)
+const B: usize = 16; // B-tree degree (max children = 2B)
 
 #[derive(Clone)]
 pub(crate) struct BTree<V: Clone> {
