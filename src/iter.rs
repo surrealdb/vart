@@ -38,7 +38,7 @@ impl<'a, P: KeyTrait, V: Clone> Iterator for NodeIter<'a, P, V> {
     }
 }
 
-impl<'a, P: KeyTrait, V: Clone> DoubleEndedIterator for NodeIter<'a, P, V> {
+impl<P: KeyTrait, V: Clone> DoubleEndedIterator for NodeIter<'_, P, V> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.node.next_back()
     }
