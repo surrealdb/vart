@@ -99,7 +99,7 @@ impl<P: KeyTrait, V: Clone> NodeType<P, V> {
             NodeType::Node16(n) => n.inner_twig.as_deref(),
             NodeType::Node48(n) => n.inner_twig.as_deref(),
             NodeType::Node256(n) => n.inner_twig.as_deref(),
-            NodeType::Twig(_) => panic!("Unexpected Twig node encountered in get_leaf()"),
+            NodeType::Twig(_) => None,
         }
     }
 
@@ -109,7 +109,7 @@ impl<P: KeyTrait, V: Clone> NodeType<P, V> {
             NodeType::Node16(n) => Arc::get_mut(n.inner_twig.as_mut()?),
             NodeType::Node48(n) => Arc::get_mut(n.inner_twig.as_mut()?),
             NodeType::Node256(n) => Arc::get_mut(n.inner_twig.as_mut()?),
-            NodeType::Twig(_) => panic!("Unexpected Twig node encountered in get_leaf_mut()"),
+            NodeType::Twig(_) => None,
         }
     }
 
@@ -119,7 +119,7 @@ impl<P: KeyTrait, V: Clone> NodeType<P, V> {
             NodeType::Node16(n) => n.inner_twig.clone(),
             NodeType::Node48(n) => n.inner_twig.clone(),
             NodeType::Node256(n) => n.inner_twig.clone(),
-            NodeType::Twig(_) => panic!("Unexpected Twig node encountered in clone_leaf()"),
+            NodeType::Twig(_) => panic!("Unexpected Twig node encountered in clone_inner_twig()"),
         }
     }
 }
@@ -440,8 +440,13 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 let node = NodeType::Node4(n.delete_child(key));
                 let mut new_node = Self { node_type: node };
 
-                // Check if the number of remaining children is below the threshold.
-                if new_node.num_children() < NODE4MIN {
+                // Shrink if the number of remaining children is below the threshold and
+                // there's no inner twig.
+                //
+                // Checking for the inner twig is only needed for Node4, because only its
+                // shrink() implementation pulls up a single remaining child and replaces
+                // itself with it in the tree.
+                if new_node.num_children() < NODE4MIN && new_node.get_inner_twig().is_none() {
                     new_node.shrink();
                 }
 
@@ -543,6 +548,17 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     ///
     #[inline]
     fn set_prefix(&mut self, prefix: P) {
+        // The prefixes of a node and its inner twig must be kept
+        // the same, because remove() relies on this when replacing
+        // a Node4 without children with its inner twig.
+        if let Some(inner_twig) = self.get_inner_twig_mut() {
+            inner_twig.prefix = prefix.clone();
+        } else if let Some(inner_twig) = self.get_inner_twig() {
+            let mut cloned_twig = inner_twig.clone();
+            cloned_twig.prefix = prefix.clone();
+            self.set_inner_twig(cloned_twig);
+        }
+
         self.node_type.set_prefix(prefix);
     }
 
@@ -568,10 +584,10 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 // are combined (compressed) into a single prefix.
                 let (curr_prefix, child) = n.get_value_if_single_child();
                 let child = child.unwrap();
-                let mut child_type = child.node_type.clone();
+                let child_type = child.node_type.clone();
                 let new_prefix = curr_prefix.extend(child.prefix());
-                child_type.set_prefix(new_prefix);
                 self.node_type = child_type;
+                self.set_prefix(new_prefix);
             }
             NodeType::Node16(n) => {
                 // Shrink Node16 to Node4 by resizing it.
@@ -836,18 +852,18 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         // Similar to the case above, but this time the current node's prefix is longer
         // than the remainder of the key, e.g. current node is "key123" and "key1" is
         // inserted.
-        // Current Twig is also replaced by a new Node4, but this time its prefix is
+        // Current node is also replaced by a new Node4, but this time its prefix is
         // adjusted and it becomes the Node4's child, while the new Twig node becomes
         // Node4's inner Twig.
-        if is_prefix_match && cur_node.prefix().len() > key_prefix.len() && cur_node.is_twig() {
+        if is_prefix_match && cur_node.prefix().len() > key_prefix.len() {
             let mut n4 = Node::new_node4(key_prefix.into());
             let mut inner_twig = TwigNode::new(key_prefix.into(), key.clone());
             inner_twig.insert_mut(value, commit_version, ts);
             n4.set_inner_twig(inner_twig);
-            let old_twig_key = new_key.at(0);
-            let mut old_twig = cur_node.clone_node();
-            old_twig.set_prefix(new_key);
-            n4.add_child_mut(old_twig_key, old_twig);
+            let old_node_key = new_key.at(0);
+            let mut old_node = cur_node.clone_node();
+            old_node.set_prefix(new_key);
+            n4.add_child_mut(old_node_key, old_node);
             return Arc::new(n4);
         }
 
@@ -973,18 +989,18 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         // Similar to the case above, but this time the current node's prefix is longer
         // than the remainder of the key, e.g. current node is "key123" and "key1" is
         // inserted.
-        // Current Twig is also replaced by a new Node4, but this time its prefix is
+        // Current node is also replaced by a new Node4, but this time its prefix is
         // adjusted and it becomes the Node4's child, while the new Twig node becomes
         // Node4's inner Twig.
-        if is_prefix_match && cur_node.prefix().len() > key_prefix.len() && cur_node.is_twig() {
+        if is_prefix_match && cur_node.prefix().len() > key_prefix.len() {
             let n4 = Node::new_node4(key_prefix.into());
-            let mut old_twig = std::mem::replace(cur_node, n4);
+            let mut old_node = std::mem::replace(cur_node, n4);
             let mut inner_twig = TwigNode::new(key_prefix.into(), key.clone());
             inner_twig.insert_mut(value, commit_version, ts);
             cur_node.set_inner_twig(inner_twig);
-            let old_twig_key = new_key.at(0);
-            old_twig.set_prefix(new_key);
-            cur_node.add_child_mut(old_twig_key, old_twig);
+            let old_node_key = new_key.at(0);
+            old_node.set_prefix(new_key);
+            cur_node.add_child_mut(old_node_key, old_node);
             return;
         }
 
@@ -1719,7 +1735,7 @@ mod tests {
     use super::Tree;
     use crate::art::QueryType;
     use crate::{FixedSizeKey, VariableSizeKey};
-    use rand::{thread_rng, Rng};
+    use rand::{seq::SliceRandom, thread_rng, Rng};
     use std::ops::RangeFull;
     use std::str::FromStr;
 
@@ -1761,6 +1777,106 @@ mod tests {
         } else if let Err(err) = read_words_from_file(file_path) {
             eprintln!("Error reading file: {}", err);
         }
+    }
+
+    #[test]
+    fn insert_search_delete_words_randomized() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let file_path = "testdata/words.txt";
+
+        let mut words = read_words_from_file(file_path).expect("error reading file");
+
+        // Shuffle the words
+        words.shuffle(&mut thread_rng());
+
+        // Insertion phase
+        for word in &words {
+            let key = &VariableSizeKey::from_str(word).unwrap();
+            let _ = tree.insert(key, 1, 0, 0);
+        }
+
+        // Search phase
+        for word in &words {
+            let key = VariableSizeKey::from_str(word).unwrap();
+            let (val, _, _) = tree.get(&key, 0).unwrap();
+            assert_eq!(val, 1);
+        }
+
+        // Deletion phase
+        for word in &words {
+            let key = VariableSizeKey::from_str(word).unwrap();
+            assert!(tree.remove(&key));
+        }
+    }
+
+    #[test]
+    fn insert_mut_search_delete_words_randomized() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
+        let file_path = "testdata/words.txt";
+
+        let mut words = read_words_from_file(file_path).expect("error reading file");
+
+        // Shuffle the words
+        words.shuffle(&mut thread_rng());
+
+        // Insertion phase
+        for word in &words {
+            let key = &VariableSizeKey::from_str(word).unwrap();
+            let _ = tree.insert_unchecked(key, 1, 0, 0);
+        }
+
+        // Search phase
+        for word in &words {
+            let key = VariableSizeKey::from_str(word).unwrap();
+            let (val, _, _) = tree.get(&key, 0).unwrap();
+            assert_eq!(val, 1);
+        }
+
+        // Deletion phase
+        for word in &words {
+            let key = VariableSizeKey::from_str(word).unwrap();
+            assert!(tree.remove(&key));
+        }
+    }
+
+    #[test]
+    fn remove_with_one_child_and_inner_twig() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        let k1 = VariableSizeKey::from_slice(b"aam");
+        let k2 = VariableSizeKey::from_slice(b"aa");
+        let k3 = VariableSizeKey::from_slice(b"aal");
+
+        let _ = tree.insert(&k1, 1, 0, 0);
+        let _ = tree.insert(&k2, 2, 0, 0);
+        let _ = tree.insert(&k3, 3, 0, 0);
+
+        assert_eq!(tree.get(&k1, 0).unwrap().0, 1);
+        assert_eq!(tree.get(&k2, 0).unwrap().0, 2);
+        assert_eq!(tree.get(&k3, 0).unwrap().0, 3);
+
+        assert!(tree.remove(&k1));
+        assert!(tree.remove(&k2));
+        assert!(tree.remove(&k3));
+    }
+
+    #[test]
+    fn descending_keys() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+        let ccc = VariableSizeKey::from_slice(b"ccc");
+        let cc = VariableSizeKey::from_slice(b"cc");
+        let c = VariableSizeKey::from_slice(b"c");
+
+        let _ = tree.insert(&ccc, 1, 0, 0);
+        let _ = tree.insert(&cc, 2, 0, 0);
+        let _ = tree.insert(&c, 3, 0, 0);
+
+        assert_eq!(tree.get(&ccc, 0).unwrap().0, 1);
+        assert_eq!(tree.get(&cc, 0).unwrap().0, 2);
+        assert_eq!(tree.get(&c, 0).unwrap().0, 3);
+
+        assert!(tree.remove(&ccc));
+        assert!(tree.remove(&cc));
+        assert!(tree.remove(&c));
     }
 
     #[test]
