@@ -746,53 +746,47 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         cur_node_prefix: &P,
         key: &'a P,
         depth: usize,
-    ) -> (&'a [u8], P, P, bool, usize) {
+    ) -> (
+        &'a [u8], // remaining_key_suffix
+        P,        // remaining_node_suffix
+        P,        // shared_prefix
+        bool,     // is_prefix_match
+        usize,    // shared_prefix_length
+    ) {
         // Obtain the current node's prefix and its length.
         let cur_node_prefix_len = cur_node_prefix.len();
 
         // Determine the prefix of the key after the current depth.
-        let key_prefix = key.prefix_after(depth);
+        let remaining_key_suffix = key.prefix_after(depth);
+
         // Find the longest common prefix between the current node's prefix and the key's prefix.
-        let longest_common_prefix = cur_node_prefix.longest_common_prefix(key_prefix);
+        let shared_prefix_length = cur_node_prefix.longest_common_prefix(remaining_key_suffix);
 
         // Create a new key that represents the remaining part of the current node's prefix after the common prefix.
-        let mut new_key = cur_node_prefix.prefix_after(longest_common_prefix);
-        if new_key.is_empty() {
+        let mut remaining_node_suffix = cur_node_prefix.prefix_after(shared_prefix_length);
+        if remaining_node_suffix.is_empty() {
             // In the case where the current node's prefix is shorter than the key,
             // the suffix comes from the key_prefix. For example, cur_node.prefix="key"
             // and key="keyboard", then new_key should be "board".
-            new_key = &key_prefix[longest_common_prefix..];
+            remaining_node_suffix = &remaining_key_suffix[shared_prefix_length..];
         }
+
         // Extract the prefix of the current node up to the common prefix.
-        let prefix = cur_node_prefix.prefix_before(longest_common_prefix).into();
+        let shared_prefix = cur_node_prefix.prefix_before(shared_prefix_length).into();
         // Determine whether the current node's prefix and the key's prefix match up to the common prefix.
-        let is_prefix_match = min(cur_node_prefix_len, key_prefix.len()) == longest_common_prefix;
+        let is_prefix_match =
+            min(cur_node_prefix_len, remaining_key_suffix.len()) == shared_prefix_length;
 
         (
-            key_prefix,
-            new_key.into(),
-            prefix,
-            is_prefix_match,
-            longest_common_prefix,
+            remaining_key_suffix, // remaining_key_suffix: the part of the key that still needs to be processed
+            remaining_node_suffix.into(), // remaining_node_suffix: the remaining part of the node's prefix after splitting
+            shared_prefix, // shared_prefix: the shared prefix that will become the new parent node
+            is_prefix_match, // is_prefix_match: whether the prefixes match completely up to the common point
+            shared_prefix_length, // shared_prefix_length: length of the shared prefix between node and key
         )
     }
 
-    /// Inserts a key-value pair recursively into the node.
-    ///
     /// Recursively inserts a key-value pair into the current node and its child nodes.
-    ///
-    /// # Parameters
-    ///
-    /// - `cur_node`: A reference to the current node.
-    /// - `key`: The key to be inserted.
-    /// - `value`: The value associated with the key.
-    /// - `commit_version`: The version when the value was inserted.
-    /// - `depth`: The depth of the insertion process.
-    ///
-    /// # Returns
-    ///
-    /// Returns the updated node and the old value (if any) for the given key.
-    ///
     pub(crate) fn insert_recurse(
         cur_node: &Arc<Node<P, V>>,
         key: &P,
@@ -802,119 +796,128 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         depth: usize,
         replace: bool,
     ) -> NodeArc<P, V> {
-        let (key_prefix, new_key, prefix, is_prefix_match, longest_common_prefix) =
+        let (key_prefix, new_prefix, shared_prefix, is_prefix_match, shared_prefix_length) =
             Self::common_insert_logic(cur_node.prefix(), key, depth);
 
-        // This is the exact key match.
-        if is_prefix_match && cur_node.prefix().len() == key_prefix.len() {
-            // If the current node is a Twig node and the prefixes match up to the end of both prefixes,
-            // update the existing value in the Twig node.
-            if let NodeType::Twig(twig) = &cur_node.node_type {
-                let new_twig = twig.insert_or_replace(value, commit_version, ts, replace);
-                return Arc::new(Node {
-                    node_type: NodeType::Twig(new_twig),
-                });
-            } else {
-                // If the current node is an inner node, then either insert the new value
-                // in its existing inner Twig node, or create new one.
-                let leaf = match cur_node.get_inner_twig() {
-                    Some(twig) => twig.insert_or_replace(value, commit_version, ts, replace),
-                    None => {
-                        let mut new_twig =
-                            TwigNode::new(cur_node.prefix().clone(), key.as_slice().into());
-                        new_twig.insert_mut(value, commit_version, ts);
-                        new_twig
-                    }
-                };
-                let mut new_node = cur_node.clone_node();
-                new_node.set_inner_twig(leaf);
-                return Arc::new(new_node);
-            }
-        }
-
-        // The current node is Twig and there is a prefix match and the current node's
-        // prefix is shorter than the remainder of the key, e.g. current node is "key1"
-        // and "key123" is inserted.
-        // Current Twig must be replaced by a Node4, made its inner Twig node, and a new
-        // Twig node created as a normal child node with a prefix being the reminder of
-        // the new key.
-        if is_prefix_match && cur_node.prefix().len() < key_prefix.len() {
-            if let NodeType::Twig(twig) = &cur_node.node_type {
-                let mut n4 = Node::new_node4(prefix);
-                n4.set_inner_twig(twig.clone());
-                let new_twig_key = key_prefix[longest_common_prefix];
-                let new_twig = Node::new_twig(new_key, key.clone(), value, commit_version, ts);
-                n4.add_child_mut(new_twig_key, new_twig);
-                return Arc::new(n4);
-            }
-        }
-
-        // Similar to the case above, but this time the current node's prefix is longer
-        // than the remainder of the key, e.g. current node is "key123" and "key1" is
-        // inserted.
-        // Current node is also replaced by a new Node4, but this time its prefix is
-        // adjusted and it becomes the Node4's child, while the new Twig node becomes
-        // Node4's inner Twig.
-        if is_prefix_match && cur_node.prefix().len() > key_prefix.len() {
-            let mut n4 = Node::new_node4(key_prefix.into());
-            let mut inner_twig = TwigNode::new(key_prefix.into(), key.clone());
-            inner_twig.insert_mut(value, commit_version, ts);
-            n4.set_inner_twig(inner_twig);
-            let old_node_key = new_key.at(0);
-            let mut old_node = cur_node.clone_node();
-            old_node.set_prefix(new_key);
-            n4.add_child_mut(old_node_key, old_node);
-            return Arc::new(n4);
-        }
-
-        // If the prefixes don't match, create a new Node4 with the old node and a new Twig as children.
+        // Case 1: No prefix match - create new Node4 with split
         if !is_prefix_match {
+            // If the prefixes don't match, create a new Node4 with the old node and a new Twig as children.
             let mut old_node = cur_node.clone_node();
-            old_node.set_prefix(new_key);
-            let mut n4 = Node::new_node4(prefix);
-
-            let k1 = cur_node.prefix().at(longest_common_prefix);
-            let k2 = key_prefix[longest_common_prefix];
+            old_node.set_prefix(new_prefix);
+            let k1 = cur_node.prefix().at(shared_prefix_length);
+            let k2 = key_prefix[shared_prefix_length];
             let new_twig = Node::new_twig(
-                key_prefix[longest_common_prefix..].into(),
+                key_prefix[shared_prefix_length..].into(),
                 key.as_slice().into(),
                 value,
                 commit_version,
                 ts,
             );
-            n4 = n4.add_child(k1, old_node).add_child(k2, new_twig);
 
+            let mut n4 = Node::new_node4(shared_prefix);
+            n4 = n4.add_child(k1, old_node).add_child(k2, new_twig);
             return Arc::new(n4);
         }
 
-        // Continue the insertion process by finding or creating the appropriate child node for the next character.
-        let k = key_prefix[longest_common_prefix];
-        let child_for_key = cur_node.find_child(k);
-        if let Some(child) = child_for_key {
-            let new_child = Node::insert_recurse(
-                child,
-                key,
-                value,
-                commit_version,
-                ts,
-                depth + longest_common_prefix,
-                replace,
-            );
-            let new_node = cur_node.replace_child(k, new_child);
-            return Arc::new(new_node);
+        // Case 2: Handle prefix match scenarios
+        let cur_prefix_len = cur_node.prefix().len();
+        let key_prefix_len = key_prefix.len();
+
+        match cur_prefix_len.cmp(&key_prefix_len) {
+            // Case 2a: Exact prefix match
+            std::cmp::Ordering::Equal => {
+                // If the current node is a Twig node and the prefixes match up to the end of both prefixes,
+                // update the existing value in the Twig node.
+                if let NodeType::Twig(twig) = &cur_node.node_type {
+                    let new_twig = twig.insert_or_replace(value, commit_version, ts, replace);
+                    Arc::new(Node {
+                        node_type: NodeType::Twig(new_twig),
+                    })
+                } else {
+                    // If the current node is an inner node, then either insert the new value
+                    // in its existing inner Twig node, or create new one.
+                    let leaf = match cur_node.get_inner_twig() {
+                        Some(twig) => twig.insert_or_replace(value, commit_version, ts, replace),
+                        None => {
+                            let mut new_twig =
+                                TwigNode::new(cur_node.prefix().clone(), key.as_slice().into());
+                            new_twig.insert_mut(value, commit_version, ts);
+                            new_twig
+                        }
+                    };
+                    let mut new_node = cur_node.clone_node();
+                    new_node.set_inner_twig(leaf);
+                    Arc::new(new_node)
+                }
+            }
+
+            // Case 2b: Current prefix is shorter and node is Twig
+            std::cmp::Ordering::Less => {
+                // The current node is Twig and there is a prefix match and the current node's
+                // prefix is shorter than the remainder of the key, e.g. current node is "key1"
+                // and "key123" is inserted.
+                // Current Twig must be replaced by a Node4, made its inner Twig node, and a new
+                // Twig node created as a normal child node with a prefix being the reminder of
+                // the new key.
+                let k = key_prefix[shared_prefix_length];
+
+                // Case 2b1: Current node is Twig
+                if let NodeType::Twig(twig) = &cur_node.node_type {
+                    let mut n4 = Node::new_node4(shared_prefix);
+                    n4.set_inner_twig(twig.clone());
+                    let new_twig =
+                        Node::new_twig(new_prefix, key.clone(), value, commit_version, ts);
+                    n4.add_child_mut(k, new_twig);
+                    Arc::new(n4)
+                } else {
+                    // Case 2b2: Continue traversal with existing child
+                    if let Some(child) = cur_node.find_child(k) {
+                        let new_child = Node::insert_recurse(
+                            child,
+                            key,
+                            value,
+                            commit_version,
+                            ts,
+                            depth + shared_prefix_length,
+                            replace,
+                        );
+                        let new_node = cur_node.replace_child(k, new_child);
+                        return Arc::new(new_node);
+                    }
+
+                    // Case 2b3: Create new child node
+                    let new_twig = Node::new_twig(
+                        key_prefix[shared_prefix_length..].into(),
+                        key.as_slice().into(),
+                        value,
+                        commit_version,
+                        ts,
+                    );
+                    let new_node = cur_node.add_child(k, new_twig);
+                    Arc::new(new_node)
+                }
+            }
+
+            // Case 2c: Current prefix is longer
+            std::cmp::Ordering::Greater => {
+                // Similar to the case above, but this time the current node's prefix is longer
+                // than the remainder of the key, e.g. current node is "key123" and "key1" is
+                // inserted.
+                // Current node is also replaced by a new Node4, but this time its prefix is
+                // adjusted and it becomes the Node4's child, while the new Twig node becomes
+                // Node4's inner Twig.
+                let mut inner_twig = TwigNode::new(key_prefix.into(), key.clone());
+                inner_twig.insert_mut(value, commit_version, ts);
+                let old_node_key = new_prefix.at(0);
+                let mut old_node = cur_node.clone_node();
+                old_node.set_prefix(new_prefix);
+
+                let mut n4 = Node::new_node4(key_prefix.into());
+                n4.set_inner_twig(inner_twig);
+                n4.add_child_mut(old_node_key, old_node);
+                Arc::new(n4)
+            }
         }
-
-        // If no child exists for the key's character, create a new Twig node and add it as a child.
-        let new_twig = Node::new_twig(
-            key_prefix[longest_common_prefix..].into(),
-            key.as_slice().into(),
-            value,
-            commit_version,
-            ts,
-        );
-        let new_node = cur_node.add_child(k, new_twig);
-
-        Arc::new(new_node)
     }
 
     pub(crate) fn insert_recurse_mut(
@@ -926,98 +929,23 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         depth: usize,
         replace: bool,
     ) {
-        let (key_prefix, new_key, prefix, is_prefix_match, longest_common_prefix) =
+        let (key_prefix, new_prefix, shared_prefix, is_prefix_match, shared_prefix_length) =
             Self::common_insert_logic(cur_node.prefix(), key, depth);
 
-        // This is the exact key match.
-        if is_prefix_match && cur_node.prefix().len() == key_prefix.len() {
-            // If the current node is a Twig node and the prefixes match up to the
-            // end of both prefixes, update the existing value in the Twig node.
-            if let NodeType::Twig(ref mut twig) = &mut cur_node.node_type {
-                if replace {
-                    // Only replace if the provided value is more recent than
-                    // the existing ones. This is important because this method
-                    // is used for loading the index in SurrealKV and thus must
-                    // be able to handle segments left by an unfinished compaction
-                    // where older versions can end up in more recent segments
-                    // after the newer versions.
-                    twig.replace_if_newer_mut(value, commit_version, ts);
-                } else {
-                    twig.insert_mut(value, commit_version, ts);
-                }
-            } else {
-                // If the current node is an inner node, then either insert the new value
-                // in its existing inner Twig node, or create new one.
-                match cur_node.get_inner_twig_mut() {
-                    Some(twig) => {
-                        if replace {
-                            twig.replace_if_newer_mut(value, commit_version, ts);
-                        } else {
-                            twig.insert_mut(value, commit_version, ts);
-                        }
-                    }
-                    None => {
-                        let mut new_twig =
-                            TwigNode::new(cur_node.prefix().clone(), key.as_slice().into());
-                        new_twig.insert_mut(value, commit_version, ts);
-                        cur_node.set_inner_twig(new_twig);
-                    }
-                }
-            }
-            return;
-        }
-
-        // The current node is Twig and there is a prefix match and the current node's
-        // prefix is shorter than the remainder of the key, e.g. current node is "key1"
-        // and "key123" is inserted.
-        // Current Twig must be replaced by a Node4, made its inner Twig node, and a new
-        // Twig node created as a normal child node with a prefix being the reminder of
-        // the new key.
-        if is_prefix_match && cur_node.prefix().len() < key_prefix.len() && cur_node.is_twig() {
-            let n4 = Node::new_node4(prefix);
-            let old_twig = std::mem::replace(cur_node, n4);
-            match old_twig.node_type {
-                NodeType::Twig(n) => cur_node.set_inner_twig(n),
-                _ => panic!("must be Twig"),
-            }
-            let new_twig_key = key_prefix[longest_common_prefix];
-            let new_twig = Node::new_twig(new_key, key.clone(), value, commit_version, ts);
-            cur_node.add_child_mut(new_twig_key, new_twig);
-            return;
-        }
-
-        // Similar to the case above, but this time the current node's prefix is longer
-        // than the remainder of the key, e.g. current node is "key123" and "key1" is
-        // inserted.
-        // Current node is also replaced by a new Node4, but this time its prefix is
-        // adjusted and it becomes the Node4's child, while the new Twig node becomes
-        // Node4's inner Twig.
-        if is_prefix_match && cur_node.prefix().len() > key_prefix.len() {
-            let n4 = Node::new_node4(key_prefix.into());
-            let mut old_node = std::mem::replace(cur_node, n4);
-            let mut inner_twig = TwigNode::new(key_prefix.into(), key.clone());
-            inner_twig.insert_mut(value, commit_version, ts);
-            cur_node.set_inner_twig(inner_twig);
-            let old_node_key = new_key.at(0);
-            old_node.set_prefix(new_key);
-            cur_node.add_child_mut(old_node_key, old_node);
-            return;
-        }
-
-        // If the prefixes don't match, create a new Node4 with the old node and a new Twig as children.
+        // Case 1: No prefix match - create a new Node4 with old node and new Twig as children
         if !is_prefix_match {
-            let n4 = Node::new_node4(prefix);
+            let n4 = Node::new_node4(shared_prefix);
 
-            let k1 = cur_node.prefix().at(longest_common_prefix);
-            let k2 = key_prefix[longest_common_prefix];
+            let k1 = cur_node.prefix().at(shared_prefix_length);
+            let k2 = key_prefix[shared_prefix_length];
 
-            // Must be set after the calculation of k1 above.
-            cur_node.set_prefix(new_key);
+            // Must be set after the calculation of k1 above
+            cur_node.set_prefix(new_prefix);
 
             let old_node = std::mem::replace(cur_node, n4);
 
             let new_twig = Node::new_twig(
-                key_prefix[longest_common_prefix..].into(),
+                key_prefix[shared_prefix_length..].into(),
                 key.as_slice().into(),
                 value,
                 commit_version,
@@ -1029,31 +957,115 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             return;
         }
 
-        // Continue the insertion process by finding or creating the appropriate child node for the next character.
-        let k = key_prefix[longest_common_prefix];
-        let child_for_key = cur_node.find_child_mut(k);
-        if let Some(child) = child_for_key {
-            Node::insert_recurse_mut(
-                child,
-                key,
-                value,
-                commit_version,
-                ts,
-                depth + longest_common_prefix,
-                replace,
-            );
-            return;
-        }
+        // Case 2: Handle prefix match scenarios
+        let cur_prefix_len = cur_node.prefix().len();
+        let key_prefix_len = key_prefix.len();
 
-        // If no child exists for the key's character, create a new Twig node and add it as a child.
-        let new_twig = Node::new_twig(
-            key_prefix[longest_common_prefix..].into(),
-            key.as_slice().into(),
-            value,
-            commit_version,
-            ts,
-        );
-        cur_node.add_child_mut(k, new_twig);
+        match cur_prefix_len.cmp(&key_prefix_len) {
+            // Case 2a: Exact prefix match
+            std::cmp::Ordering::Equal => {
+                // If the current node is a Twig node and the prefixes match up to the
+                // end of both prefixes, update the existing value in the Twig node.
+                if let NodeType::Twig(ref mut twig) = &mut cur_node.node_type {
+                    if replace {
+                        // Only replace if the provided value is more recent than
+                        // the existing ones. This is important because this method
+                        // is used for loading the index in SurrealKV and thus must
+                        // be able to handle segments left by an unfinished compaction
+                        // where older versions can end up in more recent segments
+                        // after the newer versions.
+                        twig.replace_if_newer_mut(value, commit_version, ts);
+                    } else {
+                        twig.insert_mut(value, commit_version, ts);
+                    }
+                } else {
+                    // If the current node is an inner node, then either insert the new value
+                    // in its existing inner Twig node, or create new one.
+                    match cur_node.get_inner_twig_mut() {
+                        Some(twig) => {
+                            if replace {
+                                twig.replace_if_newer_mut(value, commit_version, ts);
+                            } else {
+                                twig.insert_mut(value, commit_version, ts);
+                            }
+                        }
+                        None => {
+                            let mut new_twig =
+                                TwigNode::new(cur_node.prefix().clone(), key.as_slice().into());
+                            new_twig.insert_mut(value, commit_version, ts);
+                            cur_node.set_inner_twig(new_twig);
+                        }
+                    }
+                }
+            }
+
+            // Case 2b: Current prefix is shorter and node is Twig
+            // e.g., current node is "key1" and "key123" is inserted
+            std::cmp::Ordering::Less => {
+                let k = key_prefix[shared_prefix_length];
+                if cur_node.is_twig() {
+                    // The current node is Twig and there is a prefix match and the current node's
+                    // prefix is shorter than the remainder of the key, e.g. current node is "key1"
+                    // and "key123" is inserted.
+                    // Current Twig must be replaced by a Node4, made its inner Twig node, and a new
+                    // Twig node created as a normal child node with a prefix being the reminder of
+                    // the new key.
+                    let n4 = Node::new_node4(shared_prefix);
+                    let old_twig = std::mem::replace(cur_node, n4);
+                    match old_twig.node_type {
+                        NodeType::Twig(n) => cur_node.set_inner_twig(n),
+                        _ => panic!("must be Twig"),
+                    }
+                    let new_twig =
+                        Node::new_twig(new_prefix, key.clone(), value, commit_version, ts);
+                    cur_node.add_child_mut(k, new_twig);
+                } else {
+                    // Case 2b2: Continue traversal with existing child
+                    if let Some(child) = cur_node.find_child_mut(k) {
+                        Node::insert_recurse_mut(
+                            child,
+                            key,
+                            value,
+                            commit_version,
+                            ts,
+                            depth + shared_prefix_length,
+                            replace,
+                        );
+                        return;
+                    }
+
+                    // Case 2b3: Create new child node
+                    // If no child exists for the key's character, create a new Twig node and add it as a child.
+                    let new_twig = Node::new_twig(
+                        key_prefix[shared_prefix_length..].into(),
+                        key.as_slice().into(),
+                        value,
+                        commit_version,
+                        ts,
+                    );
+                    cur_node.add_child_mut(k, new_twig);
+                }
+            }
+
+            // Case 2c: Current prefix is longer
+            // e.g., current node is "key123" and "key1" is inserted
+            std::cmp::Ordering::Greater => {
+                // Similar to the case above, but this time the current node's prefix is longer
+                // than the remainder of the key, e.g. current node is "key123" and "key1" is
+                // inserted.
+                // Current node is also replaced by a new Node4, but this time its prefix is
+                // adjusted and it becomes the Node4's child, while the new Twig node becomes
+                // Node4's inner Twig.
+                let n4 = Node::new_node4(key_prefix.into());
+                let mut old_node = std::mem::replace(cur_node, n4);
+                let mut inner_twig = TwigNode::new(key_prefix.into(), key.clone());
+                inner_twig.insert_mut(value, commit_version, ts);
+                cur_node.set_inner_twig(inner_twig);
+                let old_node_key = new_prefix.at(0);
+                old_node.set_prefix(new_prefix);
+                cur_node.add_child_mut(old_node_key, old_node);
+            }
+        }
     }
 
     fn navigate_to_node<'a>(cur_node: &'a Node<P, V>, key: &P) -> Option<&'a Node<P, V>> {
