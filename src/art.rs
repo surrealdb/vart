@@ -1,5 +1,6 @@
 use core::panic;
 use std::cmp::min;
+use std::cmp::Ordering;
 use std::ops::RangeBounds;
 use std::sync::Arc;
 
@@ -767,7 +768,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         if remaining_node_suffix.is_empty() {
             // In the case where the current node's prefix is shorter than the key,
             // the suffix comes from the key_prefix. For example, cur_node.prefix="key"
-            // and key="keyboard", then new_key should be "board".
+            // and key="keyboard", then remaining_node_suffix should be "board".
             remaining_node_suffix = &remaining_key_suffix[shared_prefix_length..];
         }
 
@@ -825,7 +826,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
         match cur_prefix_len.cmp(&key_prefix_len) {
             // Case 2a: Exact prefix match
-            std::cmp::Ordering::Equal => {
+            Ordering::Equal => {
                 // If the current node is a Twig node and the prefixes match up to the end of both prefixes,
                 // update the existing value in the Twig node.
                 if let NodeType::Twig(twig) = &cur_node.node_type {
@@ -852,7 +853,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             }
 
             // Case 2b: Current prefix is shorter and node is Twig
-            std::cmp::Ordering::Less => {
+            Ordering::Less => {
                 // The current node is Twig and there is a prefix match and the current node's
                 // prefix is shorter than the remainder of the key, e.g. current node is "key1"
                 // and "key123" is inserted.
@@ -899,7 +900,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             }
 
             // Case 2c: Current prefix is longer
-            std::cmp::Ordering::Greater => {
+            Ordering::Greater => {
                 // Similar to the case above, but this time the current node's prefix is longer
                 // than the remainder of the key, e.g. current node is "key123" and "key1" is
                 // inserted.
@@ -963,7 +964,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
         match cur_prefix_len.cmp(&key_prefix_len) {
             // Case 2a: Exact prefix match
-            std::cmp::Ordering::Equal => {
+            Ordering::Equal => {
                 // If the current node is a Twig node and the prefixes match up to the
                 // end of both prefixes, update the existing value in the Twig node.
                 if let NodeType::Twig(ref mut twig) = &mut cur_node.node_type {
@@ -1001,7 +1002,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
             // Case 2b: Current prefix is shorter and node is Twig
             // e.g., current node is "key1" and "key123" is inserted
-            std::cmp::Ordering::Less => {
+            Ordering::Less => {
                 let k = key_prefix[shared_prefix_length];
                 if cur_node.is_twig() {
                     // The current node is Twig and there is a prefix match and the current node's
@@ -1049,7 +1050,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
             // Case 2c: Current prefix is longer
             // e.g., current node is "key123" and "key1" is inserted
-            std::cmp::Ordering::Greater => {
+            Ordering::Greater => {
                 // Similar to the case above, but this time the current node's prefix is longer
                 // than the remainder of the key, e.g. current node is "key123" and "key1" is
                 // inserted.
