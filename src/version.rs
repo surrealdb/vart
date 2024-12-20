@@ -93,14 +93,7 @@ impl<V: Clone> BTree<V> {
             {
                 i -= 1;
             }
-            // Check for duplicate version and replace if the new one has the same or later timestamp
-            if i > 0 && node.entries[i - 1].version == leaf_value.version {
-                if node.entries[i - 1].ts <= leaf_value.ts {
-                    node.entries[i - 1] = leaf_value;
-                }
-            } else {
-                node.entries.insert(i, leaf_value);
-            }
+            node.entries.insert(i, leaf_value);
         } else {
             while i > 0
                 && !self.should_go_right(&node.entries[i - 1], leaf_value.version, leaf_value.ts)
@@ -121,37 +114,6 @@ impl<V: Clone> BTree<V> {
             node.children[i] = Arc::new(child);
         }
     }
-
-    // fn insert_non_full(&self, node: &mut BNode<V>, leaf_value: Arc<LeafValue<V>>) {
-    //     let mut i = node.entries.len();
-
-    //     if node.is_leaf {
-    //         while i > 0
-    //             && !self.should_go_right(&node.entries[i - 1], leaf_value.version, leaf_value.ts)
-    //         {
-    //             i -= 1;
-    //         }
-    //         node.entries.insert(i, leaf_value);
-    //     } else {
-    //         while i > 0
-    //             && !self.should_go_right(&node.entries[i - 1], leaf_value.version, leaf_value.ts)
-    //         {
-    //             i -= 1;
-    //         }
-
-    //         let child = Arc::clone(&node.children[i]);
-    //         if child.is_full() {
-    //             self.split_child(node, i);
-    //             if self.should_go_right(&node.entries[i], leaf_value.version, leaf_value.ts) {
-    //                 i += 1;
-    //             }
-    //         }
-
-    //         let mut child = (*node.children[i]).clone();
-    //         self.insert_non_full(&mut child, leaf_value);
-    //         node.children[i] = Arc::new(child);
-    //     }
-    // }
 
     fn should_go_right(&self, entry: &LeafValue<V>, version: u64, ts: u64) -> bool {
         if version != entry.version {
@@ -502,8 +464,7 @@ mod tests {
             .iter()
             .filter(|value| value.ts <= ts)
             .max_by(|a, b| {
-                a.ts.cmp(&b.ts)
-                    .then_with(|| Arc::as_ptr(a).cmp(&Arc::as_ptr(b)))
+                a.ts.cmp(&b.ts).then_with(|| std::cmp::Ordering::Greater) // Always prefer the second entry
             })
             .unwrap();
 

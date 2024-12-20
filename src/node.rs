@@ -158,8 +158,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
             .iter()
             .filter(|value| value.ts <= ts)
             .max_by(|a, b| {
-                a.ts.cmp(&b.ts)
-                    .then_with(|| Arc::as_ptr(a).cmp(&Arc::as_ptr(b)))
+                a.ts.cmp(&b.ts).then_with(|| std::cmp::Ordering::Greater) // Always prefer the second entry
             })
     }
 
