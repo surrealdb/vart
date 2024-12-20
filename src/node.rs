@@ -154,21 +154,13 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
 
     #[inline]
     pub(crate) fn get_leaf_by_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
-        // self.values
-        //     .iter()
-        //     .filter(|value| value.ts <= ts)
-        //     .max_by_key(|value| value.ts)
-
         self.values
-        .iter()
-        .filter(|value| {
-            let should_include = value.ts <= ts;
-            if should_include {
-                println!("Version: {:?}, Key: {:?}, TS: {}", value.version, self.key, value.ts);
-            }
-            should_include
-        })
-        .max_by_key(|value| value.ts)
+            .iter()
+            .filter(|value| value.ts <= ts)
+            .max_by(|a, b| {
+                a.ts.cmp(&b.ts)
+                    .then_with(|| Arc::as_ptr(a).cmp(&Arc::as_ptr(b)))
+            })
     }
 
     #[inline]
