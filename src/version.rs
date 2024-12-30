@@ -32,11 +32,6 @@ impl<V: Clone> BNode<V> {
     fn is_full(&self) -> bool {
         self.entries.len() >= 2 * B - 1
     }
-
-    // New method to get mutable access to entries and children
-    fn get_mut_parts(&mut self) -> (&mut Vec<Arc<LeafValue<V>>>, &mut Vec<Arc<BNode<V>>>) {
-        (&mut self.entries, &mut self.children)
-    }
 }
 
 impl<V: Clone> BTree<V> {
@@ -68,7 +63,7 @@ impl<V: Clone> BTree<V> {
     }
 
     fn split_child(&self, parent: &mut BNode<V>, index: usize) {
-        let (parent_entries, parent_children) = parent.get_mut_parts();
+        let (parent_entries, parent_children) = (&mut parent.entries, &mut parent.children);
         let child = Arc::make_mut(&mut parent_children[index]);
         let mut new_child = BNode::new(child.is_leaf);
 
@@ -123,6 +118,7 @@ impl<V: Clone> BTree<V> {
         self.insert_non_full(child, leaf_value);
     }
 
+    #[allow(unused)]
     pub fn search(&self, version: u64, ts: u64) -> Option<&Arc<LeafValue<V>>> {
         let root = self.root.as_ref()?;
         self.search_node(root, version, ts)
