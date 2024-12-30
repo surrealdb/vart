@@ -15,6 +15,7 @@ pub(crate) struct BNode<V: Clone> {
     is_leaf: bool,
 }
 
+#[allow(unused)]
 impl<V: Clone> BNode<V> {
     fn new(is_leaf: bool) -> Self {
         BNode {
@@ -34,6 +35,7 @@ impl<V: Clone> BNode<V> {
     }
 }
 
+#[allow(unused)]
 impl<V: Clone> BTree<V> {
     pub fn new() -> Self {
         BTree { root: None }
@@ -220,7 +222,7 @@ impl<'a, V: Clone> Iterator for BNodeIterator<'a, V> {
     }
 }
 
-impl<'a, V: Clone> DoubleEndedIterator for BNodeIterator<'a, V> {
+impl<V: Clone> DoubleEndedIterator for BNodeIterator<'_, V> {
     fn next_back(&mut self) -> Option<Self::Item> {
         while let Some((node, idx)) = self.reverse_stack.last_mut() {
             if *idx > 0 {
@@ -238,6 +240,105 @@ impl<'a, V: Clone> DoubleEndedIterator for BNodeIterator<'a, V> {
             self.reverse_stack.pop();
         }
         None
+    }
+}
+
+pub(crate) trait VersionStore<V: Clone> {
+    fn new() -> Self;
+    fn insert(&mut self, value: V, version: u64, ts: u64);
+    fn clear(&mut self);
+    fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = &Arc<LeafValue<V>>> + '_>;
+    fn get_max_version(&self) -> Option<u64>;
+}
+
+// Implement for Vec
+#[cfg(feature = "vec_store")]
+#[derive(Clone)]
+pub(crate) struct VecStore<V: Clone> {
+    values: Vec<Arc<LeafValue<V>>>,
+}
+
+#[cfg(feature = "vec_store")]
+impl<V: Clone> VersionStore<V> for VecStore<V> {
+    fn new() -> Self {
+        Self { values: Vec::new() }
+    }
+
+    fn insert(&mut self, value: V, version: u64, ts: u64) {
+        let new_leaf_value = LeafValue::new(value, version, ts);
+        match self
+            .values
+            .binary_search_by(|v| v.version.cmp(&new_leaf_value.version))
+        {
+            Ok(index) => {
+                if self.values[index].ts == ts {
+                    self.values[index] = Arc::new(new_leaf_value);
+                } else {
+                    let mut insert_position = index;
+                    if self.values[index].ts < ts {
+                        insert_position += self.values[index..]
+                            .iter()
+                            .take_while(|v| v.ts <= ts)
+                            .count();
+                    } else {
+                        insert_position -= self.values[..index]
+                            .iter()
+                            .rev()
+                            .take_while(|v| v.ts >= ts)
+                            .count();
+                    }
+                    self.values
+                        .insert(insert_position, Arc::new(new_leaf_value));
+                }
+            }
+            Err(index) => {
+                self.values.insert(index, Arc::new(new_leaf_value));
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        self.values.clear();
+    }
+
+    fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = &Arc<LeafValue<V>>> + '_> {
+        Box::new(self.values.iter())
+    }
+
+    fn get_max_version(&self) -> Option<u64> {
+        self.values.iter().map(|value| value.version).max()
+    }
+}
+
+// Implement for BTree
+#[cfg(not(feature = "vec_store"))]
+#[derive(Clone)]
+pub(crate) struct BTreeStore<V: Clone> {
+    values: BTree<V>,
+}
+
+#[cfg(not(feature = "vec_store"))]
+impl<V: Clone> VersionStore<V> for BTreeStore<V> {
+    fn new() -> Self {
+        Self {
+            values: BTree::new(),
+        }
+    }
+
+    fn insert(&mut self, value: V, version: u64, ts: u64) {
+        self.values.insert(value, version, ts);
+    }
+
+    fn clear(&mut self) {
+        self.values.clear();
+    }
+
+    fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = &Arc<LeafValue<V>>> + '_> {
+        Box::new(self.values.iter())
+    }
+
+    fn get_max_version(&self) -> Option<u64> {
+        self.values.iter().map(|value| value.version).max()
     }
 }
 

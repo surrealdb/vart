@@ -1,7 +1,14 @@
 use std::slice::from_ref;
 use std::sync::Arc;
 
-use crate::{art::QueryType, version::BTree, KeyTrait};
+use crate::{
+    art::QueryType,
+    version::{VecStore, VersionStore},
+    KeyTrait,
+};
+
+#[cfg(not(feature = "vec_store"))]
+use crate::version::BTreeStore;
 
 /*
     Immutable nodes
@@ -22,7 +29,10 @@ pub(crate) trait NodeTrait<N> {
 pub(crate) struct TwigNode<K: KeyTrait, V: Clone> {
     pub(crate) prefix: K,
     pub(crate) key: K,
-    pub(crate) values: BTree<V>,
+    #[cfg(feature = "vec_store")]
+    pub(crate) values: VecStore<V>,
+    #[cfg(not(feature = "vec_store"))]
+    pub(crate) values: BTreeStore<V>,
     pub(crate) version: u64, // Version for the twig node
 }
 
@@ -52,28 +62,20 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         TwigNode {
             prefix,
             key,
-            values: BTree::new(),
+            values: VersionStore::new(),
             version: 0,
         }
     }
 
     pub(crate) fn version(&self) -> u64 {
-        self.values
-            .iter()
-            .map(|value| value.version)
-            .max()
-            .unwrap_or(self.version)
+        self.values.get_max_version().unwrap_or(self.version)
     }
 
     pub(crate) fn insert(&self, value: V, version: u64, ts: u64) -> TwigNode<K, V> {
         let mut new_values = self.values.clone();
         new_values.insert(value, version, ts);
 
-        let new_version = new_values
-            .iter()
-            .map(|value| value.version)
-            .max()
-            .unwrap_or(self.version);
+        let new_version = new_values.get_max_version().unwrap_or(self.version);
 
         TwigNode {
             prefix: self.prefix.clone(),
