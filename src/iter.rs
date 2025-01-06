@@ -538,7 +538,7 @@ pub(crate) fn scan_node<'a, K, V, R>(
     node: Option<&'a Arc<Node<K, V>>>,
     range: R,
     query_type: QueryType,
-) -> impl Iterator<Item = (Box<[u8]>, V)> + 'a
+) -> impl Iterator<Item = (&'a [u8], V)> + 'a
 where
     K: KeyTrait + 'a,
     V: Clone,
@@ -551,7 +551,7 @@ pub(crate) fn query_keys_at_node<'a, K, V, R>(
     node: Option<&'a Arc<Node<K, V>>>,
     range: R,
     query_type: QueryType,
-) -> impl Iterator<Item = Box<[u8]>> + 'a
+) -> impl Iterator<Item = &'a [u8]> + 'a
 where
     K: KeyTrait + 'a,
     V: Clone,
@@ -592,8 +592,8 @@ impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> QueryIterator<'a, K, V, R> {
     }
 }
 
-impl<K: KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for QueryIterator<'_, K, V, R> {
-    type Item = (Box<[u8]>, Option<V>);
+impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for QueryIterator<'a, K, V, R> {
+    type Item = (&'a [u8], Option<V>);
 
     fn next(&mut self) -> Option<Self::Item> {
         // First try to get item from the current node iteration
@@ -609,7 +609,7 @@ impl<K: KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for QueryIterator<'_, K,
                                 } else {
                                     None
                                 };
-                                return Some((Box::from(key), value));
+                                return Some((key, value));
                             }
                         } else if is_key_out_of_range(&self.range, &twig.key) {
                             // stop iteration if the range end is exceeded
@@ -645,7 +645,7 @@ impl<K: KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for QueryIterator<'_, K,
             } else {
                 None
             };
-            Some((Box::from(key), value))
+            Some((key, value))
         } else {
             None
         }

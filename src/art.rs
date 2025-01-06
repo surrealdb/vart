@@ -1717,14 +1717,14 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         &'a self,
         range: R,
         ts: u64,
-    ) -> impl Iterator<Item = (Box<[u8]>, V)> + 'a
+    ) -> impl Iterator<Item = (&'a [u8], V)> + 'a
     where
         R: RangeBounds<P> + 'a,
     {
         scan_node(self.root.as_ref(), range, QueryType::LatestByTs(ts))
     }
 
-    pub fn keys_at_ts<'a, R>(&'a self, range: R, ts: u64) -> impl Iterator<Item = Box<[u8]>> + 'a
+    pub fn keys_at_ts<'a, R>(&'a self, range: R, ts: u64) -> impl Iterator<Item = &'a [u8]> + 'a
     where
         R: RangeBounds<P> + 'a,
     {
@@ -3542,7 +3542,7 @@ mod tests {
 
         // Verify each key is proper
         for (expected_key, key) in expected_keys.iter().zip(keys.iter()) {
-            assert_eq!(key.as_ref(), expected_key.to_slice());
+            assert_eq!(*key, expected_key.to_slice());
         }
     }
 
