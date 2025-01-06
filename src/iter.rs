@@ -103,7 +103,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iter<'a, P, V> {
 }
 
 impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
-    type Item = (Vec<u8>, &'a V, &'a u64, &'a u64);
+    type Item = (Box<[u8]>, &'a V, &'a u64, &'a u64);
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -138,7 +138,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
                 .map_or(true, |(k1, k2)| k1 < k2)
             {
                 Some((
-                    leaf.0.as_slice().to_vec(),
+                    Box::from(leaf.0.as_slice()),
                     &leaf.1.value,
                     &leaf.1.version,
                     &leaf.1.ts,
@@ -185,7 +185,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> DoubleEndedIterator for Iter<'a, P, V> {
                 .map_or(true, |(k1, k2)| k1 > k2)
             {
                 Some((
-                    leaf.0.as_slice().to_vec(),
+                    Box::from(leaf.0.as_slice()),
                     &leaf.1.value,
                     &leaf.1.version,
                     &leaf.1.ts,
@@ -412,6 +412,49 @@ where
     }
 }
 
+impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K, V, R> {
+    type Item = (Box<[u8]>, &'a V, &'a u64, &'a u64);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(node) = self.forward.iters.last_mut() {
+            if let Some(other) = node.next() {
+                if let NodeType::Twig(twig) = &other.node_type {
+                    if self.range.contains(&twig.key) {
+                        self.handle_twig(twig);
+                        break;
+                    } else if is_key_out_of_range(&self.range, &twig.key) {
+                        self.forward.iters.clear();
+                    }
+                } else {
+                    handle_non_twig_node(
+                        &mut self.prefix,
+                        &mut self.prefix_lengths,
+                        &self.range,
+                        other,
+                        &mut self.forward.iters,
+                    );
+                }
+            } else {
+                self.forward.iters.pop();
+                // Restore the prefix to its previous state
+                if let Some(prefix_len_before) = self.prefix_lengths.pop() {
+                    self.prefix.truncate(prefix_len_before);
+                }
+            }
+        }
+
+        self.forward.leafs.pop_front().map(|leaf| {
+            (
+                Box::from(leaf.0.as_slice()),
+                &leaf.1.value,
+                &leaf.1.version,
+                &leaf.1.ts,
+            )
+        })
+    }
+}
+
 #[inline]
 fn is_key_out_of_range<K: KeyTrait, R>(range: &R, key: &K) -> bool
 where
@@ -489,49 +532,6 @@ where
     };
 
     within_start_bound && within_end_bound
-}
-
-impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K, V, R> {
-    type Item = (Vec<u8>, &'a V, &'a u64, &'a u64);
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(node) = self.forward.iters.last_mut() {
-            if let Some(other) = node.next() {
-                if let NodeType::Twig(twig) = &other.node_type {
-                    if self.range.contains(&twig.key) {
-                        self.handle_twig(twig);
-                        break;
-                    } else if is_key_out_of_range(&self.range, &twig.key) {
-                        self.forward.iters.clear();
-                    }
-                } else {
-                    handle_non_twig_node(
-                        &mut self.prefix,
-                        &mut self.prefix_lengths,
-                        &self.range,
-                        other,
-                        &mut self.forward.iters,
-                    );
-                }
-            } else {
-                self.forward.iters.pop();
-                // Restore the prefix to its previous state
-                if let Some(prefix_len_before) = self.prefix_lengths.pop() {
-                    self.prefix.truncate(prefix_len_before);
-                }
-            }
-        }
-
-        self.forward.leafs.pop_front().map(|leaf| {
-            (
-                leaf.0.as_slice().to_vec(),
-                &leaf.1.value,
-                &leaf.1.version,
-                &leaf.1.ts,
-            )
-        })
-    }
 }
 
 pub(crate) fn scan_node<K, V, R>(
@@ -1023,19 +1023,19 @@ mod tests {
         let results: Vec<_> = trie.range(range).collect();
 
         let expected = vec![
-            (b"blackberry".to_vec(), &4, &4, &0),
-            (b"blueberry".to_vec(), &5, &5, &0),
-            (b"cherry".to_vec(), &6, &6, &0),
-            (b"date".to_vec(), &7, &7, &0),
-            (b"fig".to_vec(), &8, &8, &0),
-            (b"grape".to_vec(), &9, &9, &0),
-            (b"kiwi".to_vec(), &10, &10, &0),
+            (Box::from(&b"blackberry"[..]), &4, &4, &0),
+            (Box::from(&b"blueberry"[..]), &5, &5, &0),
+            (Box::from(&b"cherry"[..]), &6, &6, &0),
+            (Box::from(&b"date"[..]), &7, &7, &0),
+            (Box::from(&b"fig"[..]), &8, &8, &0),
+            (Box::from(&b"grape"[..]), &9, &9, &0),
+            (Box::from(&b"kiwi"[..]), &10, &10, &0),
         ];
 
         assert_eq!(results, expected);
     }
 
-    fn setup_btree() -> BTreeMap<Vec<u8>, u16> {
+    fn setup_btree() -> BTreeMap<Box<[u8]>, u16> {
         let mut btree = BTreeMap::new();
         let words = vec![
             ("apple", 1u16),
@@ -1051,7 +1051,7 @@ mod tests {
         ];
 
         for (word, value) in words {
-            btree.insert(word.as_bytes().to_vec(), value);
+            btree.insert(Box::from(word.as_bytes()), value);
         }
 
         btree
@@ -1066,7 +1066,7 @@ mod tests {
         let range_end = VariableSizeKey::from_slice("kiwi".as_bytes());
         let trie_results: Vec<_> = trie.range(range_start..=range_end).collect();
 
-        let btree_range = b"berry".to_vec()..=b"kiwi".to_vec();
+        let btree_range = Box::from(&b"berry"[..])..=Box::from(&b"kiwi"[..]);
         let btree_results: Vec<_> = btree
             .range(btree_range)
             .map(|(k, v)| (k.clone(), *v))
@@ -1074,7 +1074,7 @@ mod tests {
 
         let trie_expected: Vec<_> = trie_results
             .iter()
-            .map(|(k, v, _, _)| (k.to_vec(), **v))
+            .map(|(k, v, _, _)| (k.clone(), **v))
             .collect();
 
         assert_eq!(trie_expected, btree_results);

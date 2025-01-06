@@ -1592,7 +1592,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     pub fn range<'a, R>(
         &'a self,
         range: R,
-    ) -> impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>
+    ) -> impl Iterator<Item = (Box<[u8]>, &'a V, &'a u64, &'a u64)>
     where
         R: RangeBounds<P> + 'a,
     {
@@ -1621,7 +1621,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     pub fn range_with_versions<'a, R>(
         &'a self,
         range: R,
-    ) -> impl Iterator<Item = (Vec<u8>, &'a V, &'a u64, &'a u64)>
+    ) -> impl Iterator<Item = (Box<[u8]>, &'a V, &'a u64, &'a u64)>
     where
         R: RangeBounds<P> + 'a,
     {
@@ -2933,7 +2933,7 @@ mod tests {
 
         // Assert that results are in expected order
         for (i, result) in results.iter().enumerate() {
-            let result_str = std::str::from_utf8(result.0.as_slice()).expect("Invalid UTF-8");
+            let result_str = std::str::from_utf8(&result.0).expect("Invalid UTF-8");
             assert_eq!(result_str, expected_order[i]);
         }
     }
@@ -3012,7 +3012,7 @@ mod tests {
             let value = rng.gen_range(1..100);
             let ts = rng.gen_range(1..100);
             tree.insert(&key, value, version, ts).unwrap();
-            inserted_data.push((key.to_slice().to_vec(), value, version, ts));
+            inserted_data.push((Box::from(key.to_slice()), value, version, ts));
         }
 
         // Iteration and verification
