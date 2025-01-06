@@ -2937,7 +2937,7 @@ mod tests {
 
         // Assert that results are in expected order
         for (i, result) in results.iter().enumerate() {
-            let result_str = std::str::from_utf8(&result.0).expect("Invalid UTF-8");
+            let result_str = std::str::from_utf8(result.0).expect("Invalid UTF-8");
             assert_eq!(result_str, expected_order[i]);
         }
     }

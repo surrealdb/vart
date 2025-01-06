@@ -821,7 +821,7 @@ mod tests {
         let query_range_end = from_be_bytes_key(query_range_end.as_slice());
 
         for (key, _value, version, _timestamp) in range_query_iter {
-            let key_num = from_be_bytes_key(&key);
+            let key_num = from_be_bytes_key(key);
             assert!(
                 key_num >= query_range_start && key_num <= query_range_end,
                 "Key {:?} is outside the query range",
@@ -946,7 +946,7 @@ mod tests {
         for (iter_key, iter_value, iter_version, _timestamp) in range_iter {
             // Check if the key and value are as expected
             assert_eq!(
-                from_be_bytes_key(&iter_key),
+                from_be_bytes_key(iter_key),
                 1,
                 "Key does not match the expected value"
             );
