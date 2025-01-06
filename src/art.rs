@@ -2423,7 +2423,7 @@ mod tests {
 
         let tree_iter = tree.iter();
         for tree_entry in tree_iter {
-            let k = from_be_bytes_key(&tree_entry.0);
+            let k = from_be_bytes_key(tree_entry.0);
             assert_eq!(expected as u64, k);
             let ts = tree_entry.3;
             assert_eq!(expected as u64, *ts);
@@ -2451,7 +2451,7 @@ mod tests {
 
         let tree_iter = tree.iter();
         for tree_entry in tree_iter {
-            let k = from_be_bytes_key(&tree_entry.0);
+            let k = from_be_bytes_key(tree_entry.0);
             assert_eq!(expected as u64, k);
             expected = expected.wrapping_add(1);
             len += 1;
@@ -3016,14 +3016,14 @@ mod tests {
             let value = rng.gen_range(1..100);
             let ts = rng.gen_range(1..100);
             tree.insert(&key, value, version, ts).unwrap();
-            inserted_data.push((Box::from(key.to_slice()), value, version, ts));
+            inserted_data.push((key.to_slice().to_vec(), value, version, ts));
         }
 
         // Iteration and verification
         let mut count = 0;
         let tree_iter = tree.iter();
         for (key, value, version, ts) in tree_iter {
-            assert!(inserted_data.contains(&(key, *value, *version, *ts)));
+            assert!(inserted_data.contains(&(key.to_vec(), *value, *version, *ts)));
             count += 1;
         }
 

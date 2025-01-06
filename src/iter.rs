@@ -103,7 +103,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iter<'a, P, V> {
 }
 
 impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
-    type Item = (Box<[u8]>, &'a V, &'a u64, &'a u64);
+    type Item = (&'a [u8], &'a V, &'a u64, &'a u64);
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -138,7 +138,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
                 .map_or(true, |(k1, k2)| k1 < k2)
             {
                 Some((
-                    Box::from(leaf.0.as_slice()),
+                    leaf.0.as_slice(),
                     &leaf.1.value,
                     &leaf.1.version,
                     &leaf.1.ts,
@@ -185,7 +185,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> DoubleEndedIterator for Iter<'a, P, V> {
                 .map_or(true, |(k1, k2)| k1 > k2)
             {
                 Some((
-                    Box::from(leaf.0.as_slice()),
+                    leaf.0.as_slice(),
                     &leaf.1.value,
                     &leaf.1.version,
                     &leaf.1.ts,
@@ -698,7 +698,7 @@ mod tests {
         let iter_with_versions = tree.iter_with_versions();
         let mut versions_map = HashMap::new();
         for (key, value, version, _timestamp) in iter_with_versions {
-            let key_num = from_be_bytes_key(&key);
+            let key_num = from_be_bytes_key(key);
             // Check if the key is correct (matches the value)
             assert_eq!(
                 key_num, *value as u64,
@@ -752,7 +752,7 @@ mod tests {
         let iter_with_versions = tree.iter_with_versions();
         let mut versions_map = HashMap::new();
         for (key, value, version, _timestamp) in iter_with_versions {
-            let key_num = from_be_bytes_key(&key);
+            let key_num = from_be_bytes_key(key);
             // Check if the key is correct (matches the value)
             assert_eq!(
                 key_num, *value as u64,
@@ -899,7 +899,7 @@ mod tests {
         for (iter_key, iter_value, iter_version, _timestamp) in iter {
             // Check if the key and value are as expected
             assert_eq!(
-                from_be_bytes_key(&iter_key),
+                from_be_bytes_key(iter_key),
                 1,
                 "Key does not match the expected value"
             );
