@@ -1592,7 +1592,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     pub fn range<'a, R>(
         &'a self,
         range: R,
-    ) -> impl Iterator<Item = (Box<[u8]>, &'a V, &'a u64, &'a u64)>
+    ) -> impl Iterator<Item = (&'a [u8], &'a V, &'a u64, &'a u64)>
     where
         R: RangeBounds<P> + 'a,
     {
@@ -1621,7 +1621,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     pub fn range_with_versions<'a, R>(
         &'a self,
         range: R,
-    ) -> impl Iterator<Item = (Box<[u8]>, &'a V, &'a u64, &'a u64)>
+    ) -> impl Iterator<Item = (&'a [u8], &'a V, &'a u64, &'a u64)>
     where
         R: RangeBounds<P> + 'a,
     {

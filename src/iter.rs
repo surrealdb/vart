@@ -413,7 +413,7 @@ where
 }
 
 impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K, V, R> {
-    type Item = (Box<[u8]>, &'a V, &'a u64, &'a u64);
+    type Item = (&'a [u8], &'a V, &'a u64, &'a u64);
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -446,7 +446,7 @@ impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K
 
         self.forward.leafs.pop_front().map(|leaf| {
             (
-                Box::from(leaf.0.as_slice()),
+                leaf.0.as_slice(),
                 &leaf.1.value,
                 &leaf.1.version,
                 &leaf.1.ts,
@@ -592,7 +592,7 @@ impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> QueryIterator<'a, K, V, R> {
     }
 }
 
-impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for QueryIterator<'a, K, V, R> {
+impl<K: KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for QueryIterator<'_, K, V, R> {
     type Item = (Box<[u8]>, Option<V>);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1036,13 +1036,13 @@ mod tests {
         let results: Vec<_> = trie.range(range).collect();
 
         let expected = vec![
-            (Box::from(&b"blackberry"[..]), &4, &4, &0),
-            (Box::from(&b"blueberry"[..]), &5, &5, &0),
-            (Box::from(&b"cherry"[..]), &6, &6, &0),
-            (Box::from(&b"date"[..]), &7, &7, &0),
-            (Box::from(&b"fig"[..]), &8, &8, &0),
-            (Box::from(&b"grape"[..]), &9, &9, &0),
-            (Box::from(&b"kiwi"[..]), &10, &10, &0),
+            (&b"blackberry"[..], &4, &4, &0),
+            (&b"blueberry"[..], &5, &5, &0),
+            (&b"cherry"[..], &6, &6, &0),
+            (&b"date"[..], &7, &7, &0),
+            (&b"fig"[..], &8, &8, &0),
+            (&b"grape"[..], &9, &9, &0),
+            (&b"kiwi"[..], &10, &10, &0),
         ];
 
         assert_eq!(results, expected);
@@ -1082,13 +1082,10 @@ mod tests {
         let btree_range = Box::from(&b"berry"[..])..=Box::from(&b"kiwi"[..]);
         let btree_results: Vec<_> = btree
             .range(btree_range)
-            .map(|(k, v)| (k.clone(), *v))
+            .map(|(k, v)| (k.as_ref(), *v))
             .collect();
 
-        let trie_expected: Vec<_> = trie_results
-            .iter()
-            .map(|(k, v, _, _)| (k.clone(), **v))
-            .collect();
+        let trie_expected: Vec<_> = trie_results.iter().map(|(k, v, _, _)| (*k, **v)).collect();
 
         assert_eq!(trie_expected, btree_results);
     }
