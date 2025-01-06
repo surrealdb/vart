@@ -4,6 +4,7 @@ use std::cmp::Ordering;
 use std::ops::RangeBounds;
 use std::sync::Arc;
 
+use crate::iter::IterItem;
 use crate::iter::{query_keys_at_node, scan_node, Iter, Range};
 use crate::node::{FlatNode, LeafValue, Node256, Node48, NodeTrait, TwigNode};
 use crate::{KeyTrait, TrieError};
@@ -690,7 +691,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     }
 
     #[inline]
-    pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<Arc<LeafValue<V>>> {
+    pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<&Arc<LeafValue<V>>> {
         let twig = if let NodeType::Twig(twig) = &self.node_type {
             // For a Twig node simply use its inner value.
             twig
@@ -1589,10 +1590,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// Returns a `Range` iterator instance that iterates over the key-value pairs within the given range.
     /// If the Trie is empty, an empty `Range` iterator is returned.
     ///
-    pub fn range<'a, R>(
-        &'a self,
-        range: R,
-    ) -> impl Iterator<Item = (&'a [u8], &'a V, &'a u64, &'a u64)>
+    pub fn range<'a, R>(&'a self, range: R) -> impl Iterator<Item = IterItem<'a, V>>
     where
         R: RangeBounds<P> + 'a,
     {
@@ -1618,10 +1616,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// # Returns
     ///
     /// Returns an iterator over the key-value pairs, versions, and timestamps within the specified range.
-    pub fn range_with_versions<'a, R>(
-        &'a self,
-        range: R,
-    ) -> impl Iterator<Item = (&'a [u8], &'a V, &'a u64, &'a u64)>
+    pub fn range_with_versions<'a, R>(&'a self, range: R) -> impl Iterator<Item = IterItem<'a, V>>
     where
         R: RangeBounds<P> + 'a,
     {
@@ -1717,7 +1712,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         &'a self,
         range: R,
         ts: u64,
-    ) -> impl Iterator<Item = (&'a [u8], V)> + 'a
+    ) -> impl Iterator<Item = IterItem<'a, V>> + 'a
     where
         R: RangeBounds<P> + 'a,
     {
@@ -1737,7 +1732,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// all the nodes. This version could be lesser than the current incremental version.
     pub fn max_version_in_trie(&self) -> u64 {
         self.iter()
-            .map(|(_, _, version, _)| *version)
+            .map(|(_, _, version, _)| version)
             .max()
             .unwrap_or(0)
     }
@@ -2426,7 +2421,7 @@ mod tests {
             let k = from_be_bytes_key(tree_entry.0);
             assert_eq!(expected as u64, k);
             let ts = tree_entry.3;
-            assert_eq!(expected as u64, *ts);
+            assert_eq!(expected as u64, ts);
             expected = expected.wrapping_add(1);
             len += 1;
         }
@@ -2873,7 +2868,7 @@ mod tests {
         let mut iter = tree.iter();
         let (_, value, version, _) = iter.next().unwrap();
         assert_eq!(value, &2);
-        assert_eq!(version, &2);
+        assert_eq!(version, 2);
 
         // Verify get at version 0 gives the latest version
         let (value, version, _) = tree.get(&key, 0).unwrap();
@@ -3023,7 +3018,7 @@ mod tests {
         let mut count = 0;
         let tree_iter = tree.iter();
         for (key, value, version, ts) in tree_iter {
-            assert!(inserted_data.contains(&(key.to_vec(), *value, *version, *ts)));
+            assert!(inserted_data.contains(&(key.to_vec(), *value, version, ts)));
             count += 1;
         }
 
@@ -3453,7 +3448,7 @@ mod tests {
 
         let values: Vec<_> = tree.scan_at_ts(RangeFull {}, 0).collect();
         assert_eq!(values.len(), 1);
-        assert_eq!(values[0].1, 42);
+        assert_eq!(values[0].1, &42);
     }
 
     #[test]

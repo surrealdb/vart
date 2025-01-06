@@ -8,6 +8,9 @@ use crate::KeyTrait;
 
 type NodeIterator<'a, P, V> = Box<dyn DoubleEndedIterator<Item = &'a Arc<Node<P, V>>> + 'a>;
 
+// A type alias for the Item type
+pub(crate) type IterItem<'a, V> = (&'a [u8], &'a V, u64, u64);
+
 /// An iterator over the nodes in the Trie.
 struct NodeIter<'a, P: KeyTrait, V: Clone> {
     node: NodeIterator<'a, P, V>,
@@ -103,7 +106,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iter<'a, P, V> {
 }
 
 impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
-    type Item = (&'a [u8], &'a V, &'a u64, &'a u64);
+    type Item = IterItem<'a, V>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -137,12 +140,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
                 .zip(self.last_backward_key)
                 .map_or(true, |(k1, k2)| k1 < k2)
             {
-                Some((
-                    leaf.0.as_slice(),
-                    &leaf.1.value,
-                    &leaf.1.version,
-                    &leaf.1.ts,
-                ))
+                Some((leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
             } else {
                 self.forward.iters.clear();
                 self.forward.leafs.clear();
@@ -184,12 +182,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> DoubleEndedIterator for Iter<'a, P, V> {
                 .zip(self.last_forward_key)
                 .map_or(true, |(k1, k2)| k1 > k2)
             {
-                Some((
-                    leaf.0.as_slice(),
-                    &leaf.1.value,
-                    &leaf.1.version,
-                    &leaf.1.ts,
-                ))
+                Some((leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
             } else {
                 self.backward.iters.clear();
                 self.backward.leafs.clear();
@@ -412,49 +405,6 @@ where
     }
 }
 
-impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K, V, R> {
-    type Item = (&'a [u8], &'a V, &'a u64, &'a u64);
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(node) = self.forward.iters.last_mut() {
-            if let Some(other) = node.next() {
-                if let NodeType::Twig(twig) = &other.node_type {
-                    if self.range.contains(&twig.key) {
-                        self.handle_twig(twig);
-                        break;
-                    } else if is_key_out_of_range(&self.range, &twig.key) {
-                        self.forward.iters.clear();
-                    }
-                } else {
-                    handle_non_twig_node(
-                        &mut self.prefix,
-                        &mut self.prefix_lengths,
-                        &self.range,
-                        other,
-                        &mut self.forward.iters,
-                    );
-                }
-            } else {
-                self.forward.iters.pop();
-                // Restore the prefix to its previous state
-                if let Some(prefix_len_before) = self.prefix_lengths.pop() {
-                    self.prefix.truncate(prefix_len_before);
-                }
-            }
-        }
-
-        self.forward.leafs.pop_front().map(|leaf| {
-            (
-                leaf.0.as_slice(),
-                &leaf.1.value,
-                &leaf.1.version,
-                &leaf.1.ts,
-            )
-        })
-    }
-}
-
 #[inline]
 fn is_key_out_of_range<K: KeyTrait, R>(range: &R, key: &K) -> bool
 where
@@ -534,17 +484,56 @@ where
     within_start_bound && within_end_bound
 }
 
+impl<'a, K: 'a + KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, K, V, R> {
+    type Item = IterItem<'a, V>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(node) = self.forward.iters.last_mut() {
+            if let Some(other) = node.next() {
+                if let NodeType::Twig(twig) = &other.node_type {
+                    if self.range.contains(&twig.key) {
+                        self.handle_twig(twig);
+                        break;
+                    } else if is_key_out_of_range(&self.range, &twig.key) {
+                        self.forward.iters.clear();
+                    }
+                } else {
+                    handle_non_twig_node(
+                        &mut self.prefix,
+                        &mut self.prefix_lengths,
+                        &self.range,
+                        other,
+                        &mut self.forward.iters,
+                    );
+                }
+            } else {
+                self.forward.iters.pop();
+                // Restore the prefix to its previous state
+                if let Some(prefix_len_before) = self.prefix_lengths.pop() {
+                    self.prefix.truncate(prefix_len_before);
+                }
+            }
+        }
+
+        self.forward
+            .leafs
+            .pop_front()
+            .map(|leaf| (leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
+    }
+}
+
 pub(crate) fn scan_node<'a, K, V, R>(
     node: Option<&'a Arc<Node<K, V>>>,
     range: R,
     query_type: QueryType,
-) -> impl Iterator<Item = (&'a [u8], V)> + 'a
+) -> impl Iterator<Item = IterItem<'a, V>> + 'a
 where
     K: KeyTrait + 'a,
     V: Clone,
     R: RangeBounds<K> + 'a,
 {
-    QueryIterator::new(node, range, query_type, true).filter_map(|(k, v_opt)| v_opt.map(|v| (k, v)))
+    QueryIterator::new(node, range, query_type)
 }
 
 pub(crate) fn query_keys_at_node<'a, K, V, R>(
@@ -557,7 +546,7 @@ where
     V: Clone,
     R: RangeBounds<K> + 'a,
 {
-    QueryIterator::new(node, range, query_type, false).map(|(k, _)| k)
+    QueryIterator::new(node, range, query_type).map(|(k, _, _, _)| k)
 }
 
 pub(crate) struct QueryIterator<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> {
@@ -566,16 +555,10 @@ pub(crate) struct QueryIterator<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> {
     prefix_lengths: Vec<usize>,
     range: R,
     query_type: QueryType,
-    include_values: bool,
 }
 
 impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> QueryIterator<'a, K, V, R> {
-    pub(crate) fn new(
-        node: Option<&'a Arc<Node<K, V>>>,
-        range: R,
-        query_type: QueryType,
-        include_values: bool,
-    ) -> Self {
+    pub(crate) fn new(node: Option<&'a Arc<Node<K, V>>>, range: R, query_type: QueryType) -> Self {
         let forward = node.map_or_else(ForwardIterState::empty, |n| {
             ForwardIterState::scan_at(n, &range, query_type)
         });
@@ -587,13 +570,12 @@ impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> QueryIterator<'a, K, V, R> {
             prefix_lengths: Vec::new(),
             range,
             query_type,
-            include_values,
         }
     }
 }
 
 impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for QueryIterator<'a, K, V, R> {
-    type Item = (&'a [u8], Option<V>);
+    type Item = IterItem<'a, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // First try to get item from the current node iteration
@@ -603,13 +585,12 @@ impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for QueryIterator<'a
                     if let NodeType::Twig(twig) = &other.node_type {
                         if self.range.contains(&twig.key) {
                             if let Some(leaf) = twig.get_leaf_by_query(self.query_type) {
-                                let key = twig.key.as_slice();
-                                let value = if self.include_values {
-                                    Some(leaf.value.clone())
-                                } else {
-                                    None
-                                };
-                                return Some((key, value));
+                                return Some((
+                                    twig.key.as_slice(),
+                                    &leaf.value,
+                                    leaf.version,
+                                    leaf.ts,
+                                ));
                             }
                         } else if is_key_out_of_range(&self.range, &twig.key) {
                             // stop iteration if the range end is exceeded
@@ -638,17 +619,10 @@ impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for QueryIterator<'a
         }
 
         // If no more nodes to iterate, try the leaf queue
-        if let Some(leaf) = self.forward.leafs.pop_front() {
-            let key = leaf.0.as_slice();
-            let value = if self.include_values {
-                Some(leaf.1.value.clone())
-            } else {
-                None
-            };
-            Some((key, value))
-        } else {
-            None
-        }
+        self.forward
+            .leafs
+            .pop_front()
+            .map(|leaf| (leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
     }
 }
 
@@ -708,7 +682,7 @@ mod tests {
             versions_map
                 .entry(key_num)
                 .or_insert_with(Vec::new)
-                .push(*version);
+                .push(version);
         }
 
         // Verify that each key has the correct number of versions and they are sequential
@@ -762,7 +736,7 @@ mod tests {
             versions_map
                 .entry(key_num)
                 .or_insert_with(Vec::new)
-                .push(*version);
+                .push(version);
         }
 
         // Verify that each key has the correct number of versions and they are in decreasing order
@@ -831,7 +805,7 @@ mod tests {
             versions_map
                 .entry(key_num)
                 .or_insert_with(Vec::new)
-                .push(*version);
+                .push(version);
         }
 
         // Verify that each key within the range has the correct number of versions and they are sequential
@@ -906,7 +880,7 @@ mod tests {
             assert_eq!(*iter_value, 1, "Value does not match the expected value");
 
             // Collect found versions
-            found_versions.push(*iter_version);
+            found_versions.push(iter_version);
         }
 
         // Verify that both versions of the key are found
@@ -953,7 +927,7 @@ mod tests {
             assert_eq!(*iter_value, 1, "Value does not match the expected value");
 
             // Collect found versions
-            found_versions.push(*iter_version);
+            found_versions.push(iter_version);
         }
 
         // Verify that both versions of the key are found in the range query
@@ -1036,13 +1010,13 @@ mod tests {
         let results: Vec<_> = trie.range(range).collect();
 
         let expected = vec![
-            (&b"blackberry"[..], &4, &4, &0),
-            (&b"blueberry"[..], &5, &5, &0),
-            (&b"cherry"[..], &6, &6, &0),
-            (&b"date"[..], &7, &7, &0),
-            (&b"fig"[..], &8, &8, &0),
-            (&b"grape"[..], &9, &9, &0),
-            (&b"kiwi"[..], &10, &10, &0),
+            (&b"blackberry"[..], &4, 4, 0),
+            (&b"blueberry"[..], &5, 5, 0),
+            (&b"cherry"[..], &6, 6, 0),
+            (&b"date"[..], &7, 7, 0),
+            (&b"fig"[..], &8, 8, 0),
+            (&b"grape"[..], &9, 9, 0),
+            (&b"kiwi"[..], &10, 10, 0),
         ];
 
         assert_eq!(results, expected);
@@ -1114,9 +1088,10 @@ mod tests {
             .map(|(k, v)| (k.clone(), *v))
             .collect();
 
+        // Fixed version - no explicit type annotation needed
         let trie_expected: Vec<_> = trie_results
             .iter()
-            .map(|(k, v, _, _)| (k.to_vec(), **v))
+            .map(|(k, v, _, _): &(&[u8], &u16, u64, u64)| (k.to_vec(), **v))
             .collect();
 
         assert_eq!(trie_expected, btree_results);
