@@ -534,109 +534,122 @@ where
     within_start_bound && within_end_bound
 }
 
-pub(crate) fn scan_node<K, V, R>(
-    node: Option<&Arc<Node<K, V>>>,
+pub(crate) fn scan_node<'a, K, V, R>(
+    node: Option<&'a Arc<Node<K, V>>>,
     range: R,
     query_type: QueryType,
-) -> Vec<(Vec<u8>, V)>
+) -> impl Iterator<Item = (Box<[u8]>, V)> + 'a
 where
-    K: KeyTrait,
+    K: KeyTrait + 'a,
     V: Clone,
-    R: RangeBounds<K>,
+    R: RangeBounds<K> + 'a,
 {
-    iterate(node, range, query_type, true)
-        .into_iter()
-        .filter_map(|(k, v_opt)| v_opt.map(|v| (k, v)))
-        .collect()
+    QueryIterator::new(node, range, query_type, true).filter_map(|(k, v_opt)| v_opt.map(|v| (k, v)))
 }
 
-pub(crate) fn query_keys_at_node<K, V, R>(
-    node: Option<&Arc<Node<K, V>>>,
+pub(crate) fn query_keys_at_node<'a, K, V, R>(
+    node: Option<&'a Arc<Node<K, V>>>,
     range: R,
     query_type: QueryType,
-) -> Vec<Vec<u8>>
+) -> impl Iterator<Item = Box<[u8]>> + 'a
 where
-    K: KeyTrait,
+    K: KeyTrait + 'a,
     V: Clone,
-    R: RangeBounds<K>,
+    R: RangeBounds<K> + 'a,
 {
-    iterate(node, range, query_type, false)
-        .into_iter()
-        .map(|(k, _)| k)
-        .collect()
+    QueryIterator::new(node, range, query_type, false).map(|(k, _)| k)
 }
 
-fn iterate<K, V, R>(
-    node: Option<&Arc<Node<K, V>>>,
+pub(crate) struct QueryIterator<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> {
+    forward: ForwardIterState<'a, K, V>,
+    prefix: Vec<u8>,
+    prefix_lengths: Vec<usize>,
     range: R,
     query_type: QueryType,
     include_values: bool,
-) -> Vec<(Vec<u8>, Option<V>)>
-where
-    K: KeyTrait,
-    V: Clone,
-    R: RangeBounds<K>,
-{
-    let mut results = Vec::new();
-    let mut forward = node.map_or_else(ForwardIterState::empty, |n| {
-        ForwardIterState::scan_at(n, &range, query_type)
-    });
+}
 
-    let mut prefix = forward.prefix.clone();
-    let mut prefix_lengths = Vec::new();
+impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> QueryIterator<'a, K, V, R> {
+    pub(crate) fn new(
+        node: Option<&'a Arc<Node<K, V>>>,
+        range: R,
+        query_type: QueryType,
+        include_values: bool,
+    ) -> Self {
+        let forward = node.map_or_else(ForwardIterState::empty, |n| {
+            ForwardIterState::scan_at(n, &range, query_type)
+        });
+        let prefix = forward.prefix.clone();
 
-    while let Some(node) = forward.iters.last_mut() {
-        let e = node.next();
-        match e {
-            Some(other) => {
-                if let NodeType::Twig(twig) = &other.node_type {
-                    if range.contains(&twig.key) {
-                        // Iterate through leaves of the twig
-                        if let Some(leaf) = twig.get_leaf_by_query(query_type) {
-                            let key = twig.key.as_slice().to_vec();
-                            if include_values {
-                                results.push((key, Some(leaf.value.clone())));
-                            } else {
-                                results.push((key, None));
+        Self {
+            forward,
+            prefix,
+            prefix_lengths: Vec::new(),
+            range,
+            query_type,
+            include_values,
+        }
+    }
+}
+
+impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for QueryIterator<'a, K, V, R> {
+    type Item = (Box<[u8]>, Option<V>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // First try to get item from the current node iteration
+        while let Some(node) = self.forward.iters.last_mut() {
+            match node.next() {
+                Some(other) => {
+                    if let NodeType::Twig(twig) = &other.node_type {
+                        if self.range.contains(&twig.key) {
+                            if let Some(leaf) = twig.get_leaf_by_query(self.query_type) {
+                                let key = twig.key.as_slice();
+                                let value = if self.include_values {
+                                    Some(leaf.value.clone())
+                                } else {
+                                    None
+                                };
+                                return Some((Box::from(key), value));
                             }
+                        } else if is_key_out_of_range(&self.range, &twig.key) {
+                            // stop iteration if the range end is exceeded
+                            self.forward.iters.clear();
+                            return None;
                         }
-                    } else if is_key_out_of_range(&range, &twig.key) {
-                        // stop iteration if the range end is exceeded
-                        forward.iters.clear()
+                    } else {
+                        handle_non_twig_node(
+                            &mut self.prefix,
+                            &mut self.prefix_lengths,
+                            &self.range,
+                            other,
+                            &mut self.forward.iters,
+                        );
                     }
-                } else {
-                    handle_non_twig_node(
-                        &mut prefix,
-                        &mut prefix_lengths,
-                        &range,
-                        other,
-                        &mut forward.iters,
-                    );
                 }
-            }
-            None => {
-                // Pop the iterator if no more elements
-                forward.iters.pop();
-                // Restore the prefix to its previous state
-                if let Some(prefix_len_before) = prefix_lengths.pop() {
-                    prefix.truncate(prefix_len_before);
+                None => {
+                    // Pop the iterator if no more elements
+                    self.forward.iters.pop();
+                    // Restore the prefix to its previous state
+                    if let Some(prefix_len_before) = self.prefix_lengths.pop() {
+                        self.prefix.truncate(prefix_len_before);
+                    }
                 }
             }
         }
-    }
 
-    // Iterate over all leafs in forward.leafs and append them to results
-    while let Some(leaf) = forward.leafs.pop_front() {
-        let key = leaf.0.as_slice().to_vec();
-        let value = if include_values {
-            Some(leaf.1.value.clone())
+        // If no more nodes to iterate, try the leaf queue
+        if let Some(leaf) = self.forward.leafs.pop_front() {
+            let key = leaf.0.as_slice();
+            let value = if self.include_values {
+                Some(leaf.1.value.clone())
+            } else {
+                None
+            };
+            Some((Box::from(key), value))
         } else {
             None
-        };
-        results.push((key, value));
+        }
     }
-
-    results
 }
 
 #[cfg(test)]

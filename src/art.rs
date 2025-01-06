@@ -1713,16 +1713,20 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         self.size == 0
     }
 
-    pub fn scan_at_ts<R>(&self, range: R, ts: u64) -> Vec<(Vec<u8>, V)>
+    pub fn scan_at_ts<'a, R>(
+        &'a self,
+        range: R,
+        ts: u64,
+    ) -> impl Iterator<Item = (Box<[u8]>, V)> + 'a
     where
-        R: RangeBounds<P>,
+        R: RangeBounds<P> + 'a,
     {
         scan_node(self.root.as_ref(), range, QueryType::LatestByTs(ts))
     }
 
-    pub fn keys_at_ts<R>(&self, range: R, ts: u64) -> Vec<Vec<u8>>
+    pub fn keys_at_ts<'a, R>(&'a self, range: R, ts: u64) -> impl Iterator<Item = Box<[u8]>> + 'a
     where
-        R: RangeBounds<P>,
+        R: RangeBounds<P> + 'a,
     {
         query_keys_at_node(self.root.as_ref(), range, QueryType::LatestByTs(ts))
     }
@@ -3333,7 +3337,7 @@ mod tests {
     #[test]
     fn scan_empty_range() {
         let tree: Tree<VariableSizeKey, i32> = Tree::new();
-        let result = tree.scan_at_ts(RangeFull {}, 0);
+        let result: Vec<_> = tree.scan_at_ts(RangeFull {}, 0).collect();
         assert!(result.is_empty());
     }
 
@@ -3347,7 +3351,7 @@ mod tests {
         }
         let range = VariableSizeKey::from_slice("key_1".as_bytes())
             ..=VariableSizeKey::from_slice("key_2".as_bytes());
-        let values = tree.scan_at_ts(range, 0);
+        let values: Vec<_> = tree.scan_at_ts(range, 0).collect();
         assert_eq!(values.len(), 2);
     }
 
@@ -3359,7 +3363,7 @@ mod tests {
             tree.insert(&VariableSizeKey::from_str(key).unwrap(), 1, 0, 0)
                 .unwrap();
         }
-        let values = tree.scan_at_ts(RangeFull {}, 0);
+        let values: Vec<_> = tree.scan_at_ts(RangeFull {}, 0).collect();
         assert_eq!(values.len(), keys.len());
     }
 
@@ -3373,7 +3377,7 @@ mod tests {
         }
         let range = VariableSizeKey::from_slice("key_4".as_bytes())
             ..VariableSizeKey::from_slice("key_5".as_bytes());
-        let values = tree.scan_at_ts(range, 0);
+        let values: Vec<_> = tree.scan_at_ts(range, 0).collect();
         assert!(values.is_empty());
     }
 
@@ -3391,7 +3395,7 @@ mod tests {
             .unwrap();
         }
         for (i, _) in keys.iter().enumerate() {
-            let values = tree.scan_at_ts(RangeFull {}, i as u64);
+            let values: Vec<_> = tree.scan_at_ts(RangeFull {}, i as u64).collect();
             assert_eq!(values.len(), i + 1);
         }
     }
@@ -3407,7 +3411,7 @@ mod tests {
                 .unwrap();
         }
 
-        let values = tree.scan_at_ts(RangeFull {}, num_keys);
+        let values: Vec<_> = tree.scan_at_ts(RangeFull {}, num_keys).collect();
         assert_eq!(values.len(), num_keys as usize); // Expect all keys to be visible
     }
 
@@ -3428,15 +3432,15 @@ mod tests {
         }
 
         // Scan at a timestamp before any insertions
-        let result_before = tree.scan_at_ts(RangeFull {}, 0);
+        let result_before: Vec<_> = tree.scan_at_ts(RangeFull {}, 0).collect();
         assert!(result_before.is_empty());
 
         // Scan between insertions
-        let result_mid = tree.scan_at_ts(RangeFull {}, 4);
+        let result_mid: Vec<_> = tree.scan_at_ts(RangeFull {}, 4).collect();
         assert_eq!(result_mid.len(), 2); // Expect first two keys to be visible
 
         // Scan after all insertions
-        let result_after = tree.scan_at_ts(RangeFull {}, 7);
+        let result_after: Vec<_> = tree.scan_at_ts(RangeFull {}, 7).collect();
         assert_eq!(result_after.len(), keys.len()); // Expect all keys to be visible
     }
 
@@ -3447,8 +3451,7 @@ mod tests {
         tree.insert(&VariableSizeKey::from_str("key_1").unwrap(), 42, 0, 0)
             .unwrap();
 
-        let values = tree.scan_at_ts(RangeFull {}, 0);
-
+        let values: Vec<_> = tree.scan_at_ts(RangeFull {}, 0).collect();
         assert_eq!(values.len(), 1);
         assert_eq!(values[0].1, 42);
     }
@@ -3456,7 +3459,7 @@ mod tests {
     #[test]
     fn keys_at_empty_range() {
         let tree: Tree<VariableSizeKey, i32> = Tree::new();
-        let keys = tree.keys_at_ts(RangeFull {}, 0);
+        let keys: Vec<_> = tree.keys_at_ts(RangeFull {}, 0).collect();
         assert!(keys.is_empty());
     }
 
@@ -3470,7 +3473,7 @@ mod tests {
         }
         let range = VariableSizeKey::from_slice("key_1".as_bytes())
             ..=VariableSizeKey::from_slice("key_2".as_bytes());
-        let keys = tree.keys_at_ts(range, 0);
+        let keys: Vec<_> = tree.keys_at_ts(range, 0).collect();
         assert_eq!(keys.len(), 2);
     }
 
@@ -3482,7 +3485,7 @@ mod tests {
             tree.insert(&VariableSizeKey::from_str(key).unwrap(), 1, 0, 0)
                 .unwrap();
         }
-        let keys = tree.keys_at_ts(RangeFull {}, 0);
+        let keys: Vec<_> = tree.keys_at_ts(RangeFull {}, 0).collect();
         assert_eq!(keys.len(), keys_to_insert.len());
     }
 
@@ -3496,7 +3499,7 @@ mod tests {
         }
         let range = VariableSizeKey::from("key_4".as_bytes().to_vec())
             ..VariableSizeKey::from("key_5".as_bytes().to_vec());
-        let keys = tree.keys_at_ts(range, 0);
+        let keys: Vec<_> = tree.keys_at_ts(range, 0).collect();
         assert!(keys.is_empty());
     }
 
@@ -3514,7 +3517,7 @@ mod tests {
             .unwrap();
         }
         for (i, _) in keys_to_insert.iter().enumerate() {
-            let keys = tree.keys_at_ts(RangeFull {}, i as u64);
+            let keys: Vec<_> = tree.keys_at_ts(RangeFull {}, i as u64).collect();
             assert_eq!(keys.len(), i + 1);
         }
     }
@@ -3531,7 +3534,7 @@ mod tests {
                 .unwrap();
         }
 
-        let keys = tree.keys_at_ts(RangeFull {}, num_keys);
+        let keys: Vec<_> = tree.keys_at_ts(RangeFull {}, num_keys).collect();
         assert_eq!(keys.len(), num_keys as usize); // Expect all keys to be visible
 
         // Sort the expected keys lexicographically
@@ -3539,7 +3542,7 @@ mod tests {
 
         // Verify each key is proper
         for (expected_key, key) in expected_keys.iter().zip(keys.iter()) {
-            assert_eq!(key, expected_key.to_slice());
+            assert_eq!(key.as_ref(), expected_key.to_slice());
         }
     }
 
@@ -3558,13 +3561,13 @@ mod tests {
             .unwrap();
         }
 
-        let keys_before = tree.keys_at_ts(RangeFull {}, 0);
+        let keys_before: Vec<_> = tree.keys_at_ts(RangeFull {}, 0).collect();
         assert!(keys_before.is_empty());
 
-        let keys_mid = tree.keys_at_ts(RangeFull {}, 4);
+        let keys_mid: Vec<_> = tree.keys_at_ts(RangeFull {}, 4).collect();
         assert_eq!(keys_mid.len(), 2); // Expect first two keys to be visible
 
-        let keys_after = tree.keys_at_ts(RangeFull {}, 7);
+        let keys_after: Vec<_> = tree.keys_at_ts(RangeFull {}, 7).collect();
         assert_eq!(keys_after.len(), keys_to_insert.len()); // Expect all keys to be visible
     }
 
@@ -3574,7 +3577,7 @@ mod tests {
         tree.insert(&VariableSizeKey::from_str("key_1").unwrap(), 42, 0, 0)
             .unwrap();
 
-        let keys = tree.keys_at_ts(RangeFull {}, 0);
+        let keys: Vec<_> = tree.keys_at_ts(RangeFull {}, 0).collect();
         assert_eq!(keys.len(), 1);
     }
 
