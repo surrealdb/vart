@@ -536,19 +536,6 @@ where
     QueryIterator::new(node, range, query_type)
 }
 
-pub(crate) fn query_keys_at_node<'a, K, V, R>(
-    node: Option<&'a Arc<Node<K, V>>>,
-    range: R,
-    query_type: QueryType,
-) -> impl Iterator<Item = &'a [u8]> + 'a
-where
-    K: KeyTrait + 'a,
-    V: Clone,
-    R: RangeBounds<K> + 'a,
-{
-    QueryIterator::new(node, range, query_type).map(|(k, _, _, _)| k)
-}
-
 pub(crate) struct QueryIterator<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> {
     forward: ForwardIterState<'a, K, V>,
     prefix: Vec<u8>,
