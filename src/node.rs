@@ -155,8 +155,8 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
 /// Helper functions for TwigNode for timestamp-based queries
 impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     #[inline]
-    pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<Arc<LeafValue<V>>> {
-        self.get_leaf_by_query_ref(query_type).cloned()
+    pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<&Arc<LeafValue<V>>> {
+        self.get_leaf_by_query_ref(query_type)
     }
 
     #[inline]
