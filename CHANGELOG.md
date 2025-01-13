@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.0] - 2025-01-13
+
+### Miscellaneous Tasks
+
+- Simplify control flow in prefix comparison (#75)
+
+### Release
+
+- 0.9.0
+
+### Remove
+
+- Keys_at_ts (#79)
+
 ## [0.7.0] - 2024-10-29
 
 ### Miscellaneous Tasks
