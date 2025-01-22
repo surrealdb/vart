@@ -28,6 +28,9 @@ jobs:
           chmod +x taplo
           sudo mv taplo /usr/bin/taplo
 
+      - name: Check semver
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+
       - name: Configure git
         run: |
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
