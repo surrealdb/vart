@@ -1,7 +1,7 @@
 use std::slice::from_ref;
 use std::sync::Arc;
 
-use crate::{art::QueryType, KeyTrait};
+use crate::{art::QueryType, iter::IterItem, KeyTrait};
 
 /*
     Immutable nodes
@@ -196,11 +196,10 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     }
 
     #[inline]
-    pub(crate) fn get_all_versions(&self) -> Vec<(V, u64, u64)> {
+    pub(crate) fn get_all_versions(&self) -> impl Iterator<Item = IterItem<'_, V>> {
         self.values
             .iter()
-            .map(|value| (value.value.clone(), value.version, value.ts))
-            .collect()
+            .map(move |value| (self.key.as_slice(), &value.value, value.version, value.ts))
     }
 
     #[inline]
@@ -1049,10 +1048,17 @@ mod tests {
         node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
-        let versions = node.get_all_versions();
+        let versions: Vec<_> = node.get_all_versions().collect();
         assert_eq!(versions.len(), 2);
-        assert_eq!(versions[0], (50, 200, 10));
-        assert_eq!(versions[1], (51, 201, 20));
+        let (_, value, version, ts) = &versions[0];
+        assert_eq!(**value, 50);
+        assert_eq!(*version, 200);
+        assert_eq!(*ts, 10);
+
+        let (_, value, version, ts) = &versions[1];
+        assert_eq!(**value, 51);
+        assert_eq!(*version, 201);
+        assert_eq!(*ts, 20);
     }
 
     #[test]

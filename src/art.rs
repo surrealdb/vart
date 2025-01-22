@@ -703,20 +703,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         twig.get_leaf_by_query(query_type)
     }
 
-    #[inline]
-    pub(crate) fn get_all_versions(&self) -> Option<Vec<(V, u64, u64)>> {
-        // Unwrap the NodeType::Twig to access the TwigNode instance.
-        let NodeType::Twig(twig) = &self.node_type else {
-            return None;
-        };
-
-        // Get the value from the TwigNode instance by the specified version.
-        let val = twig.get_all_versions();
-
-        // Return the retrieved key, value, and version as a tuple.
-        Some(val)
-    }
-
     #[allow(unused)]
     pub(crate) fn node_type_name(&self) -> String {
         match &self.node_type {
@@ -1108,11 +1094,20 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         Some((val.value.clone(), val.version, val.ts))
     }
 
-    pub(crate) fn get_version_history(
-        cur_node: &Node<P, V>,
+    pub(crate) fn get_version_history<'a>(
+        cur_node: &'a Node<P, V>,
         key: &P,
-    ) -> Option<Vec<(V, u64, u64)>> {
-        Self::navigate_to_node(cur_node, key).and_then(|cur_node| cur_node.get_all_versions())
+    ) -> impl Iterator<Item = IterItem<'a, V>> {
+        Self::navigate_to_node(cur_node, key)
+            .and_then(|node| {
+                if let NodeType::Twig(twig) = &node.node_type {
+                    Some(twig.get_all_versions())
+                } else {
+                    None
+                }
+            })
+            .into_iter()
+            .flatten()
     }
 
     /// Returns an iterator that iterates over child nodes of the current node.
@@ -1656,22 +1651,14 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     ///
     /// This function searches for all versions of the specified key in the Trie and returns
     /// a vector of tuples containing the value, version number, and timestamp for each version.
-    ///
-    /// # Arguments
-    ///
-    /// * `key`: A reference to the key to be searched.
-    ///
-    /// # Returns
-    ///
-    /// Returns an `Option` containing a vector of tuples `(V, u64, u64)` if the key is found:
-    /// - `V`: The value associated with the key.
-    /// - `u64`: The version number of the value.
-    /// - `u64`: The timestamp of the value.
-    ///
-    /// Returns `None` if the key is not found.
-    pub fn get_version_history(&self, key: &P) -> Option<Vec<(V, u64, u64)>> {
-        let root = self.root.as_ref()?;
-        Node::get_version_history(root, key)
+    pub fn get_version_history<'a>(
+        &'a self,
+        key: &'a P,
+    ) -> impl Iterator<Item = IterItem<'a, V>> + 'a {
+        self.root
+            .as_ref()
+            .into_iter()
+            .flat_map(move |root| Node::get_version_history(root, key))
     }
 
     /// Retrieves the value associated with the given key based on the specified query type.
@@ -3032,16 +3019,16 @@ mod tests {
         tree.insert(&key1, value1_1, 0, ts1_1).unwrap();
         tree.insert(&key1, value1_2, 0, ts1_2).unwrap();
 
-        let history1 = tree.get_version_history(&key1).unwrap();
+        let history1: Vec<_> = tree.get_version_history(&key1).collect();
         assert_eq!(history1.len(), 2);
 
-        let (retrieved_value1_1, v1_1, t1_1) = history1[0];
-        assert_eq!(retrieved_value1_1, value1_1);
+        let (_, retrieved_value1_1, v1_1, t1_1) = history1[0];
+        assert_eq!(retrieved_value1_1, &value1_1);
         assert_eq!(v1_1, 1);
         assert_eq!(t1_1, ts1_1);
 
-        let (retrieved_value1_2, v1_2, t1_2) = history1[1];
-        assert_eq!(retrieved_value1_2, value1_2);
+        let (_, retrieved_value1_2, v1_2, t1_2) = history1[1];
+        assert_eq!(retrieved_value1_2, &value1_2);
         assert_eq!(v1_2, 2);
         assert_eq!(t1_2, ts1_2);
 
@@ -3051,17 +3038,18 @@ mod tests {
         let ts2 = 300;
         tree.insert(&key2, value2, 0, ts2).unwrap();
 
-        let history2 = tree.get_version_history(&key2).unwrap();
+        let history2: Vec<_> = tree.get_version_history(&key2).collect();
         assert_eq!(history2.len(), 1);
 
-        let (retrieved_value2, v2, t2) = history2[0];
-        assert_eq!(retrieved_value2, value2);
+        let (_, retrieved_value2, v2, t2) = history2[0];
+        assert_eq!(retrieved_value2, &value2);
         assert_eq!(v2, 3);
         assert_eq!(t2, ts2);
 
-        // Scenario 3: Ensure no history for a non-existent key
+        // Scenario 3: Ensure empty iterator for a non-existent key
         let key3 = VariableSizeKey::from_str("non_existent_key").unwrap();
-        assert!(tree.get_version_history(&key3).is_none());
+        let history3: Vec<_> = tree.get_version_history(&key3).collect();
+        assert!(history3.is_empty());
     }
 
     #[test]
@@ -3294,9 +3282,12 @@ mod tests {
         tree.insert_or_replace(&key, 1, 10, 100).unwrap();
         tree.insert_or_replace(&key, 2, 20, 200).unwrap();
 
-        let history = tree.get_version_history(&key).unwrap();
+        let history: Vec<_> = tree.get_version_history(&key).collect();
         assert_eq!(history.len(), 1);
-        assert_eq!(history[0], (2, 20, 200));
+        let (_, value, version, ts) = &history[0];
+        assert_eq!(**value, 2);
+        assert_eq!(*version, 20);
+        assert_eq!(*ts, 200);
     }
 
     #[test]
@@ -3308,18 +3299,24 @@ mod tests {
         tree.insert_or_replace_unchecked(&key, 1, 10, 100).unwrap();
         tree.insert_or_replace_unchecked(&key, 2, 20, 200).unwrap();
 
-        let history = tree.get_version_history(&key).unwrap();
+        let history: Vec<_> = tree.get_version_history(&key).collect();
         assert_eq!(history.len(), 1);
-        assert_eq!(history[0], (2, 20, 200));
+        let (_, value, version, ts) = &history[0];
+        assert_eq!(**value, 2);
+        assert_eq!(*version, 20);
+        assert_eq!(*ts, 200);
 
         // Scenario 2: the new value has the smaller version and hence
         // is older than the one already in the tree. Discard the new
         // value.
         tree.insert_or_replace_unchecked(&key, 1, 1, 1).unwrap();
 
-        let history = tree.get_version_history(&key).unwrap();
+        let history: Vec<_> = tree.get_version_history(&key).collect();
         assert_eq!(history.len(), 1);
-        assert_eq!(history[0], (2, 20, 200));
+        let (_, value, version, ts) = &history[0];
+        assert_eq!(**value, 2);
+        assert_eq!(*version, 20);
+        assert_eq!(*ts, 200);
     }
 
     #[test]
