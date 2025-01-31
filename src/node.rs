@@ -1,6 +1,7 @@
 use std::slice::from_ref;
 use std::sync::Arc;
 
+use crate::version::{LeafValue, Leaves, LeavesTrait, LeavesType};
 use crate::{art::QueryType, KeyTrait};
 
 /*
@@ -22,119 +23,39 @@ pub(crate) trait NodeTrait<N> {
 pub(crate) struct TwigNode<K: KeyTrait, V: Clone> {
     pub(crate) prefix: K,
     pub(crate) key: K,
-    pub(crate) values: Vec<Arc<LeafValue<V>>>,
+    pub(crate) storage: Leaves<V>,
     pub(crate) version: u64, // Version for the twig node
 }
 
-// Timestamp-Version Ordering Constraint Explanation:
-// Given two internal keys associated with the same user key, represented as:
-// (key, version1, ts1) and (key, version2, ts2),
-// the following ordering constraints apply:
-//      - If version1 < version2, then it must be that ts1 <= ts2.
-//      - If ts1 < ts2, then it must be that version1 < version2.
-// This ensures a consistent ordering of versions based on their timestamps.
-//
-#[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord)]
-pub(crate) struct LeafValue<V: Clone> {
-    pub(crate) value: V,
-    pub(crate) version: u64,
-    pub(crate) ts: u64,
-}
-
-impl<V: Clone> LeafValue<V> {
-    pub(crate) fn new(value: V, version: u64, ts: u64) -> Self {
-        LeafValue { value, version, ts }
-    }
-}
-
 impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
-    pub(crate) fn new(prefix: K, key: K) -> Self {
+    pub(crate) fn new(prefix: K, key: K, leaves_type: LeavesType) -> Self {
         TwigNode {
             prefix,
             key,
-            values: Vec::new(),
+            storage: Leaves::new(leaves_type),
             version: 0,
         }
     }
 
-    fn insert_common(values: &mut Vec<Arc<LeafValue<V>>>, value: V, version: u64, ts: u64) {
-        let new_leaf_value = LeafValue::new(value, version, ts);
-
-        // Check if a LeafValue with the same version exists and update or insert accordingly
-        match values.binary_search_by(|v| v.version.cmp(&new_leaf_value.version)) {
-            Ok(index) => {
-                // If an entry with the same version and timestamp exists, just put the same value
-                if values[index].ts == ts {
-                    values[index] = Arc::new(new_leaf_value);
-                } else {
-                    // If an entry with the same version and different timestamp exists, add a new entry
-                    // Determine the direction to scan based on the comparison of timestamps
-                    let mut insert_position = index;
-                    if values[index].ts < ts {
-                        // Scan forward to find the first entry with a timestamp greater than the new entry's timestamp
-                        insert_position +=
-                            values[index..].iter().take_while(|v| v.ts <= ts).count();
-                    } else {
-                        // Scan backward to find the insertion point before the first entry with a timestamp less than the new entry's timestamp
-                        insert_position -= values[..index]
-                            .iter()
-                            .rev()
-                            .take_while(|v| v.ts >= ts)
-                            .count();
-                    }
-                    values.insert(insert_position, Arc::new(new_leaf_value));
-                }
-            }
-            Err(index) => {
-                // If no entry with the same version exists, insert the new value at the correct position
-                values.insert(index, Arc::new(new_leaf_value));
-            }
-        }
-    }
-
-    pub(crate) fn insert(&self, value: V, version: u64, ts: u64) -> TwigNode<K, V> {
-        let mut new_values = self.values.clone();
-        Self::insert_common(&mut new_values, value, version, ts);
+    pub(crate) fn insert(&self, value: V, version: u64, ts: u64) -> Self {
+        let mut new_storage = self.storage.clone();
+        new_storage.insert_mut(value, version, ts);
 
         TwigNode {
             prefix: self.prefix.clone(),
             key: self.key.clone(),
-            values: new_values,
+            storage: new_storage,
             version: version.max(self.version),
         }
     }
 
     pub(crate) fn insert_mut(&mut self, value: V, version: u64, ts: u64) {
-        Self::insert_common(&mut self.values, value, version, ts);
-        self.version = version.max(self.version); // Update LeafNode's version
-    }
-
-    pub(crate) fn replace_if_newer_mut(&mut self, value: V, version: u64, ts: u64) {
-        if version > self.version {
-            self.values.clear();
-            self.insert_mut(value, version, ts);
-        }
-    }
-
-    pub(crate) fn insert_or_replace(
-        &self,
-        value: V,
-        version: u64,
-        ts: u64,
-        replace: bool,
-    ) -> TwigNode<K, V> {
-        if replace {
-            // Create a replacement Twig node with the new value only.
-            let mut new_twig = TwigNode::new(self.prefix.clone(), self.key.clone());
-            new_twig.insert_mut(value, version, ts);
-            new_twig
-        } else {
-            self.insert(value, version, ts)
-        }
+        self.storage.insert_mut(value, version, ts);
+        self.version = version.max(self.version);
     }
 
     pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &Arc<LeafValue<V>>> {
-        self.values.iter()
+        self.storage.iter()
     }
 }
 
@@ -142,14 +63,6 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
 impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     #[inline]
     pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<&Arc<LeafValue<V>>> {
-        self.get_leaf_by_query_ref(query_type)
-    }
-
-    #[inline]
-    pub(crate) fn get_leaf_by_query_ref(
-        &self,
-        query_type: QueryType,
-    ) -> Option<&Arc<LeafValue<V>>> {
         match query_type {
             QueryType::LatestByVersion(version) => self.get_leaf_by_version(version),
             QueryType::LatestByTs(ts) => self.get_leaf_by_ts(ts),
@@ -162,39 +75,26 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
 
     #[inline]
     pub(crate) fn get_latest_leaf(&self) -> Option<&Arc<LeafValue<V>>> {
-        self.values.iter().max_by_key(|value| value.version)
+        self.storage.get_latest_leaf()
     }
 
     #[inline]
     pub(crate) fn get_leaf_by_version(&self, version: u64) -> Option<&Arc<LeafValue<V>>> {
-        self.values
-            .iter()
-            .filter(|value| value.version <= version)
-            .max_by_key(|value| value.version)
+        self.storage.get_leaf_by_version(version)
     }
 
     #[inline]
     pub(crate) fn get_leaf_by_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
-        self.values
-            .iter()
-            .filter(|value| value.ts <= ts)
-            .max_by_key(|value| value.ts)
+        self.storage.get_leaf_by_ts(ts)
     }
 
-    #[inline]
     pub(crate) fn get_all_versions(&self) -> Vec<(V, u64, u64)> {
-        self.values
-            .iter()
-            .map(|value| (value.value.clone(), value.version, value.ts))
-            .collect()
+        self.storage.get_all_versions()
     }
 
     #[inline]
     pub(crate) fn last_less_than_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
-        self.values
-            .iter()
-            .filter(|value| value.ts < ts)
-            .max_by_key(|value| value.ts)
+        self.storage.last_less_than_ts(ts)
     }
 
     #[inline]
@@ -204,18 +104,12 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
 
     #[inline]
     pub(crate) fn first_greater_than_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
-        self.values
-            .iter()
-            .filter(|value| value.ts > ts)
-            .min_by_key(|value| value.ts)
+        self.storage.first_greater_than_ts(ts)
     }
 
     #[inline]
     pub(crate) fn first_greater_or_equal_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
-        self.values
-            .iter()
-            .filter(|value| value.ts >= ts)
-            .min_by_key(|value| value.ts)
+        self.storage.first_greater_or_equal_ts(ts)
     }
 }
 
@@ -647,7 +541,7 @@ impl<P: KeyTrait, N> NodeTrait<N> for Node256<P, N> {
 
 #[cfg(test)]
 mod tests {
-    use crate::FixedSizeKey;
+    use crate::{version::LeavesType, FixedSizeKey};
 
     use super::{FlatNode, Node256, Node48, NodeTrait, TwigNode};
     use rand::prelude::SliceRandom;
@@ -842,35 +736,52 @@ mod tests {
         }
     }
 
+    fn setup_twig() -> TwigNode<FixedSizeKey<8>, usize> {
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
+        let node: TwigNode<FixedSizeKey<8>, usize> = TwigNode::<FixedSizeKey<8>, usize>::new(
+            dummy_prefix.clone(),
+            dummy_prefix,
+            LeavesType::Vector,
+        );
+        node
+    }
+
     #[test]
     fn twig_insert() {
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
+        let node = setup_twig();
 
-        let node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        // Test initial state
+        assert!(node.iter().next().is_none());
 
+        // Test after insert
         let new_node = node.insert(42, 123, 0);
-        assert_eq!(node.values.len(), 0);
-        assert_eq!(new_node.values.len(), 1);
-        assert_eq!(new_node.values[0].value, 42);
-        assert_eq!(new_node.values[0].version, 123);
+        assert!(node.iter().next().is_none()); // Original node unchanged
+
+        let mut new_iter = new_node.iter();
+        let leaf = new_iter.next().unwrap();
+        assert_eq!(leaf.version, 123);
+        assert_eq!(leaf.value, 42);
+        assert_eq!(leaf.ts, 0);
+        assert!(new_iter.next().is_none());
     }
 
     #[test]
     fn twig_insert_mut() {
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
-
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = setup_twig();
 
         node.insert_mut(42, 123, 0);
-        assert_eq!(node.values.len(), 1);
-        assert_eq!(node.values[0].value, 42);
-        assert_eq!(node.values[0].version, 123);
+
+        let mut iter = node.iter();
+        let leaf = iter.next().unwrap();
+        assert_eq!(leaf.version, 123);
+        assert_eq!(leaf.value, 42);
+        assert_eq!(leaf.ts, 0);
+        assert!(iter.next().is_none());
     }
 
     #[test]
     fn twig_get_latest_leaf() {
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = setup_twig();
         node.insert_mut(42, 123, 0);
         node.insert_mut(43, 124, 1);
         let latest_leaf = node.get_latest_leaf();
@@ -879,8 +790,7 @@ mod tests {
 
     #[test]
     fn twig_get_leaf_by_version() {
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = setup_twig();
         node.insert_mut(42, 123, 0);
         node.insert_mut(43, 124, 1);
         let leaf = node.get_leaf_by_version(123);
@@ -891,8 +801,7 @@ mod tests {
 
     #[test]
     fn twig_iter() {
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("foo".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = setup_twig();
         node.insert_mut(42, 123, 0);
         node.insert_mut(43, 124, 1);
         let mut iter = node.iter();
@@ -969,69 +878,82 @@ mod tests {
 
     #[test]
     fn twig_get_leaf_by_ts() {
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = setup_twig();
+
         // Inserting leaves with different timestamps
         node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
         // Test case 1: Retrieve leaf by exact timestamp
-        let leaf_by_ts = node.get_leaf_by_ts(10);
-        assert_eq!(leaf_by_ts.unwrap().value, 50);
+        let leaf = node.get_leaf_by_ts(10).unwrap();
+        assert_eq!(leaf.version, 200);
+        assert_eq!(leaf.value, 50);
+        assert_eq!(leaf.ts, 10);
 
         // Test case 2: Retrieve leaf by another exact timestamp
-        let leaf_by_ts = node.get_leaf_by_ts(20);
-        assert_eq!(leaf_by_ts.unwrap().value, 51);
+        let leaf = node.get_leaf_by_ts(20).unwrap();
+        assert_eq!(leaf.version, 201);
+        assert_eq!(leaf.value, 51);
+        assert_eq!(leaf.ts, 20);
 
         // Test case 3: Attempt to retrieve leaf by a non-existent timestamp
-        let leaf_by_ts = node.get_leaf_by_ts(30);
-        assert_eq!(leaf_by_ts.unwrap().value, 51);
+        let leaf = node.get_leaf_by_ts(30).unwrap();
+        assert_eq!(leaf.version, 201);
+        assert_eq!(leaf.value, 51);
+        assert_eq!(leaf.ts, 20);
     }
 
     #[test]
     fn test_get_leaf_by_version() {
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = setup_twig();
         node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
         // Exact version match
-        let leaf = node.get_leaf_by_version(200);
-        assert_eq!(leaf.unwrap().value, 50);
+        let leaf = node.get_leaf_by_version(200).unwrap();
+        assert_eq!(leaf.version, 200);
+        assert_eq!(leaf.value, 50);
+        assert_eq!(leaf.ts, 10);
 
         // Version not present, should get closest lower version
         let leaf = node.get_leaf_by_version(199);
         assert!(leaf.is_none());
 
         // Higher version, should get the highest available version
-        let leaf = node.get_leaf_by_version(202);
-        assert_eq!(leaf.unwrap().value, 51);
+        let leaf = node.get_leaf_by_version(202).unwrap();
+        assert_eq!(leaf.version, 201);
+        assert_eq!(leaf.value, 51);
+        assert_eq!(leaf.ts, 20);
     }
 
     #[test]
     fn test_get_leaf_by_ts() {
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = setup_twig();
         node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
         // Exact timestamp match
-        let leaf = node.get_leaf_by_ts(10);
-        assert_eq!(leaf.unwrap().value, 50);
+        let leaf = node.get_leaf_by_ts(10).unwrap();
+        assert_eq!(leaf.version, 200);
+        assert_eq!(leaf.value, 50);
+        assert_eq!(leaf.ts, 10);
 
         // Timestamp not present, should get closest lower timestamp
-        let leaf = node.get_leaf_by_ts(15);
-        assert_eq!(leaf.unwrap().value, 50);
+        let leaf = node.get_leaf_by_ts(15).unwrap();
+        assert_eq!(leaf.version, 200);
+        assert_eq!(leaf.value, 50);
+        assert_eq!(leaf.ts, 10);
 
         // Higher timestamp, should get the highest available timestamp
-        let leaf = node.get_leaf_by_ts(25);
-        assert_eq!(leaf.unwrap().value, 51);
+        let leaf = node.get_leaf_by_ts(25).unwrap();
+        assert_eq!(leaf.version, 201);
+        assert_eq!(leaf.value, 51);
+        assert_eq!(leaf.ts, 20);
     }
 
     #[test]
     fn test_get_all_versions() {
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = setup_twig();
         node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
@@ -1043,81 +965,97 @@ mod tests {
 
     #[test]
     fn test_last_less_than_ts() {
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = setup_twig();
         node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
         // Timestamp just below an existing timestamp
-        let leaf = node.last_less_than_ts(20);
-        assert_eq!(leaf.unwrap().value, 50);
+        let leaf = node.last_less_than_ts(20).unwrap();
+        assert_eq!(leaf.version, 200);
+        assert_eq!(leaf.value, 50);
+        assert_eq!(leaf.ts, 10);
 
         // Timestamp well below any existing timestamp
         let leaf = node.last_less_than_ts(5);
         assert!(leaf.is_none());
 
         // Timestamp above all existing timestamps
-        let leaf = node.last_less_than_ts(25);
-        assert_eq!(leaf.unwrap().value, 51);
+        let leaf = node.last_less_than_ts(25).unwrap();
+        assert_eq!(leaf.version, 201);
+        assert_eq!(leaf.value, 51);
+        assert_eq!(leaf.ts, 20);
     }
 
     #[test]
     fn test_last_less_or_equal_ts() {
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = setup_twig();
         node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
         // Exact timestamp
-        let leaf = node.last_less_or_equal_ts(10);
-        assert_eq!(leaf.unwrap().value, 50);
+        let leaf = node.last_less_or_equal_ts(10).unwrap();
+        assert_eq!(leaf.version, 200);
+        assert_eq!(leaf.value, 50);
+        assert_eq!(leaf.ts, 10);
 
         // Timestamp not present, should get closest lower timestamp
-        let leaf = node.last_less_or_equal_ts(15);
-        assert_eq!(leaf.unwrap().value, 50);
+        let leaf = node.last_less_or_equal_ts(15).unwrap();
+        assert_eq!(leaf.version, 200);
+        assert_eq!(leaf.value, 50);
+        assert_eq!(leaf.ts, 10);
 
         // Higher timestamp, should get the highest available timestamp
-        let leaf = node.last_less_or_equal_ts(25);
-        assert_eq!(leaf.unwrap().value, 51);
+        let leaf = node.last_less_or_equal_ts(25).unwrap();
+        assert_eq!(leaf.version, 201);
+        assert_eq!(leaf.value, 51);
+        assert_eq!(leaf.ts, 20);
     }
 
     #[test]
     fn test_first_greater_than_ts() {
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = setup_twig();
         node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
         // Timestamp just above an existing timestamp
-        let leaf = node.first_greater_than_ts(10);
-        assert_eq!(leaf.unwrap().value, 51);
+        let leaf = node.first_greater_than_ts(10).unwrap();
+        assert_eq!(leaf.version, 201);
+        assert_eq!(leaf.value, 51);
+        assert_eq!(leaf.ts, 20);
 
         // Timestamp well above any existing timestamp
         let leaf = node.first_greater_than_ts(25);
         assert!(leaf.is_none());
 
         // Timestamp below all existing timestamps
-        let leaf = node.first_greater_than_ts(5);
-        assert_eq!(leaf.unwrap().value, 50);
+        let leaf = node.first_greater_than_ts(5).unwrap();
+        assert_eq!(leaf.version, 200);
+        assert_eq!(leaf.value, 50);
+        assert_eq!(leaf.ts, 10);
     }
 
     #[test]
     fn test_first_greater_or_equal_ts() {
-        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key("bar".as_bytes());
-        let mut node = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+        let mut node = setup_twig();
         node.insert_mut(50, 200, 10); // value: 50, version: 200, timestamp: 10
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
         // Exact timestamp
-        let leaf = node.first_greater_or_equal_ts(10);
-        assert_eq!(leaf.unwrap().value, 50);
+        let leaf = node.first_greater_or_equal_ts(10).unwrap();
+        assert_eq!(leaf.version, 200);
+        assert_eq!(leaf.value, 50);
+        assert_eq!(leaf.ts, 10);
 
         // Timestamp not present, should get closest higher timestamp
-        let leaf = node.first_greater_or_equal_ts(15);
-        assert_eq!(leaf.unwrap().value, 51);
+        let leaf = node.first_greater_or_equal_ts(15).unwrap();
+        assert_eq!(leaf.version, 201);
+        assert_eq!(leaf.value, 51);
+        assert_eq!(leaf.ts, 20);
 
         // Lower timestamp, should get the lowest available timestamp
-        let leaf = node.first_greater_or_equal_ts(5);
-        assert_eq!(leaf.unwrap().value, 50);
+        let leaf = node.first_greater_or_equal_ts(5).unwrap();
+        assert_eq!(leaf.version, 200);
+        assert_eq!(leaf.value, 50);
+        assert_eq!(leaf.ts, 10);
     }
 }
