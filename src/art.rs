@@ -1742,10 +1742,11 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 mod tests {
     use super::Tree;
     use crate::art::QueryType;
-    use crate::{FixedSizeKey, VariableSizeKey};
+    use crate::{FixedSizeKey, KeyTrait, VariableSizeKey};
     use rand::{seq::SliceRandom, thread_rng, Rng};
     use std::ops::RangeFull;
     use std::str::FromStr;
+    use std::time::Instant;
 
     use rand::distributions::Alphanumeric;
     use std::fs::File;
@@ -3542,6 +3543,112 @@ mod tests {
 
             assert!(tree.remove(&key17));
             assert!(tree.remove(&key1));
+        }
+    }
+
+    #[ignore]
+    #[test]
+    fn test_insert_multiple_version_keys() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+
+        let start = std::time::Instant::now();
+
+        let num_keys = 100; // Number of keys
+        let versions_per_key = 10_000; // Number of versions per key
+
+        // Insert 100,00 versions for each of the 100 keys
+        for key_index in 0..num_keys {
+            let key = VariableSizeKey::from_str(&format!("key_{}", key_index)).unwrap();
+
+            for version_index in 0..versions_per_key {
+                let value = key_index * versions_per_key + version_index; // Value for versioning
+                tree.insert_unchecked(&key, value, 0, 0).unwrap();
+            }
+        }
+
+        println!(
+            "Insertion time for 1M key-version pairs: {:?}",
+            start.elapsed()
+        );
+    }
+
+    fn run_query_benchmark<P: KeyTrait + Clone, V: Clone>(
+        tree: &Tree<P, V>,
+        key: &P,
+        query_type: QueryType,
+        iterations: u32,
+    ) -> std::time::Duration {
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let _ = tree.get_value_by_query(key, query_type);
+        }
+        start.elapsed()
+    }
+
+    #[ignore]
+    #[test]
+    fn benchmark_timestamp_queries() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+
+        // Test parameters
+        let num_keys = 100;
+        let versions_per_key = 10_000;
+        let query_iterations = 1;
+
+        println!("Setting up test data...");
+        let setup_start = Instant::now();
+
+        // Insert test data with incrementing timestamps
+        for key_idx in 0..num_keys {
+            let key = VariableSizeKey::from_str(&format!("key_{}", key_idx)).unwrap();
+            for version in 0..versions_per_key {
+                let value = key_idx * versions_per_key + version;
+                let ts = version as u64; // Using version as timestamp for predictable ordering
+                tree.insert_unchecked(&key, value, version as u64, ts)
+                    .unwrap();
+            }
+        }
+
+        println!("Setup completed in {:?}", setup_start.elapsed());
+
+        // Select a key in the middle for testing
+        let test_key = VariableSizeKey::from_str("key_50").unwrap();
+        let mid_ts = (versions_per_key / 2) as u64;
+
+        // Test cases
+        let test_cases = vec![
+            ("LatestByVersion", QueryType::LatestByVersion(mid_ts)),
+            ("LatestByTs", QueryType::LatestByTs(mid_ts)),
+            ("LastLessThanTs", QueryType::LastLessThanTs(mid_ts)),
+            ("LastLessOrEqualTs", QueryType::LastLessOrEqualTs(mid_ts)),
+            ("FirstGreaterThanTs", QueryType::FirstGreaterThanTs(mid_ts)),
+            (
+                "FirstGreaterOrEqualTs",
+                QueryType::FirstGreaterOrEqualTs(mid_ts),
+            ),
+        ];
+
+        println!("\nRunning performance tests...");
+        println!(
+            "Each query type will be executed {} times",
+            query_iterations
+        );
+        println!(
+            "Tree contains {} keys with {} versions each",
+            num_keys, versions_per_key
+        );
+        println!("\nResults:");
+        println!(
+            "{:<25} {:<15} {:<10}",
+            "Query Type", "Total Time", "Avg Time"
+        );
+        println!("{}", "-".repeat(50));
+
+        for (name, query_type) in test_cases {
+            let duration = run_query_benchmark(&tree, &test_key, query_type, query_iterations);
+            let avg_duration = duration.div_f64(query_iterations as f64);
+
+            println!("{:<25} {:?} {:?}", name, duration, avg_duration);
         }
     }
 }

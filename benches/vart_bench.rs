@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::str::FromStr;
 use std::time::Instant;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
@@ -6,7 +7,7 @@ use rand::prelude::SliceRandom;
 use rand::SeedableRng;
 use rand::{rngs::StdRng, Rng};
 
-use vart::art::Tree;
+use vart::art::{QueryType, Tree};
 use vart::{FixedSizeKey, VariableSizeKey};
 
 fn seeded_rng(alter: u64) -> impl Rng {
@@ -330,6 +331,92 @@ fn variable_size_bulk_insert_mut(c: &mut Criterion) {
     group.finish();
 }
 
+fn setup_benchmark_tree(num_keys: usize, versions_per_key: usize) -> Tree<VariableSizeKey, i32> {
+    let mut tree = Tree::<VariableSizeKey, i32>::new();
+
+    for key_idx in 0..num_keys {
+        let key = VariableSizeKey::from_str(&format!("key_{}", key_idx)).unwrap();
+        for version in 0..versions_per_key {
+            let value = (key_idx * versions_per_key + version) as i32;
+            let ts = version as u64;
+            tree.insert_unchecked(&key, value, version as u64, ts)
+                .unwrap();
+        }
+    }
+
+    tree
+}
+
+fn bench_query_types(c: &mut Criterion) {
+    let num_keys = 100;
+    let versions_per_key = 10_000;
+    let tree = setup_benchmark_tree(num_keys, versions_per_key);
+    let test_key = VariableSizeKey::from_str("key_50").unwrap();
+    let mid_ts = (versions_per_key / 2) as u64;
+
+    let mut group = c.benchmark_group("tree_queries");
+    group.sample_size(10); // Adjust based on your needs
+    group.measurement_time(std::time::Duration::from_secs(5));
+
+    // Benchmark LatestByVersion
+    group.bench_with_input(
+        BenchmarkId::new("LatestByVersion", mid_ts),
+        &mid_ts,
+        |b, &ts| {
+            b.iter(|| black_box(tree.get_value_by_query(&test_key, QueryType::LatestByVersion(ts))))
+        },
+    );
+
+    // Benchmark LatestByTs
+    group.bench_with_input(BenchmarkId::new("LatestByTs", mid_ts), &mid_ts, |b, &ts| {
+        b.iter(|| black_box(tree.get_value_by_query(&test_key, QueryType::LatestByTs(ts))))
+    });
+
+    // Benchmark LastLessThanTs
+    group.bench_with_input(
+        BenchmarkId::new("LastLessThanTs", mid_ts),
+        &mid_ts,
+        |b, &ts| {
+            b.iter(|| black_box(tree.get_value_by_query(&test_key, QueryType::LastLessThanTs(ts))))
+        },
+    );
+
+    // Benchmark LastLessOrEqualTs
+    group.bench_with_input(
+        BenchmarkId::new("LastLessOrEqualTs", mid_ts),
+        &mid_ts,
+        |b, &ts| {
+            b.iter(|| {
+                black_box(tree.get_value_by_query(&test_key, QueryType::LastLessOrEqualTs(ts)))
+            })
+        },
+    );
+
+    // Benchmark FirstGreaterThanTs
+    group.bench_with_input(
+        BenchmarkId::new("FirstGreaterThanTs", mid_ts),
+        &mid_ts,
+        |b, &ts| {
+            b.iter(|| {
+                black_box(tree.get_value_by_query(&test_key, QueryType::FirstGreaterThanTs(ts)))
+            })
+        },
+    );
+
+    // Benchmark FirstGreaterOrEqualTs
+    group.bench_with_input(
+        BenchmarkId::new("FirstGreaterOrEqualTs", mid_ts),
+        &mid_ts,
+        |b, &ts| {
+            b.iter(|| {
+                black_box(tree.get_value_by_query(&test_key, QueryType::FirstGreaterOrEqualTs(ts)))
+            })
+        },
+    );
+
+    group.finish();
+}
+
 criterion_group!(delete_benches, seq_delete, rand_delete);
 criterion_group!(
     insert_benches,
@@ -342,10 +429,13 @@ criterion_group!(
 criterion_group!(read_benches, seq_get, rand_get, rand_get_str);
 criterion_group!(iter_benches, iter_benchmark);
 criterion_group!(range_benches, range_benchmark);
+criterion_group!(ts_benches, bench_query_types);
+
 criterion_main!(
     insert_benches,
     read_benches,
     delete_benches,
     iter_benches,
-    range_benches
+    range_benches,
+    // ts_benches
 );

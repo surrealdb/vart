@@ -1,5 +1,8 @@
 use std::sync::Arc;
-use std::{collections::BTreeMap, slice::from_ref};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    slice::from_ref,
+};
 
 use crate::{art::QueryType, KeyTrait};
 
@@ -23,6 +26,7 @@ pub(crate) struct TwigNode<K: KeyTrait, V: Clone> {
     pub(crate) prefix: K,
     pub(crate) key: K,
     pub(crate) values: BTreeMap<u64, Arc<LeafValue<V>>>, // version -> (value, ts),
+    pub(crate) ts_index: BTreeMap<u64, BTreeSet<u64>>,   // timestamp -> set of versions
     pub(crate) version: u64,                             // Version for the twig node
 }
 
@@ -52,39 +56,61 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
             prefix,
             key,
             values: BTreeMap::new(),
+            ts_index: BTreeMap::new(),
             version: 0,
         }
     }
 
     fn insert_common(
         values: &mut BTreeMap<u64, Arc<LeafValue<V>>>,
+        ts_index: &mut BTreeMap<u64, BTreeSet<u64>>,
         value: V,
         version: u64,
         ts: u64,
     ) {
         let new_leaf_value = Arc::new(LeafValue::new(value, ts));
+
+        // Update ts_index first
+        ts_index.entry(ts).or_default().insert(version);
+
+        // Then update values
         values.insert(version, new_leaf_value);
     }
 
     pub(crate) fn insert(&self, value: V, version: u64, ts: u64) -> Self {
         let mut new_values = self.values.clone();
-        Self::insert_common(&mut new_values, value, version, ts);
+        let mut new_ts_index = self.ts_index.clone();
+        Self::insert_common(&mut new_values, &mut new_ts_index, value, version, ts);
 
         TwigNode {
             prefix: self.prefix.clone(),
             key: self.key.clone(),
             values: new_values,
+            ts_index: new_ts_index,
             version: version.max(self.version),
         }
     }
 
     pub(crate) fn insert_mut(&mut self, value: V, version: u64, ts: u64) {
-        Self::insert_common(&mut self.values, value, version, ts);
-        self.version = version.max(self.version); // Update LeafNode's version
+        Self::insert_common(&mut self.values, &mut self.ts_index, value, version, ts);
+        self.version = version.max(self.version);
     }
 
     pub(crate) fn replace_if_newer_mut(&mut self, value: V, version: u64, ts: u64) {
         if version > self.version {
+            // Clean up old entries from ts_index
+            for leaf_value in self.values.values() {
+                if let Some(versions) = self.ts_index.get_mut(&leaf_value.ts) {
+                    for v in self.values.keys() {
+                        versions.remove(v);
+                    }
+                }
+            }
+
+            // Remove empty sets from ts_index
+            self.ts_index.retain(|_, versions| !versions.is_empty());
+
+            // Clear values and insert new one
             self.values.clear();
             self.insert_mut(value, version, ts);
         }
@@ -141,10 +167,17 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
 
     #[inline]
     pub(crate) fn get_leaf_by_ts(&self, ts: u64) -> Option<(&u64, &Arc<LeafValue<V>>)> {
-        self.values
-            .iter()
-            .filter(|(_, leaf)| leaf.ts <= ts)
-            .max_by_key(|entry| entry.1.ts)
+        // Find the largest timestamp <= ts and its versions
+        self.ts_index
+            .range(..=ts)
+            .next_back()
+            .and_then(|(_, versions)| {
+                // Get the highest version for this timestamp
+                versions.iter().next_back().and_then(|version| {
+                    // Get the corresponding value from values map
+                    self.values.get(version).map(|value| (version, value))
+                })
+            })
     }
 
     pub(crate) fn get_all_versions(&self) -> Vec<(V, u64, u64)> {
@@ -156,34 +189,46 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
 
     #[inline]
     pub(crate) fn last_less_than_ts(&self, ts: u64) -> Option<(&u64, &Arc<LeafValue<V>>)> {
-        self.values
-            .iter()
-            .filter(|(_, leaf)| leaf.ts < ts)
-            .max_by_key(|entry| entry.1.ts)
+        // Find the largest timestamp < ts
+        self.ts_index
+            .range(..ts)
+            .next_back()
+            .and_then(|(_, versions)| {
+                versions
+                    .iter()
+                    .next_back()
+                    .and_then(|version| self.values.get(version).map(|value| (version, value)))
+            })
     }
 
     #[inline]
     pub(crate) fn last_less_or_equal_ts(&self, ts: u64) -> Option<(&u64, &Arc<LeafValue<V>>)> {
-        self.values
-            .iter()
-            .filter(|(_, leaf)| leaf.ts <= ts)
-            .max_by_key(|entry| entry.1.ts)
+        self.get_leaf_by_ts(ts)
     }
 
     #[inline]
     pub(crate) fn first_greater_than_ts(&self, ts: u64) -> Option<(&u64, &Arc<LeafValue<V>>)> {
-        self.values
-            .iter()
-            .filter(|(_, leaf)| leaf.ts > ts)
-            .min_by_key(|entry| entry.1.ts)
+        // Find the smallest timestamp > ts
+        self.ts_index
+            .range((ts + 1)..)
+            .next()
+            .and_then(|(_, versions)| {
+                versions
+                    .iter()
+                    .next()
+                    .and_then(|version| self.values.get(version).map(|value| (version, value)))
+            })
     }
 
     #[inline]
     pub(crate) fn first_greater_or_equal_ts(&self, ts: u64) -> Option<(&u64, &Arc<LeafValue<V>>)> {
-        self.values
-            .iter()
-            .filter(|(_, leaf)| leaf.ts >= ts)
-            .min_by_key(|entry| entry.1.ts)
+        // Find the smallest timestamp >= ts
+        self.ts_index.range(ts..).next().and_then(|(_, versions)| {
+            versions
+                .iter()
+                .next()
+                .and_then(|version| self.values.get(version).map(|value| (version, value)))
+        })
     }
 }
 
