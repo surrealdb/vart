@@ -691,7 +691,10 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     }
 
     #[inline]
-    pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<&Arc<LeafValue<V>>> {
+    pub(crate) fn get_leaf_by_query(
+        &self,
+        query_type: QueryType,
+    ) -> Option<(&u64, &Arc<LeafValue<V>>)> {
         let twig = if let NodeType::Twig(twig) = &self.node_type {
             // For a Twig node simply use its inner value.
             twig
@@ -1104,8 +1107,8 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         query_type: QueryType,
     ) -> Option<(V, u64, u64)> {
         let cur_node = Self::navigate_to_node(cur_node, key)?;
-        let val = cur_node.get_leaf_by_query(query_type)?;
-        Some((val.value.clone(), val.version, val.ts))
+        let (version, val) = cur_node.get_leaf_by_query(query_type)?;
+        Some((val.value.clone(), *version, val.ts))
     }
 
     pub(crate) fn get_version_history(
