@@ -19,7 +19,6 @@ jobs:
     strategy:
       matrix:
         os: ["ubuntu-latest"]
-        features: ["btree_storage", "vector_storage"]
 
     runs-on: ${{ matrix.os }}
 
@@ -35,7 +34,7 @@ jobs:
                 ~/.cargo/registry/cache/
                 ~/.cargo/git/db/
                 target/
-            key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml', '.github/workflows/*.yml') }}-${{ matrix.features }}
+            key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml', '.github/workflows/*.yml') }}
 
       - uses: actions-rs/toolchain@v1
         with:
@@ -48,13 +47,21 @@ jobs:
         run: cargo install --debug --locked cargo-deny@0.15.1
 
       - name: Compile
-        run: cargo build --all-targets --no-default-features --features ${{ matrix.features }}
+        run: cargo build --all-targets --all-features
 
       - name: Run tests
-        run: cargo test --no-default-features --features ${{ matrix.features }}
+        run: make test
 
       - name: Clippy
-        run: cargo clippy --all --all-targets --no-default-features --features ${{ matrix.features }} -- -Dwarnings
+        run: cargo clippy --all --all-targets -- -Dwarnings
 
       - name: Format
         run: cargo fmt --all -- --check
+
+  semver:
+    name: semver
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check semver
+        uses: obi1kenobi/cargo-semver-checks-action@v2

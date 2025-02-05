@@ -1,14 +1,8 @@
 use std::slice::from_ref;
 use std::sync::Arc;
 
-use crate::version::{LeafValue, Storage};
+use crate::version::{LeafTuple, Leaves, LeavesTrait, LeavesType};
 use crate::{art::QueryType, KeyTrait};
-
-#[cfg(feature = "vector_storage")]
-use crate::version::VecStorage;
-
-#[cfg(feature = "btree_storage")]
-use crate::version::BTreeStorage;
 
 /*
     Immutable nodes
@@ -29,10 +23,7 @@ pub(crate) trait NodeTrait<N> {
 pub(crate) struct TwigNode<K: KeyTrait, V: Clone> {
     pub(crate) prefix: K,
     pub(crate) key: K,
-    #[cfg(feature = "btree_storage")]
-    pub(crate) storage: BTreeStorage<V>,
-    #[cfg(feature = "vector_storage")]
-    pub(crate) storage: VecStorage<V>,
+    pub(crate) storage: Leaves<V>,
     pub(crate) version: u64, // Version for the twig node
 }
 
@@ -41,7 +32,7 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         TwigNode {
             prefix,
             key,
-            storage: Storage::new(),
+            storage: Leaves::new(LeavesType::Vector),
             version: 0,
         }
     }
@@ -88,7 +79,7 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         }
     }
 
-    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = (u64, &Arc<LeafValue<V>>)> {
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = LeafTuple<'_, V>> + '_ {
         self.storage.iter()
     }
 }
@@ -96,10 +87,7 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
 /// Helper functions for TwigNode for timestamp-based queries
 impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     #[inline]
-    pub(crate) fn get_leaf_by_query(
-        &self,
-        query_type: QueryType,
-    ) -> Option<(u64, &Arc<LeafValue<V>>)> {
+    pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<LeafTuple<'_, V>> {
         match query_type {
             QueryType::LatestByVersion(version) => self.get_leaf_by_version(version),
             QueryType::LatestByTs(ts) => self.get_leaf_by_ts(ts),
@@ -111,17 +99,17 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     }
 
     #[inline]
-    pub(crate) fn get_latest_leaf(&self) -> Option<(u64, &Arc<LeafValue<V>>)> {
+    pub(crate) fn get_latest_leaf(&self) -> Option<LeafTuple<'_, V>> {
         self.storage.get_latest_leaf()
     }
 
     #[inline]
-    pub(crate) fn get_leaf_by_version(&self, version: u64) -> Option<(u64, &Arc<LeafValue<V>>)> {
+    pub(crate) fn get_leaf_by_version(&self, version: u64) -> Option<LeafTuple<'_, V>> {
         self.storage.get_leaf_by_version(version)
     }
 
     #[inline]
-    pub(crate) fn get_leaf_by_ts(&self, ts: u64) -> Option<(u64, &Arc<LeafValue<V>>)> {
+    pub(crate) fn get_leaf_by_ts(&self, ts: u64) -> Option<LeafTuple<'_, V>> {
         self.storage.get_leaf_by_ts(ts)
     }
 
@@ -130,22 +118,22 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     }
 
     #[inline]
-    pub(crate) fn last_less_than_ts(&self, ts: u64) -> Option<(u64, &Arc<LeafValue<V>>)> {
+    pub(crate) fn last_less_than_ts(&self, ts: u64) -> Option<LeafTuple<'_, V>> {
         self.storage.last_less_than_ts(ts)
     }
 
     #[inline]
-    pub(crate) fn last_less_or_equal_ts(&self, ts: u64) -> Option<(u64, &Arc<LeafValue<V>>)> {
+    pub(crate) fn last_less_or_equal_ts(&self, ts: u64) -> Option<LeafTuple<'_, V>> {
         self.get_leaf_by_ts(ts)
     }
 
     #[inline]
-    pub(crate) fn first_greater_than_ts(&self, ts: u64) -> Option<(u64, &Arc<LeafValue<V>>)> {
+    pub(crate) fn first_greater_than_ts(&self, ts: u64) -> Option<LeafTuple<'_, V>> {
         self.storage.first_greater_than_ts(ts)
     }
 
     #[inline]
-    pub(crate) fn first_greater_or_equal_ts(&self, ts: u64) -> Option<(u64, &Arc<LeafValue<V>>)> {
+    pub(crate) fn first_greater_or_equal_ts(&self, ts: u64) -> Option<LeafTuple<'_, V>> {
         self.storage.first_greater_or_equal_ts(ts)
     }
 }
@@ -786,10 +774,10 @@ mod tests {
         assert!(node.iter().next().is_none()); // Original node unchanged
 
         let mut new_iter = new_node.iter();
-        let (version, leaf) = new_iter.next().unwrap();
-        assert_eq!(version, 123);
-        assert_eq!(leaf.value, 42);
-        assert_eq!(leaf.ts, 0);
+        let leaf = new_iter.next().unwrap();
+        assert_eq!(leaf.0, 123);
+        assert_eq!(*leaf.2, 42);
+        assert_eq!(leaf.1, 0);
         assert!(new_iter.next().is_none());
     }
 
@@ -801,10 +789,10 @@ mod tests {
         node.insert_mut(42, 123, 0);
 
         let mut iter = node.iter();
-        let (version, leaf) = iter.next().unwrap();
-        assert_eq!(version, 123);
-        assert_eq!(leaf.value, 42);
-        assert_eq!(leaf.ts, 0);
+        let leaf = iter.next().unwrap();
+        assert_eq!(leaf.0, 123);
+        assert_eq!(*leaf.2, 42);
+        assert_eq!(leaf.1, 0);
         assert!(iter.next().is_none());
     }
 
@@ -816,10 +804,10 @@ mod tests {
         node.insert_mut(42, 123, 0);
         node.insert_mut(43, 124, 1);
 
-        let (version, leaf) = node.get_latest_leaf().unwrap();
-        assert_eq!(version, 124);
-        assert_eq!(leaf.value, 43);
-        assert_eq!(leaf.ts, 1);
+        let leaf = node.get_latest_leaf().unwrap();
+        assert_eq!(leaf.0, 124);
+        assert_eq!(*leaf.2, 43);
+        assert_eq!(leaf.1, 1);
     }
 
     #[test]
@@ -830,15 +818,16 @@ mod tests {
         node.insert_mut(42, 123, 0);
         node.insert_mut(43, 124, 1);
 
-        let (version, leaf) = node.get_leaf_by_version(123).unwrap();
-        assert_eq!(version, 123);
-        assert_eq!(leaf.value, 42);
-        assert_eq!(leaf.ts, 0);
+        let leaf = node.get_leaf_by_version(123).unwrap();
+        println!("{:?} {:?}", leaf.1, leaf.0);
+        assert_eq!(leaf.0, 123);
+        assert_eq!(*leaf.2, 42);
+        assert_eq!(leaf.1, 0);
 
-        let (version, leaf) = node.get_leaf_by_version(124).unwrap();
-        assert_eq!(version, 124);
-        assert_eq!(leaf.value, 43);
-        assert_eq!(leaf.ts, 1);
+        let leaf = node.get_leaf_by_version(124).unwrap();
+        assert_eq!(leaf.0, 124);
+        assert_eq!(*leaf.2, 43);
+        assert_eq!(leaf.1, 1);
     }
 
     #[test]
@@ -849,10 +838,7 @@ mod tests {
         node.insert_mut(42, 123, 0);
         node.insert_mut(43, 124, 1);
 
-        let mut values: Vec<_> = node
-            .iter()
-            .map(|(version, leaf)| (version, leaf.value))
-            .collect();
+        let mut values: Vec<_> = node.iter().map(|leaf| (leaf.0, *leaf.2)).collect();
         values.sort_by_key(|&(v, _)| v);
 
         assert_eq!(values, vec![(123, 42), (124, 43)]);
@@ -934,22 +920,22 @@ mod tests {
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
         // Test case 1: Retrieve leaf by exact timestamp
-        let (version, leaf) = node.get_leaf_by_ts(10).unwrap();
-        assert_eq!(version, 200);
-        assert_eq!(leaf.value, 50);
-        assert_eq!(leaf.ts, 10);
+        let leaf = node.get_leaf_by_ts(10).unwrap();
+        assert_eq!(leaf.0, 200);
+        assert_eq!(*leaf.2, 50);
+        assert_eq!(leaf.1, 10);
 
         // Test case 2: Retrieve leaf by another exact timestamp
-        let (version, leaf) = node.get_leaf_by_ts(20).unwrap();
-        assert_eq!(version, 201);
-        assert_eq!(leaf.value, 51);
-        assert_eq!(leaf.ts, 20);
+        let leaf = node.get_leaf_by_ts(20).unwrap();
+        assert_eq!(leaf.0, 201);
+        assert_eq!(*leaf.2, 51);
+        assert_eq!(leaf.1, 20);
 
         // Test case 3: Attempt to retrieve leaf by a non-existent timestamp
-        let (version, leaf) = node.get_leaf_by_ts(30).unwrap();
-        assert_eq!(version, 201);
-        assert_eq!(leaf.value, 51);
-        assert_eq!(leaf.ts, 20);
+        let leaf = node.get_leaf_by_ts(30).unwrap();
+        assert_eq!(leaf.0, 201);
+        assert_eq!(*leaf.2, 51);
+        assert_eq!(leaf.1, 20);
     }
 
     #[test]
@@ -960,20 +946,20 @@ mod tests {
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
         // Exact version match
-        let (version, leaf) = node.get_leaf_by_version(200).unwrap();
-        assert_eq!(version, 200);
-        assert_eq!(leaf.value, 50);
-        assert_eq!(leaf.ts, 10);
+        let leaf = node.get_leaf_by_version(200).unwrap();
+        assert_eq!(leaf.0, 200);
+        assert_eq!(*leaf.2, 50);
+        assert_eq!(leaf.1, 10);
 
         // Version not present, should get closest lower version
         let leaf = node.get_leaf_by_version(199);
         assert!(leaf.is_none());
 
         // Higher version, should get the highest available version
-        let (version, leaf) = node.get_leaf_by_version(202).unwrap();
-        assert_eq!(version, 201);
-        assert_eq!(leaf.value, 51);
-        assert_eq!(leaf.ts, 20);
+        let leaf = node.get_leaf_by_version(202).unwrap();
+        assert_eq!(leaf.0, 201);
+        assert_eq!(*leaf.2, 51);
+        assert_eq!(leaf.1, 20);
     }
 
     #[test]
@@ -984,22 +970,22 @@ mod tests {
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
         // Exact timestamp match
-        let (version, leaf) = node.get_leaf_by_ts(10).unwrap();
-        assert_eq!(version, 200);
-        assert_eq!(leaf.value, 50);
-        assert_eq!(leaf.ts, 10);
+        let leaf = node.get_leaf_by_ts(10).unwrap();
+        assert_eq!(leaf.0, 200);
+        assert_eq!(*leaf.2, 50);
+        assert_eq!(leaf.1, 10);
 
         // Timestamp not present, should get closest lower timestamp
-        let (version, leaf) = node.get_leaf_by_ts(15).unwrap();
-        assert_eq!(version, 200);
-        assert_eq!(leaf.value, 50);
-        assert_eq!(leaf.ts, 10);
+        let leaf = node.get_leaf_by_ts(15).unwrap();
+        assert_eq!(leaf.0, 200);
+        assert_eq!(*leaf.2, 50);
+        assert_eq!(leaf.1, 10);
 
         // Higher timestamp, should get the highest available timestamp
-        let (version, leaf) = node.get_leaf_by_ts(25).unwrap();
-        assert_eq!(version, 201);
-        assert_eq!(leaf.value, 51);
-        assert_eq!(leaf.ts, 20);
+        let leaf = node.get_leaf_by_ts(25).unwrap();
+        assert_eq!(leaf.0, 201);
+        assert_eq!(*leaf.2, 51);
+        assert_eq!(leaf.1, 20);
     }
 
     #[test]
@@ -1023,20 +1009,20 @@ mod tests {
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
         // Timestamp just below an existing timestamp
-        let (version, leaf) = node.last_less_than_ts(20).unwrap();
-        assert_eq!(version, 200);
-        assert_eq!(leaf.value, 50);
-        assert_eq!(leaf.ts, 10);
+        let leaf = node.last_less_than_ts(20).unwrap();
+        assert_eq!(leaf.0, 200);
+        assert_eq!(*leaf.2, 50);
+        assert_eq!(leaf.1, 10);
 
         // Timestamp well below any existing timestamp
         let leaf = node.last_less_than_ts(5);
         assert!(leaf.is_none());
 
         // Timestamp above all existing timestamps
-        let (version, leaf) = node.last_less_than_ts(25).unwrap();
-        assert_eq!(version, 201);
-        assert_eq!(leaf.value, 51);
-        assert_eq!(leaf.ts, 20);
+        let leaf = node.last_less_than_ts(25).unwrap();
+        assert_eq!(leaf.0, 201);
+        assert_eq!(*leaf.2, 51);
+        assert_eq!(leaf.1, 20);
     }
 
     #[test]
@@ -1047,22 +1033,22 @@ mod tests {
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
         // Exact timestamp
-        let (version, leaf) = node.last_less_or_equal_ts(10).unwrap();
-        assert_eq!(version, 200);
-        assert_eq!(leaf.value, 50);
-        assert_eq!(leaf.ts, 10);
+        let leaf = node.last_less_or_equal_ts(10).unwrap();
+        assert_eq!(leaf.0, 200);
+        assert_eq!(*leaf.2, 50);
+        assert_eq!(leaf.1, 10);
 
         // Timestamp not present, should get closest lower timestamp
-        let (version, leaf) = node.last_less_or_equal_ts(15).unwrap();
-        assert_eq!(version, 200);
-        assert_eq!(leaf.value, 50);
-        assert_eq!(leaf.ts, 10);
+        let leaf = node.last_less_or_equal_ts(15).unwrap();
+        assert_eq!(leaf.0, 200);
+        assert_eq!(*leaf.2, 50);
+        assert_eq!(leaf.1, 10);
 
         // Higher timestamp, should get the highest available timestamp
-        let (version, leaf) = node.last_less_or_equal_ts(25).unwrap();
-        assert_eq!(version, 201);
-        assert_eq!(leaf.value, 51);
-        assert_eq!(leaf.ts, 20);
+        let leaf = node.last_less_or_equal_ts(25).unwrap();
+        assert_eq!(leaf.0, 201);
+        assert_eq!(*leaf.2, 51);
+        assert_eq!(leaf.1, 20);
     }
 
     #[test]
@@ -1073,20 +1059,20 @@ mod tests {
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
         // Timestamp just above an existing timestamp
-        let (version, leaf) = node.first_greater_than_ts(10).unwrap();
-        assert_eq!(version, 201);
-        assert_eq!(leaf.value, 51);
-        assert_eq!(leaf.ts, 20);
+        let leaf = node.first_greater_than_ts(10).unwrap();
+        assert_eq!(leaf.0, 201);
+        assert_eq!(*leaf.2, 51);
+        assert_eq!(leaf.1, 20);
 
         // Timestamp well above any existing timestamp
         let leaf = node.first_greater_than_ts(25);
         assert!(leaf.is_none());
 
         // Timestamp below all existing timestamps
-        let (version, leaf) = node.first_greater_than_ts(5).unwrap();
-        assert_eq!(version, 200);
-        assert_eq!(leaf.value, 50);
-        assert_eq!(leaf.ts, 10);
+        let leaf = node.first_greater_than_ts(5).unwrap();
+        assert_eq!(leaf.0, 200);
+        assert_eq!(*leaf.2, 50);
+        assert_eq!(leaf.1, 10);
     }
 
     #[test]
@@ -1097,21 +1083,21 @@ mod tests {
         node.insert_mut(51, 201, 20); // value: 51, version: 201, timestamp: 20
 
         // Exact timestamp
-        let (version, leaf) = node.first_greater_or_equal_ts(10).unwrap();
-        assert_eq!(version, 200);
-        assert_eq!(leaf.value, 50);
-        assert_eq!(leaf.ts, 10);
+        let leaf = node.first_greater_or_equal_ts(10).unwrap();
+        assert_eq!(leaf.0, 200);
+        assert_eq!(*leaf.2, 50);
+        assert_eq!(leaf.1, 10);
 
         // Timestamp not present, should get closest higher timestamp
-        let (version, leaf) = node.first_greater_or_equal_ts(15).unwrap();
-        assert_eq!(version, 201);
-        assert_eq!(leaf.value, 51);
-        assert_eq!(leaf.ts, 20);
+        let leaf = node.first_greater_or_equal_ts(15).unwrap();
+        assert_eq!(leaf.0, 201);
+        assert_eq!(*leaf.2, 51);
+        assert_eq!(leaf.1, 20);
 
         // Lower timestamp, should get the lowest available timestamp
-        let (version, leaf) = node.first_greater_or_equal_ts(5).unwrap();
-        assert_eq!(version, 200);
-        assert_eq!(leaf.value, 50);
-        assert_eq!(leaf.ts, 10);
+        let leaf = node.first_greater_or_equal_ts(5).unwrap();
+        assert_eq!(leaf.0, 200);
+        assert_eq!(*leaf.2, 50);
+        assert_eq!(leaf.1, 10);
     }
 }

@@ -10,10 +10,5 @@ check:
 	cargo clippy --all --all-targets
 
 # This command runs the tests with backtrace enabled.
-test: check test-btree test-vector
-
-test-btree:
-	RUST_BACKTRACE=1 cargo test --no-default-features --features btree_storage
-
-test-vector:
-	RUST_BACKTRACE=1 cargo test --no-default-features --features vector_storage
+test: check
+	RUST_BACKTRACE=1 cargo test
