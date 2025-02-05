@@ -46,22 +46,6 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         }
     }
 
-    // fn insert_common(
-    //     values: &mut BTreeMap<u64, Arc<LeafValue<V>>>,
-    //     ts_index: &mut BTreeMap<u64, BTreeSet<u64>>,
-    //     value: V,
-    //     version: u64,
-    //     ts: u64,
-    // ) {
-    //     let new_leaf_value = Arc::new(LeafValue::new(value, ts));
-
-    //     // Update ts_index first
-    //     ts_index.entry(ts).or_default().insert(version);
-
-    //     // Then update values
-    //     values.insert(version, new_leaf_value);
-    // }
-
     pub(crate) fn insert(&self, value: V, version: u64, ts: u64) -> Self {
         let mut new_storage = self.storage.clone();
         new_storage.insert_mut(value, version, ts);

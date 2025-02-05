@@ -25,7 +25,7 @@ criterion = "0.5.1"
 divan = "0.1.14"
 
 [features]
-default = ["btree_storage"]
+default = ["vector_storage"]
 btree_storage = []
 vector_storage = []
 

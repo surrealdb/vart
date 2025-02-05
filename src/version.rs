@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 // LeafValue implementations for both storage types
 #[cfg(feature = "btree_storage")]
-#[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord)]
+#[derive(Clone)]
 pub(crate) struct LeafValue<V: Clone> {
     pub(crate) value: V,
     pub(crate) ts: u64,
@@ -20,7 +20,7 @@ pub(crate) struct LeafValue<V: Clone> {
 //      - If ts1 < ts2, then it must be that version1 < version2.
 // This ensures a consistent ordering of versions based on their timestamps.
 //
-#[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord)]
+#[derive(Clone)]
 pub(crate) struct LeafValue<V: Clone> {
     pub(crate) value: V,
     pub(crate) version: u64,
@@ -202,18 +202,25 @@ impl<V: Clone> Storage<V> for VecStorage<V> {
 
     fn insert_common(&mut self, value: V, version: u64, ts: u64) {
         let new_leaf_value = LeafValue::new(value, version, ts);
+
+        // Check if a LeafValue with the same version exists and update or insert accordingly
         match self.values.binary_search_by(|v| v.version.cmp(&version)) {
             Ok(index) => {
+                // If an entry with the same version and timestamp exists, just put the same value
                 if self.values[index].ts == ts {
                     self.values[index] = Arc::new(new_leaf_value);
                 } else {
+                    // If an entry with the same version and different timestamp exists, add a new entry
+                    // Determine the direction to scan based on the comparison of timestamps
                     let mut insert_position = index;
                     if self.values[index].ts < ts {
+                        // Scan forward to find the first entry with a timestamp greater than the new entry's timestamp
                         insert_position += self.values[index..]
                             .iter()
                             .take_while(|v| v.ts <= ts)
                             .count();
                     } else {
+                        // Scan backward to find the insertion point before the first entry with a timestamp less than the new entry's timestamp
                         insert_position -= self.values[..index]
                             .iter()
                             .rev()
@@ -225,6 +232,7 @@ impl<V: Clone> Storage<V> for VecStorage<V> {
                 }
             }
             Err(index) => {
+                // If no entry with the same version exists, insert the new value at the correct position
                 self.values.insert(index, Arc::new(new_leaf_value));
             }
         }
@@ -340,7 +348,7 @@ impl<'a, V: Clone> Iterator for VecStorageIterator<'a, V> {
 }
 
 #[cfg(feature = "vector_storage")]
-impl<'a, V: Clone> DoubleEndedIterator for VecStorageIterator<'a, V> {
+impl<V: Clone> DoubleEndedIterator for VecStorageIterator<'_, V> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.position < self.values.len() {
             let value = &self.values[self.values.len() - 1 - self.position];
