@@ -3,7 +3,8 @@ use std::ops::RangeBounds;
 use std::sync::Arc;
 
 use crate::art::{Node, NodeType, QueryType};
-use crate::node::{LeafValue, TwigNode};
+use crate::node::TwigNode;
+use crate::version::LeafValue;
 use crate::KeyTrait;
 
 type NodeIterator<'a, P, V> = Box<dyn DoubleEndedIterator<Item = &'a Arc<Node<P, V>>> + 'a>;
@@ -120,14 +121,10 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
                     if let NodeType::Twig(twig) = &other.node_type {
                         if self.forward.is_versioned {
                             for (version, leaf) in twig.iter() {
-                                self.forward
-                                    .leafs
-                                    .push_back(Leaf(&twig.key, *version, leaf));
+                                self.forward.leafs.push_back(Leaf(&twig.key, version, leaf));
                             }
                         } else if let Some((version, leaf)) = twig.get_latest_leaf() {
-                            self.forward
-                                .leafs
-                                .push_back(Leaf(&twig.key, *version, leaf));
+                            self.forward.leafs.push_back(Leaf(&twig.key, version, leaf));
                         }
                         break;
                     } else {
@@ -166,10 +163,10 @@ impl<'a, P: KeyTrait + 'a, V: Clone> DoubleEndedIterator for Iter<'a, P, V> {
                     if let NodeType::Twig(twig) = &other.node_type {
                         if self.backward.is_versioned {
                             for (version, leaf) in twig.iter() {
-                                self.backward.leafs.push(Leaf(&twig.key, *version, leaf));
+                                self.backward.leafs.push(Leaf(&twig.key, version, leaf));
                             }
                         } else if let Some((version, leaf)) = twig.get_latest_leaf() {
-                            self.backward.leafs.push(Leaf(&twig.key, *version, leaf));
+                            self.backward.leafs.push(Leaf(&twig.key, version, leaf));
                         }
                         break;
                     } else {
@@ -218,10 +215,10 @@ impl<'a, P: KeyTrait + 'a, V: Clone> ForwardIterState<'a, P, V> {
         if let NodeType::Twig(twig) = &node.node_type {
             if is_versioned {
                 for (version, leaf) in twig.iter() {
-                    leafs.push_back(Leaf(&twig.key, *version, leaf));
+                    leafs.push_back(Leaf(&twig.key, version, leaf));
                 }
             } else if let Some((version, leaf)) = twig.get_latest_leaf() {
-                leafs.push_back(Leaf(&twig.key, *version, leaf));
+                leafs.push_back(Leaf(&twig.key, version, leaf));
             }
         } else {
             iters.push(NodeIter::new(node.iter()));
@@ -254,10 +251,10 @@ impl<'a, P: KeyTrait + 'a, V: Clone> ForwardIterState<'a, P, V> {
             if range.contains(&twig.key) {
                 if is_versioned {
                     for (version, leaf) in twig.iter() {
-                        leafs.push_back(Leaf(&twig.key, *version, leaf));
+                        leafs.push_back(Leaf(&twig.key, version, leaf));
                     }
                 } else if let Some((version, leaf)) = twig.get_latest_leaf() {
-                    leafs.push_back(Leaf(&twig.key, *version, leaf));
+                    leafs.push_back(Leaf(&twig.key, version, leaf));
                 }
             }
         } else {
@@ -281,7 +278,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> ForwardIterState<'a, P, V> {
         if let NodeType::Twig(twig) = &node.node_type {
             if range.contains(&twig.key) {
                 if let Some((version, leaf)) = twig.get_leaf_by_query(query_type) {
-                    leafs.push_back(Leaf(&twig.key, *version, leaf));
+                    leafs.push_back(Leaf(&twig.key, version, leaf));
                 }
             }
         } else {
@@ -311,10 +308,10 @@ impl<'a, P: KeyTrait + 'a, V: Clone> BackwardIterState<'a, P, V> {
         if let NodeType::Twig(twig) = &node.node_type {
             if is_versioned {
                 for (version, leaf) in twig.iter() {
-                    leafs.push(Leaf(&twig.key, *version, leaf));
+                    leafs.push(Leaf(&twig.key, version, leaf));
                 }
             } else if let Some((version, leaf)) = twig.get_latest_leaf() {
-                leafs.push(Leaf(&twig.key, *version, leaf));
+                leafs.push(Leaf(&twig.key, version, leaf));
             }
         } else {
             iters.push(NodeIter::new(node.iter()));
@@ -401,14 +398,10 @@ where
     fn handle_twig(&mut self, twig: &'a TwigNode<K, V>) {
         if self.is_versioned {
             for (version, leaf) in twig.iter() {
-                self.forward
-                    .leafs
-                    .push_back(Leaf(&twig.key, *version, leaf));
+                self.forward.leafs.push_back(Leaf(&twig.key, version, leaf));
             }
         } else if let Some((version, leaf)) = twig.get_latest_leaf() {
-            self.forward
-                .leafs
-                .push_back(Leaf(&twig.key, *version, leaf));
+            self.forward.leafs.push_back(Leaf(&twig.key, version, leaf));
         }
     }
 }
@@ -580,7 +573,7 @@ impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for QueryIterator<'a
                     if let NodeType::Twig(twig) = &other.node_type {
                         if self.range.contains(&twig.key) {
                             if let Some((version, leaf)) = twig.get_leaf_by_query(self.query_type) {
-                                return Some((twig.key.as_slice(), &leaf.value, *version, leaf.ts));
+                                return Some((twig.key.as_slice(), &leaf.value, version, leaf.ts));
                             }
                         } else if is_key_out_of_range(&self.range, &twig.key) {
                             // stop iteration if the range end is exceeded

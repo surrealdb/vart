@@ -24,6 +24,11 @@ rand = "0.8.5"
 criterion = "0.5.1"
 divan = "0.1.14"
 
+[features]
+default = ["btree_storage"]
+btree_storage = []
+vector_storage = []
+
 [[bench]]
 name = "vart_bench"
 path = "benches/vart_bench.rs"
