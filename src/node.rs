@@ -57,14 +57,6 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         }
     }
 
-    pub(crate) fn version(&self) -> u64 {
-        self.values
-            .iter()
-            .map(|value| value.version)
-            .max()
-            .unwrap_or(self.version)
-    }
-
     fn insert_common(values: &mut Vec<Arc<LeafValue<V>>>, value: V, version: u64, ts: u64) {
         let new_leaf_value = LeafValue::new(value, version, ts);
 
@@ -104,23 +96,17 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         let mut new_values = self.values.clone();
         Self::insert_common(&mut new_values, value, version, ts);
 
-        let new_version = new_values
-            .iter()
-            .map(|value| value.version)
-            .max()
-            .unwrap_or(self.version);
-
         TwigNode {
             prefix: self.prefix.clone(),
             key: self.key.clone(),
             values: new_values,
-            version: new_version,
+            version: version.max(self.version),
         }
     }
 
     pub(crate) fn insert_mut(&mut self, value: V, version: u64, ts: u64) {
         Self::insert_common(&mut self.values, value, version, ts);
-        self.version = self.version(); // Update LeafNode's version
+        self.version = version.max(self.version); // Update LeafNode's version
     }
 
     pub(crate) fn replace_if_newer_mut(&mut self, value: V, version: u64, ts: u64) {
