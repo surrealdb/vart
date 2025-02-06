@@ -18,54 +18,42 @@ pub enum LeavesType {
     Single,
 }
 
-#[derive(Clone, Debug)]
-enum InternalLeafValue<V: Clone> {
-    BTree { value: V, ts: u64 },
-    Vector { value: V, version: u64, ts: u64 },
-    Single { value: V, version: u64, ts: u64 },
+struct BTreeLeafValue<V> {
+    value: V,
+    ts: u64,
 }
 
-impl<V: Clone> InternalLeafValue<V> {
-    fn get_value(&self) -> &V {
-        match self {
-            InternalLeafValue::BTree { value, .. } => value,
-            InternalLeafValue::Vector { value, .. } => value,
-            InternalLeafValue::Single { value, .. } => value,
-        }
-    }
-
-    fn get_ts(&self) -> u64 {
-        match self {
-            InternalLeafValue::BTree { ts, .. } => *ts,
-            InternalLeafValue::Vector { ts, .. } => *ts,
-            InternalLeafValue::Single { ts, .. } => *ts,
-        }
-    }
-
-    fn get_version(&self) -> u64 {
-        match self {
-            InternalLeafValue::BTree { ts, .. } => *ts,
-            InternalLeafValue::Vector { version, .. } => *version,
-            InternalLeafValue::Single { version, .. } => *version,
-        }
-    }
+struct SingleLeafValue<V> {
+    value: V,
+    version: u64,
+    ts: u64,
 }
 
 pub(crate) trait LeavesTrait<V: Clone>: Clone {
+    type Iter<'a>: DoubleEndedIterator<Item = (u64, u64, &'a V)> + 'a
+    where
+        Self: 'a,
+        V: 'a;
+
     fn new(storage_type: LeavesType) -> Self;
     fn insert_mut(&mut self, value: V, version: u64, ts: u64);
     fn clear(&mut self);
-    fn get_latest_leaf(&self) -> Option<LeafTuple<'_, V>>;
-    fn get_leaf_by_version(&self, version: u64) -> Option<LeafTuple<'_, V>>;
-    fn get_leaf_by_ts(&self, ts: u64) -> Option<LeafTuple<'_, V>>;
-    fn last_less_than_ts(&self, ts: u64) -> Option<LeafTuple<'_, V>>;
-    fn first_greater_than_ts(&self, ts: u64) -> Option<LeafTuple<'_, V>>;
-    fn first_greater_or_equal_ts(&self, ts: u64) -> Option<LeafTuple<'_, V>>;
+    fn get_latest_leaf(&self) -> Option<(u64, u64, &V)>;
+    fn get_leaf_by_version(&self, version: u64) -> Option<(u64, u64, &V)>;
+    fn get_leaf_by_ts(&self, ts: u64) -> Option<(u64, u64, &V)>;
+    fn last_less_than_ts(&self, ts: u64) -> Option<(u64, u64, &V)>;
+    fn first_greater_than_ts(&self, ts: u64) -> Option<(u64, u64, &V)>;
+    fn first_greater_or_equal_ts(&self, ts: u64) -> Option<(u64, u64, &V)>;
     fn get_all_versions(&self) -> Vec<(V, u64, u64)>;
-    fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = LeafTuple<'_, V>> + '_>;
+    fn iter(&self) -> Self::Iter<'_>;
 }
 
 impl<V: Clone> LeavesTrait<V> for Leaves<V> {
+    type Iter<'a>
+        = Box<dyn DoubleEndedIterator<Item = LeafTuple<'a, V>> + 'a>
+    where
+        Self: 'a;
+
     fn new(storage_type: LeavesType) -> Self {
         match storage_type {
             LeavesType::BTree => Leaves::BTree(BTree::new()),
@@ -146,7 +134,7 @@ impl<V: Clone> LeavesTrait<V> for Leaves<V> {
         }
     }
 
-    fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = LeafTuple<'_, V>> + '_> {
+    fn iter(&self) -> Self::Iter<'_> {
         match self {
             Leaves::BTree(storage) => Box::new(storage.iter()),
             Leaves::Vector(storage) => Box::new(storage.iter()),
@@ -157,7 +145,7 @@ impl<V: Clone> LeavesTrait<V> for Leaves<V> {
 
 #[derive(Clone)]
 pub(crate) struct BTree<V: Clone> {
-    values: BTreeMap<u64, Arc<InternalLeafValue<V>>>,
+    values: BTreeMap<u64, Arc<BTreeLeafValue<V>>>,
     ts_index: BTreeMap<u64, BTreeSet<u64>>,
 }
 
@@ -170,7 +158,7 @@ impl<V: Clone> BTree<V> {
     }
 
     fn insert_mut(&mut self, value: V, version: u64, ts: u64) {
-        let leaf_value = Arc::new(InternalLeafValue::BTree { value, ts });
+        let leaf_value = Arc::new(BTreeLeafValue { value, ts });
         self.ts_index.entry(ts).or_default().insert(version);
         self.values.insert(version, leaf_value);
     }
@@ -184,14 +172,14 @@ impl<V: Clone> BTree<V> {
         self.values
             .iter()
             .next_back()
-            .map(|(version, v)| (*version, v.get_ts(), v.get_value()))
+            .map(|(version, v)| (*version, v.ts, &v.value))
     }
 
     fn get_leaf_by_version(&self, version: u64) -> Option<LeafTuple<'_, V>> {
         self.values
             .range(..=version)
             .next_back()
-            .map(|(version, v)| (*version, v.get_ts(), v.get_value()))
+            .map(|(version, v)| (*version, v.ts, &v.value))
     }
 
     fn get_leaf_by_ts(&self, ts: u64) -> Option<LeafTuple<'_, V>> {
@@ -203,7 +191,7 @@ impl<V: Clone> BTree<V> {
                     .iter()
                     .next_back()
                     .and_then(|version| Some((*version, self.values.get(version)?)))
-                    .map(|(version, v)| (version, v.get_ts(), v.get_value()))
+                    .map(|(version, v)| (version, v.ts, &v.value))
             })
     }
 
@@ -216,7 +204,7 @@ impl<V: Clone> BTree<V> {
                     .iter()
                     .next_back()
                     .and_then(|version| Some((*version, self.values.get(version)?)))
-                    .map(|(version, v)| (version, v.get_ts(), v.get_value()))
+                    .map(|(version, v)| (version, v.ts, &v.value))
             })
     }
 
@@ -229,7 +217,7 @@ impl<V: Clone> BTree<V> {
                     .iter()
                     .next()
                     .and_then(|version| Some((*version, self.values.get(version)?)))
-                    .map(|(version, v)| (version, v.get_ts(), v.get_value()))
+                    .map(|(version, v)| (version, v.ts, &v.value))
             })
     }
 
@@ -239,30 +227,27 @@ impl<V: Clone> BTree<V> {
                 .iter()
                 .next()
                 .and_then(|version| Some((*version, self.values.get(version)?)))
-                .map(|(version, v)| (version, v.get_ts(), v.get_value()))
+                .map(|(version, v)| (version, v.ts, &v.value))
         })
     }
 
     fn get_all_versions(&self) -> Vec<(V, u64, u64)> {
         self.values
             .iter()
-            .map(|(version, leaf)| match &**leaf {
-                InternalLeafValue::BTree { value, ts } => (value.clone(), *version, *ts),
-                _ => unreachable!(),
-            })
+            .map(|(version, v)| (v.value.clone(), *version, v.ts))
             .collect()
     }
 
     fn iter(&self) -> impl DoubleEndedIterator<Item = LeafTuple<'_, V>> + '_ {
         self.values
             .iter()
-            .map(|(version, v)| (*version, v.get_ts(), v.get_value()))
+            .map(|(version, v)| (*version, v.ts, &v.value))
     }
 }
 
 #[derive(Clone)]
 pub(crate) struct Vector<V: Clone> {
-    values: Vec<Arc<InternalLeafValue<V>>>,
+    values: Vec<Arc<SingleLeafValue<V>>>,
 }
 
 impl<V: Clone> Vector<V> {
@@ -271,27 +256,24 @@ impl<V: Clone> Vector<V> {
     }
 
     fn insert_mut(&mut self, value: V, version: u64, ts: u64) {
-        let leaf_value = Arc::new(InternalLeafValue::Vector { value, version, ts });
-        match self
-            .values
-            .binary_search_by(|v| v.get_version().cmp(&version))
-        {
+        let leaf_value = Arc::new(SingleLeafValue { value, version, ts });
+        match self.values.binary_search_by(|v| v.version.cmp(&version)) {
             Ok(index) => {
-                if self.values[index].get_ts() == ts {
+                if self.values[index].ts == ts {
                     self.values[index] = leaf_value;
                 } else {
-                    let insert_position = if self.values[index].get_ts() < ts {
+                    let insert_position = if self.values[index].ts < ts {
                         index
                             + self.values[index..]
                                 .iter()
-                                .take_while(|v| v.get_ts() <= ts)
+                                .take_while(|v| v.ts <= ts)
                                 .count()
                     } else {
                         index
                             - self.values[..index]
                                 .iter()
                                 .rev()
-                                .take_while(|v| v.get_ts() >= ts)
+                                .take_while(|v| v.ts >= ts)
                                 .count()
                     };
                     self.values.insert(insert_position, leaf_value);
@@ -308,70 +290,65 @@ impl<V: Clone> Vector<V> {
     fn get_latest_leaf(&self) -> Option<LeafTuple<'_, V>> {
         self.values
             .iter()
-            .max_by_key(|value| value.get_version())
-            .map(|v| (v.get_version(), v.get_ts(), v.get_value()))
+            .max_by_key(|value| value.version)
+            .map(|v| (v.version, v.ts, &v.value))
     }
 
     fn get_leaf_by_version(&self, version: u64) -> Option<LeafTuple<'_, V>> {
         self.values
             .iter()
-            .filter(|value| value.get_version() <= version)
-            .max_by_key(|value| value.get_version())
-            .map(|v| (v.get_version(), v.get_ts(), v.get_value()))
+            .filter(|value| value.version <= version)
+            .max_by_key(|value| value.version)
+            .map(|v| (v.version, v.ts, &v.value))
     }
 
     fn get_leaf_by_ts(&self, ts: u64) -> Option<LeafTuple<'_, V>> {
         self.values
             .iter()
-            .filter(|value| value.get_ts() <= ts)
-            .max_by_key(|value| value.get_ts())
-            .map(|v| (v.get_version(), v.get_ts(), v.get_value()))
+            .filter(|value| value.ts <= ts)
+            .max_by_key(|value| value.ts)
+            .map(|v| (v.version, v.ts, &v.value))
     }
 
     fn last_less_than_ts(&self, ts: u64) -> Option<LeafTuple<'_, V>> {
         self.values
             .iter()
-            .filter(|value| value.get_ts() < ts)
-            .max_by_key(|value| value.get_ts())
-            .map(|v| (v.get_version(), v.get_ts(), v.get_value()))
+            .filter(|value| value.ts < ts)
+            .max_by_key(|value| value.ts)
+            .map(|v| (v.version, v.ts, &v.value))
     }
 
     fn first_greater_than_ts(&self, ts: u64) -> Option<LeafTuple<'_, V>> {
         self.values
             .iter()
-            .filter(|value| value.get_ts() > ts)
-            .min_by_key(|value| value.get_ts())
-            .map(|v| (v.get_version(), v.get_ts(), v.get_value()))
+            .filter(|value| value.ts > ts)
+            .min_by_key(|value| value.ts)
+            .map(|v| (v.version, v.ts, &v.value))
     }
 
     fn first_greater_or_equal_ts(&self, ts: u64) -> Option<LeafTuple<'_, V>> {
         self.values
             .iter()
-            .filter(|value| value.get_ts() >= ts)
-            .min_by_key(|value| value.get_ts())
-            .map(|v| (v.get_version(), v.get_ts(), v.get_value()))
+            .filter(|value| value.ts >= ts)
+            .min_by_key(|value| value.ts)
+            .map(|v| (v.version, v.ts, &v.value))
     }
 
     fn get_all_versions(&self) -> Vec<(V, u64, u64)> {
         self.values
             .iter()
-            .map(|value| match &**value {
-                InternalLeafValue::Vector { value, version, ts } => (value.clone(), *version, *ts),
-                _ => unreachable!(),
-            })
+            .map(|v| (v.value.clone(), v.version, v.ts))
             .collect()
     }
 
-    fn iter(&self) -> impl DoubleEndedIterator<Item = (u64, u64, &V)> + '_ {
-        self.values
-            .iter()
-            .map(|v| (v.get_version(), v.get_ts(), v.get_value()))
+    fn iter(&self) -> impl DoubleEndedIterator<Item = LeafTuple<'_, V>> + '_ {
+        self.values.iter().map(|v| (v.version, v.ts, &v.value))
     }
 }
 
 #[derive(Clone)]
 pub(crate) struct Single<V: Clone> {
-    value: Option<Arc<InternalLeafValue<V>>>,
+    value: Option<Arc<SingleLeafValue<V>>>,
 }
 
 impl<V: Clone> Single<V> {
@@ -380,7 +357,7 @@ impl<V: Clone> Single<V> {
     }
 
     fn insert_mut(&mut self, value: V, version: u64, ts: u64) {
-        self.value = Some(Arc::new(InternalLeafValue::Single { value, version, ts }));
+        self.value = Some(Arc::new(SingleLeafValue { value, version, ts }));
     }
 
     fn clear(&mut self) {
@@ -388,15 +365,13 @@ impl<V: Clone> Single<V> {
     }
 
     fn get_latest_leaf(&self) -> Option<LeafTuple<'_, V>> {
-        self.value
-            .as_ref()
-            .map(|v| (v.get_version(), v.get_ts(), v.get_value()))
+        self.value.as_ref().map(|v| (v.version, v.ts, &v.value))
     }
 
     fn get_leaf_by_version(&self, version: u64) -> Option<LeafTuple<'_, V>> {
         self.value.as_ref().and_then(|v| {
-            if v.get_version() <= version {
-                Some((v.get_version(), v.get_ts(), v.get_value()))
+            if v.version <= version {
+                Some((v.version, v.ts, &v.value))
             } else {
                 None
             }
@@ -405,8 +380,8 @@ impl<V: Clone> Single<V> {
 
     fn get_leaf_by_ts(&self, ts: u64) -> Option<LeafTuple<'_, V>> {
         self.value.as_ref().and_then(|v| {
-            if v.get_ts() <= ts {
-                Some((v.get_version(), v.get_ts(), v.get_value()))
+            if v.ts <= ts {
+                Some((v.version, v.ts, &v.value))
             } else {
                 None
             }
@@ -415,8 +390,8 @@ impl<V: Clone> Single<V> {
 
     fn last_less_than_ts(&self, ts: u64) -> Option<LeafTuple<'_, V>> {
         self.value.as_ref().and_then(|v| {
-            if v.get_ts() < ts {
-                Some((v.get_version(), v.get_ts(), v.get_value()))
+            if v.ts < ts {
+                Some((v.version, v.ts, &v.value))
             } else {
                 None
             }
@@ -425,8 +400,8 @@ impl<V: Clone> Single<V> {
 
     fn first_greater_than_ts(&self, ts: u64) -> Option<LeafTuple<'_, V>> {
         self.value.as_ref().and_then(|v| {
-            if v.get_ts() > ts {
-                Some((v.get_version(), v.get_ts(), v.get_value()))
+            if v.ts > ts {
+                Some((v.version, v.ts, &v.value))
             } else {
                 None
             }
@@ -435,8 +410,8 @@ impl<V: Clone> Single<V> {
 
     fn first_greater_or_equal_ts(&self, ts: u64) -> Option<LeafTuple<'_, V>> {
         self.value.as_ref().and_then(|v| {
-            if v.get_ts() >= ts {
-                Some((v.get_version(), v.get_ts(), v.get_value()))
+            if v.ts >= ts {
+                Some((v.version, v.ts, &v.value))
             } else {
                 None
             }
@@ -446,19 +421,12 @@ impl<V: Clone> Single<V> {
     fn get_all_versions(&self) -> Vec<(V, u64, u64)> {
         self.value
             .as_ref()
-            .map(|v| match &**v {
-                InternalLeafValue::Single { value, version, ts } => {
-                    vec![(value.clone(), *version, *ts)]
-                }
-                _ => unreachable!(),
-            })
+            .map(|v| vec![(v.value.clone(), v.version, v.ts)])
             .unwrap_or_default()
     }
 
     fn iter(&self) -> impl DoubleEndedIterator<Item = LeafTuple<'_, V>> + '_ {
-        self.value
-            .iter()
-            .map(|v| (v.get_version(), v.get_ts(), v.get_value()))
+        self.value.iter().map(|v| (v.version, v.ts, &v.value))
     }
 }
 
