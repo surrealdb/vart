@@ -3,12 +3,15 @@ use std::sync::Arc;
 
 use crate::{
     art::QueryType,
-    version::{VecStore, VersionStore},
+    version::VersionStore,
     KeyTrait,
 };
 
-#[cfg(not(feature = "vec_store"))]
+#[cfg(feature = "btree_store")]
 use crate::version::BTreeStore;
+
+#[cfg(feature = "vec_store")]
+use crate::version::VecStore;
 
 /*
     Immutable nodes
@@ -67,27 +70,21 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         }
     }
 
-    pub(crate) fn version(&self) -> u64 {
-        self.values.get_max_version().unwrap_or(self.version)
-    }
-
     pub(crate) fn insert(&self, value: V, version: u64, ts: u64) -> TwigNode<K, V> {
         let mut new_values = self.values.clone();
         new_values.insert(value, version, ts);
-
-        let new_version = new_values.get_max_version().unwrap_or(self.version);
 
         TwigNode {
             prefix: self.prefix.clone(),
             key: self.key.clone(),
             values: new_values,
-            version: new_version,
+            version: version.max(self.version),
         }
     }
 
     pub(crate) fn insert_mut(&mut self, value: V, version: u64, ts: u64) {
         self.values.insert(value, version, ts);
-        self.version = self.version(); // Update LeafNode's version
+        self.version = version.max(self.version); // Update LeafNode's version
     }
 
     pub(crate) fn replace_if_newer_mut(&mut self, value: V, version: u64, ts: u64) {

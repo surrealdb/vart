@@ -248,7 +248,6 @@ pub(crate) trait VersionStore<V: Clone> {
     fn insert(&mut self, value: V, version: u64, ts: u64);
     fn clear(&mut self);
     fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = &Arc<LeafValue<V>>> + '_>;
-    fn get_max_version(&self) -> Option<u64>;
 }
 
 // Implement for Vec
@@ -304,20 +303,16 @@ impl<V: Clone> VersionStore<V> for VecStore<V> {
     fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = &Arc<LeafValue<V>>> + '_> {
         Box::new(self.values.iter())
     }
-
-    fn get_max_version(&self) -> Option<u64> {
-        self.values.iter().map(|value| value.version).max()
-    }
 }
 
 // Implement for BTree
-#[cfg(not(feature = "vec_store"))]
+#[cfg(feature = "btree_store")]
 #[derive(Clone)]
 pub(crate) struct BTreeStore<V: Clone> {
     values: BTree<V>,
 }
 
-#[cfg(not(feature = "vec_store"))]
+#[cfg(feature = "btree_store")]
 impl<V: Clone> VersionStore<V> for BTreeStore<V> {
     fn new() -> Self {
         Self {
@@ -335,10 +330,6 @@ impl<V: Clone> VersionStore<V> for BTreeStore<V> {
 
     fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = &Arc<LeafValue<V>>> + '_> {
         Box::new(self.values.iter())
-    }
-
-    fn get_max_version(&self) -> Option<u64> {
-        self.values.iter().map(|value| value.version).max()
     }
 }
 

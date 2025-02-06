@@ -25,13 +25,9 @@ criterion = "0.5.1"
 divan = "0.1.14"
 
 [features]
-default = ["vec_store"]
+default = ["btree_store"]
 vec_store = []
-
-[[bench]]
-name = "vart_bench"
-path = "benches/vart_bench.rs"
-harness = false
+btree_store = []
 
 [[bench]]
 name = "allocs"
