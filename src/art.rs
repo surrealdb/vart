@@ -8,6 +8,7 @@ use crate::iter::IterItem;
 use crate::iter::{scan_node, Iter, Range};
 use crate::node::{FlatNode, Node256, Node48, NodeTrait, TwigNode};
 use crate::version::LeafTuple;
+use crate::version::LeavesType;
 use crate::{KeyTrait, TrieError};
 
 // Minimum and maximum number of children for Node4
@@ -1155,6 +1156,7 @@ pub struct Tree<P: KeyTrait, V: Clone> {
     pub(crate) root: Option<Arc<Node<P, V>>>,
     pub size: usize,
     pub version: u64,
+    pub leaves_type: LeavesType,
 }
 
 // A type alias for a node reference.
@@ -1186,6 +1188,7 @@ impl<P: KeyTrait, V: Clone> Clone for Tree<P, V> {
             root: self.root.as_ref().cloned(),
             size: self.size,
             version: self.version,
+            leaves_type: self.leaves_type,
         }
     }
 }
@@ -1196,6 +1199,16 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
             root: None,
             size: 0,
             version: 0,
+            leaves_type: LeavesType::Vector,
+        }
+    }
+
+    pub fn with_leaves_type(leaves_type: LeavesType) -> Self {
+        Tree {
+            root: None,
+            size: 0,
+            version: 0,
+            leaves_type,
         }
     }
 
