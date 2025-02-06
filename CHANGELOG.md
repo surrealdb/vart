@@ -2,15 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.9.0] - 2025-01-13
+## [0.9.1] - 2025-02-06
 
 ### Miscellaneous Tasks
 
 - Simplify control flow in prefix comparison (#75)
 
+### Perf
+
+- Simpler way to set version (#84)
+
 ### Release
 
-- 0.9.0
+- 0.9.0 (#80)
 
 ### Remove
 
