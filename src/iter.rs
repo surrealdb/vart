@@ -3,7 +3,8 @@ use std::ops::RangeBounds;
 use std::sync::Arc;
 
 use crate::art::{Node, NodeType, QueryType};
-use crate::node::{LeafValue, TwigNode};
+use crate::node::TwigNode;
+use crate::version::LeafValue;
 use crate::KeyTrait;
 
 type NodeIterator<'a, P, V> = Box<dyn DoubleEndedIterator<Item = &'a Arc<Node<P, V>>> + 'a>;
@@ -276,7 +277,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> ForwardIterState<'a, P, V> {
         let mut iters = Vec::new();
         if let NodeType::Twig(twig) = &node.node_type {
             if range.contains(&twig.key) {
-                if let Some(v) = twig.get_leaf_by_query_ref(query_type) {
+                if let Some(v) = twig.get_leaf_by_query(query_type) {
                     leafs.push_back(Leaf(&twig.key, v));
                 }
             }
