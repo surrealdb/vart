@@ -144,36 +144,28 @@ impl<V: Clone> Vector<V> {
     fn insert_mut(&mut self, value: V, version: u64, ts: u64) {
         let leaf_value = Arc::new(LeafValue { value, version, ts });
 
-        // Check if a LeafValue with the same version exists and update or insert accordingly
-        match self.values.binary_search_by(|v| v.version.cmp(&version)) {
-            Ok(index) => {
-                // If an entry with the same version and timestamp exists, just put the same value
-                if self.values[index].ts == ts {
-                    self.values[index] = leaf_value;
-                } else {
-                    // If an entry with the same version and different timestamp exists, add a new entry
-                    // Determine the direction to scan based on the comparison of timestamps
+        let version = leaf_value.version;
+        // Find the start and end of the version group
+        let start = self.values.partition_point(|v| v.version < version);
+        let end = self.values.partition_point(|v| v.version <= version);
 
-                    // Scan forward to find the first entry with a timestamp greater than the new entry's timestamp
-                    let insert_position = if self.values[index].ts < ts {
-                        index
-                            + self.values[index..]
-                                .iter()
-                                .take_while(|v| v.ts <= ts)
-                                .count()
-                    } else {
-                        // Scan backward to find the insertion point before the first entry with a timestamp less than the new entry's timestamp
-                        index
-                            - self.values[..index]
-                                .iter()
-                                .rev()
-                                .take_while(|v| v.ts >= ts)
-                                .count()
-                    };
-                    self.values.insert(insert_position, leaf_value);
+        if start == end {
+            // No existing entries with this version; insert at the correct position
+            self.values.insert(start, leaf_value);
+        } else {
+            // Within the version group, find the position based on ts
+            let ts = leaf_value.ts;
+            let version_group = &self.values[start..end];
+            match version_group.binary_search_by(|v| v.ts.cmp(&ts)) {
+                Ok(pos) => {
+                    // Replace existing entry with the same version and ts
+                    self.values[start + pos] = leaf_value;
+                }
+                Err(pos) => {
+                    // Insert the new entry at the correct position to maintain order
+                    self.values.insert(start + pos, leaf_value);
                 }
             }
-            Err(index) => self.values.insert(index, leaf_value),
         }
     }
 
@@ -875,5 +867,194 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_version_ordering() {
+        let mut vec = Vector::new();
+
+        // Insert out of order versions
+        vec.insert_mut(1, 2, 100);
+        vec.insert_mut(2, 1, 100);
+        vec.insert_mut(3, 3, 100);
+
+        // Verify versions are ordered
+        let versions: Vec<_> = vec.values.iter().map(|v| v.version).collect();
+        assert_eq!(versions, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_timestamp_ordering_within_version() {
+        let mut vec = Vector::new();
+
+        // Insert same version with different timestamps out of order
+        vec.insert_mut(1, 1, 200);
+        vec.insert_mut(2, 1, 100);
+        vec.insert_mut(3, 1, 150);
+
+        // Check values are ordered by timestamp within version 1
+        let timestamps: Vec<_> = vec.values.iter().map(|v| v.ts).collect();
+        assert_eq!(timestamps, vec![100, 150, 200]);
+    }
+
+    #[test]
+    fn test_mixed_ordering() {
+        let mut vec = Vector::new();
+
+        // Mix of versions and timestamps
+        vec.insert_mut(1, 1, 200); // version 1, late ts
+        vec.insert_mut(2, 2, 100); // version 2, early ts
+        vec.insert_mut(3, 1, 100); // version 1, early ts
+
+        let values: Vec<_> = vec.values.iter().map(|v| v.value).collect();
+        assert_eq!(values, vec![3, 1, 2]); // Ordered by version first, then ts
+    }
+
+    #[test]
+    fn test_replace_exact_match() {
+        let mut vec = Vector::new();
+
+        // Insert initial value
+        vec.insert_mut(1, 1, 100);
+        // Replace with same version and timestamp
+        vec.insert_mut(2, 1, 100);
+
+        assert_eq!(vec.values.len(), 1);
+        assert_eq!(vec.values[0].value, 2);
+    }
+
+    #[test]
+    fn test_multiple_versions() {
+        let mut vec = Vector::new();
+
+        // Insert multiple entries for each version
+        vec.insert_mut(1, 1, 100);
+        vec.insert_mut(2, 1, 200);
+        vec.insert_mut(3, 2, 150);
+        vec.insert_mut(4, 2, 250);
+
+        let version_groups: Vec<_> = vec.values.iter().map(|v| (v.version, v.ts)).collect();
+
+        assert_eq!(version_groups, vec![(1, 100), (1, 200), (2, 150), (2, 250)]);
+    }
+
+    #[test]
+    fn test_insert_between_existing() {
+        let mut vec = Vector::new();
+
+        vec.insert_mut(1, 1, 100);
+        vec.insert_mut(2, 1, 300);
+        vec.insert_mut(3, 1, 200); // Should insert between the two
+
+        let timestamps: Vec<_> = vec.values.iter().map(|v| v.ts).collect();
+        assert_eq!(timestamps, vec![100, 200, 300]);
+    }
+
+    #[test]
+    fn test_edge_case_orderings() {
+        let mut vec = Vector::new();
+
+        // Test edge cases:
+        // 1. Multiple entries with same version, increasing timestamps
+        vec.insert_mut(1, 1, 100);
+        vec.insert_mut(2, 1, 101);
+        vec.insert_mut(3, 1, 102);
+
+        // 2. Multiple entries with same version, decreasing timestamps
+        vec.insert_mut(4, 2, 103);
+        vec.insert_mut(5, 2, 102);
+        vec.insert_mut(6, 2, 101);
+
+        // 3. Same timestamp, different versions
+        vec.insert_mut(7, 3, 100);
+        vec.insert_mut(8, 4, 100);
+        vec.insert_mut(9, 5, 100);
+
+        // 4. Interleaved versions and timestamps
+        vec.insert_mut(10, 6, 102);
+        vec.insert_mut(11, 6, 101);
+        vec.insert_mut(12, 7, 101);
+        vec.insert_mut(13, 7, 102);
+
+        // Verify the final ordering
+        let entries: Vec<_> = vec
+            .values
+            .iter()
+            .map(|v| (v.version, v.ts, v.value))
+            .collect();
+
+        assert_eq!(
+            entries,
+            vec![
+                (1, 100, 1),
+                (1, 101, 2),
+                (1, 102, 3),
+                (2, 101, 6),
+                (2, 102, 5),
+                (2, 103, 4),
+                (3, 100, 7),
+                (4, 100, 8),
+                (5, 100, 9),
+                (6, 101, 11),
+                (6, 102, 10),
+                (7, 101, 12),
+                (7, 102, 13),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_boundary_value_ordering() {
+        let mut vec = Vector::new();
+
+        // Test boundary values for timestamps and versions
+        vec.insert_mut(1, 0, 0); // Minimum values
+        vec.insert_mut(2, u64::MAX, 0); // Max version, min ts
+        vec.insert_mut(3, 0, u64::MAX); // Min version, max ts
+        vec.insert_mut(4, u64::MAX, u64::MAX); // Maximum values
+
+        let entries: Vec<_> = vec.values.iter().map(|v| (v.version, v.ts)).collect();
+
+        assert_eq!(
+            entries,
+            vec![(0, 0), (0, u64::MAX), (u64::MAX, 0), (u64::MAX, u64::MAX),]
+        );
+    }
+
+    #[test]
+    fn test_sparse_dense_ordering() {
+        let mut vec = Vector::new();
+
+        // Test sparse vs dense version numbers
+        vec.insert_mut(1, 1, 100);
+        vec.insert_mut(2, 1000, 100); // Sparse
+        vec.insert_mut(3, 1001, 100); // Dense after sparse
+        vec.insert_mut(4, 2, 100); // Dense after initial
+        vec.insert_mut(5, 999, 100); // Fill gap
+
+        let versions: Vec<_> = vec.values.iter().map(|v| v.version).collect();
+
+        assert_eq!(versions, vec![1, 2, 999, 1000, 1001]);
+    }
+
+    #[test]
+    fn test_duplicate_handling() {
+        let mut vec = Vector::new();
+
+        // Insert same version+ts multiple times
+        vec.insert_mut(1, 1, 100);
+        vec.insert_mut(2, 1, 100); // Should replace
+        vec.insert_mut(3, 1, 100); // Should replace again
+
+        assert_eq!(vec.values.len(), 1);
+        assert_eq!(vec.values[0].value, 3);
+
+        // Verify ordering isn't affected by duplicates
+        vec.insert_mut(4, 1, 99);
+        vec.insert_mut(5, 1, 101);
+
+        let entries: Vec<_> = vec.values.iter().map(|v| (v.ts, v.value)).collect();
+
+        assert_eq!(entries, vec![(99, 4), (100, 3), (101, 5),]);
     }
 }
