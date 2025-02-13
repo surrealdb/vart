@@ -5,6 +5,7 @@ use std::ops::RangeBounds;
 use std::sync::Arc;
 
 use crate::iter::IterItem;
+use crate::iter::VersionRange;
 use crate::iter::{scan_node, Iter, Range};
 use crate::node::{FlatNode, LeafValue, Node256, Node48, NodeTrait, TwigNode};
 use crate::{KeyTrait, TrieError};
@@ -1616,20 +1617,14 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// # Returns
     ///
     /// Returns an iterator over the key-value pairs, versions, and timestamps within the specified range.
-    pub fn range_with_versions<'a, R>(
-        &'a self,
-        range: R,
-    ) -> impl DoubleEndedIterator<Item = IterItem<'a, V>>
+    pub fn range_with_versions<'a, R>(&'a self, range: R) -> impl Iterator<Item = IterItem<'a, V>>
     where
         R: RangeBounds<P> + 'a,
     {
-        // If the Trie is empty, return an empty Range iterator
-        if self.root.is_none() {
-            return Range::empty(range);
+        match &self.root {
+            Some(root) => VersionRange::new(Some(root), range),
+            None => VersionRange::empty(range),
         }
-
-        let root = self.root.as_ref();
-        Range::new_versioned(root, range)
     }
 
     /// Retrieves the value associated with the given key at the specified timestamp.

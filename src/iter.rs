@@ -377,7 +377,6 @@ pub struct Range<'a, K: KeyTrait, V: Clone, R> {
     forward: ForwardIterState<'a, K, V>,
     backward: BackwardIterState<'a, K, V>,
     range: R,
-    is_versioned: bool,
     forward_prefix: Vec<u8>,
     forward_prefix_lengths: Vec<usize>,
     backward_prefix: Vec<u8>,
@@ -396,7 +395,6 @@ where
             forward: ForwardIterState::empty(),
             backward: BackwardIterState::empty(),
             range,
-            is_versioned: false,
             forward_prefix: Vec::new(),
             forward_prefix_lengths: Vec::new(),
             backward_prefix: Vec::new(),
@@ -419,32 +417,6 @@ where
 
         Self {
             range,
-            is_versioned: false,
-            forward_prefix: forward.prefix.clone(),
-            forward_prefix_lengths: Vec::new(),
-            backward_prefix: backward.prefix.clone(),
-            backward_prefix_lengths: Vec::new(),
-            forward,
-            backward,
-            last_forward_key: None,
-            last_backward_key: None,
-        }
-    }
-
-    pub(crate) fn new_versioned(node: Option<&'a Arc<Node<K, V>>>, range: R) -> Self
-    where
-        R: RangeBounds<K>,
-    {
-        let forward = node.map_or_else(ForwardIterState::empty, |n| {
-            ForwardIterState::forward_scan(n, &range, true)
-        });
-        let backward = node.map_or_else(BackwardIterState::empty, |n| {
-            BackwardIterState::backward_scan(n, &range, true)
-        });
-
-        Self {
-            range,
-            is_versioned: true,
             forward_prefix: forward.prefix.clone(),
             forward_prefix_lengths: Vec::new(),
             backward_prefix: backward.prefix.clone(),
@@ -545,11 +517,7 @@ impl<'a, K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, 
                 Some(other) => {
                     if let NodeType::Twig(twig) = &other.node_type {
                         if self.range.contains(&twig.key) {
-                            if self.is_versioned {
-                                for leaf in twig.iter() {
-                                    self.forward.leafs.push_back(Leaf(&twig.key, leaf));
-                                }
-                            } else if let Some(v) = twig.get_latest_leaf() {
+                            if let Some(v) = twig.get_latest_leaf() {
                                 self.forward.leafs.push_back(Leaf(&twig.key, v));
                             }
                             break;
@@ -613,11 +581,7 @@ impl<K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> DoubleEndedIterator for Ran
                 Some(other) => {
                     if let NodeType::Twig(twig) = &other.node_type {
                         if self.range.contains(&twig.key) {
-                            if self.is_versioned {
-                                for leaf in twig.iter() {
-                                    self.backward.leafs.push(Leaf(&twig.key, leaf));
-                                }
-                            } else if let Some(v) = twig.get_latest_leaf() {
+                            if let Some(v) = twig.get_latest_leaf() {
                                 self.backward.leafs.push(Leaf(&twig.key, v));
                             }
                             break;
@@ -789,6 +753,87 @@ impl<K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> DoubleEndedIterator
         self.backward
             .leafs
             .pop()
+            .map(|leaf| (leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
+    }
+}
+
+pub struct VersionRange<'a, K: KeyTrait, V: Clone, R> {
+    forward: ForwardIterState<'a, K, V>,
+    range: R,
+    forward_prefix: Vec<u8>,
+    forward_prefix_lengths: Vec<usize>,
+}
+
+impl<'a, K: KeyTrait, V: Clone, R> VersionRange<'a, K, V, R>
+where
+    K: Ord,
+    R: RangeBounds<K>,
+{
+    pub(crate) fn empty(range: R) -> Self {
+        Self {
+            forward: ForwardIterState::empty(),
+            range,
+            forward_prefix: Vec::new(),
+            forward_prefix_lengths: Vec::new(),
+        }
+    }
+
+    pub(crate) fn new(node: Option<&'a Arc<Node<K, V>>>, range: R) -> Self
+    where
+        R: RangeBounds<K>,
+    {
+        let forward = node.map_or_else(ForwardIterState::empty, |n| {
+            ForwardIterState::forward_scan(n, &range, true)
+        });
+
+        Self {
+            range,
+            forward_prefix: forward.prefix.clone(),
+            forward_prefix_lengths: Vec::new(),
+            forward,
+        }
+    }
+}
+
+impl<'a, K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> Iterator for VersionRange<'a, K, V, R> {
+    type Item = IterItem<'a, V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(node) = self.forward.iters.last_mut() {
+            match node.next() {
+                Some(other) => {
+                    if let NodeType::Twig(twig) = &other.node_type {
+                        if self.range.contains(&twig.key) {
+                            // Add all versions for this key
+                            for leaf in twig.iter() {
+                                self.forward.leafs.push_back(Leaf(&twig.key, leaf));
+                            }
+                            break;
+                        } else if is_key_out_of_range(&self.range, &twig.key) {
+                            self.forward.iters.clear();
+                        }
+                    } else {
+                        handle_non_twig_node(
+                            &mut self.forward_prefix,
+                            &mut self.forward_prefix_lengths,
+                            &self.range,
+                            other,
+                            &mut self.forward.iters,
+                        );
+                    }
+                }
+                None => {
+                    self.forward.iters.pop();
+                    if let Some(len) = self.forward_prefix_lengths.pop() {
+                        self.forward_prefix.truncate(len);
+                    }
+                }
+            }
+        }
+
+        self.forward
+            .leafs
+            .pop_front()
             .map(|leaf| (leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
     }
 }
@@ -1670,85 +1715,6 @@ mod tests {
         }
     }
 
-    // #[test]
-    // fn test_range_scan_mixed_direction_with_versions() {
-    //     let mut tree: Tree<FixedSizeKey<16>, u16> = Tree::<FixedSizeKey<16>, u16>::new();
-
-    //     // Insert multiple versions for a range of keys
-    //     let start_key = 10u16;
-    //     let end_key = 20u16;
-    //     let versions_per_key = 3u16;
-
-    //     for i in start_key..=end_key {
-    //         let key: FixedSizeKey<16> = i.into();
-    //         for version in 1..=versions_per_key {
-    //             tree.insert_unchecked(&key, i, u64::from(version), 0_u64)
-    //                 .unwrap();
-    //         }
-    //     }
-
-    //     let range_start: FixedSizeKey<16> = start_key.into();
-    //     let range_end: FixedSizeKey<16> = end_key.into();
-
-    //     let mut iter = tree.range_with_versions(range_start..=range_end).peekable();
-    //     let mut forward = Vec::new();
-    //     let mut backward = Vec::new();
-    //     let mut seen = HashSet::new();
-    //     let expected_total = (end_key - start_key + 1) * versions_per_key;
-
-    //     // Mix forward and backward iteration randomly
-    //     while seen.len() < expected_total as usize {
-    //         if thread_rng().gen_bool(0.5) {
-    //             if let Some((_, v, version, _)) = iter.next() {
-    //                 let key = (*v, version);
-    //                 if seen.insert(key) {
-    //                     forward.push(key);
-    //                 }
-    //             }
-    //         } else if let Some((_, v, version, _)) = iter.next_back() {
-    //             let key = (*v, version);
-    //             if seen.insert(key) {
-    //                 backward.push(key);
-    //             }
-    //         }
-    //     }
-
-    //     backward.reverse();
-    //     forward.append(&mut backward);
-
-    //     // Check that we got all versions for each key
-    //     let mut result_map: HashMap<u16, Vec<u64>> = HashMap::new();
-    //     for (value, version) in forward.clone() {
-    //         result_map.entry(value).or_default().push(version);
-    //     }
-
-    //     // Verify each key has all versions
-    //     for key in start_key..=end_key {
-    //         let versions = result_map.get(&key).expect("Missing key");
-    //         assert_eq!(
-    //             versions.len(),
-    //             versions_per_key as usize,
-    //             "Wrong number of versions for key {}",
-    //             key
-    //         );
-
-    //         let mut actual_versions = versions.clone();
-    //         actual_versions.sort();
-    //         let expected_versions: Vec<u64> = (1..=versions_per_key).map(u64::from).collect();
-    //         assert_eq!(
-    //             actual_versions, expected_versions,
-    //             "Wrong versions for key {}",
-    //             key
-    //         );
-    //     }
-
-    //     assert_eq!(
-    //         forward.len(),
-    //         expected_total as usize,
-    //         "Wrong total number of items"
-    //     );
-    // }
-
     #[test]
     fn test_range_scan_reverse_iterator_pattern() {
         let mut tree: Tree<FixedSizeKey<16>, u16> = Tree::<FixedSizeKey<16>, u16>::new();
@@ -1852,5 +1818,237 @@ mod tests {
             iter.next_back().is_none(),
             "Iterator should be exhausted going backward"
         );
+    }
+
+    #[test]
+    fn test_version_range_empty() {
+        let tree = Tree::<FixedSizeKey<16>, u16>::new();
+        let start: FixedSizeKey<16> = 1u16.into();
+        let end: FixedSizeKey<16> = 5u16.into();
+        let iter = tree.range_with_versions(start..=end);
+        assert!(iter.count() == 0);
+    }
+
+    #[test]
+    fn test_version_range_single_key() {
+        let mut tree = Tree::<FixedSizeKey<16>, u16>::new();
+        let key: FixedSizeKey<16> = 1u16.into();
+
+        // Insert multiple versions for single key
+        for version in 1..=3 {
+            tree.insert_unchecked(&key, 1, version, 0).unwrap();
+        }
+
+        let iter = tree.range_with_versions(key.clone()..=key.clone());
+        let results: Vec<_> = iter.collect();
+
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().all(|(k, _, _, _)| from_be_bytes_key(k) == 1));
+    }
+
+    #[test]
+    fn test_version_range_order() {
+        let mut tree = Tree::<FixedSizeKey<16>, u16>::new();
+        let key: FixedSizeKey<16> = 1u16.into();
+
+        // Insert versions in random order
+        tree.insert_unchecked(&key, 1, 3, 0).unwrap();
+        tree.insert_unchecked(&key, 1, 1, 0).unwrap();
+        tree.insert_unchecked(&key, 1, 2, 0).unwrap();
+
+        let results: Vec<_> = tree
+            .range_with_versions(key.clone()..=key.clone())
+            .map(|(_, _, v, _)| v)
+            .collect();
+
+        // Verify versions are returned in ascending order
+        assert_eq!(results, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_version_range_bounds() {
+        let mut tree = Tree::<FixedSizeKey<16>, u16>::new();
+
+        for i in 1..=5u16 {
+            let key: FixedSizeKey<16> = i.into();
+            for version in 1..=2 {
+                tree.insert_unchecked(&key, i, version, 0).unwrap();
+            }
+        }
+
+        let start_key: FixedSizeKey<16> = 1u16.into();
+        let mid_key: FixedSizeKey<16> = 3u16.into();
+
+        // Test exclusive range (1..3)
+        let exclusive_results: Vec<_> = tree
+            .range_with_versions(start_key.clone()..mid_key.clone())
+            .collect();
+        assert_eq!(exclusive_results.len(), 4); // 2 keys * 2 versions
+
+        // Verify the content - should have keys 1 and 2, each with versions 1 and 2
+        let mut key_version_map: HashMap<u16, Vec<u64>> = HashMap::new();
+        for (key, value, version, _) in exclusive_results {
+            let key_num = from_be_bytes_key(key);
+            key_version_map
+                .entry(key_num as u16)
+                .or_default()
+                .push(version);
+            assert_eq!(key_num, *value as u64, "Key and value should match");
+        }
+        assert!(key_version_map.contains_key(&1));
+        assert!(key_version_map.contains_key(&2));
+        assert!(!key_version_map.contains_key(&3));
+        for versions in key_version_map.values() {
+            assert_eq!(versions.len(), 2);
+            assert!(versions.contains(&1));
+            assert!(versions.contains(&2));
+        }
+
+        // Test inclusive range (1..=3)
+        let inclusive_results: Vec<_> = tree
+            .range_with_versions(start_key.clone()..=mid_key.clone())
+            .collect();
+        assert_eq!(inclusive_results.len(), 6); // 3 keys * 2 versions
+
+        // Verify content - should have keys 1, 2, and 3, each with versions 1 and 2
+        let mut key_version_map: HashMap<u16, Vec<u64>> = HashMap::new();
+        for (key, value, version, _) in inclusive_results {
+            let key_num = from_be_bytes_key(key);
+            key_version_map
+                .entry(key_num as u16)
+                .or_default()
+                .push(version);
+            assert_eq!(key_num, *value as u64, "Key and value should match");
+        }
+        assert!(key_version_map.contains_key(&1));
+        assert!(key_version_map.contains_key(&2));
+        assert!(key_version_map.contains_key(&3));
+        for versions in key_version_map.values() {
+            assert_eq!(versions.len(), 2);
+            assert!(versions.contains(&1));
+            assert!(versions.contains(&2));
+        }
+
+        // Test unbounded start (..3)
+        let start_unbounded_results: Vec<_> = tree.range_with_versions(..mid_key.clone()).collect();
+        assert_eq!(start_unbounded_results.len(), 4); // 2 keys * 2 versions
+
+        // Verify content - should have keys 1 and 2, each with versions 1 and 2
+        let mut key_version_map: HashMap<u16, Vec<u64>> = HashMap::new();
+        for (key, value, version, _) in start_unbounded_results {
+            let key_num = from_be_bytes_key(key);
+            key_version_map
+                .entry(key_num as u16)
+                .or_default()
+                .push(version);
+            assert_eq!(key_num, *value as u64, "Key and value should match");
+        }
+        assert!(key_version_map.contains_key(&1));
+        assert!(key_version_map.contains_key(&2));
+        assert!(!key_version_map.contains_key(&3));
+        for versions in key_version_map.values() {
+            assert_eq!(versions.len(), 2);
+            assert!(versions.contains(&1));
+            assert!(versions.contains(&2));
+        }
+
+        // Test unbounded end (3..)
+        let end_unbounded_results: Vec<_> = tree.range_with_versions(mid_key.clone()..).collect();
+        assert_eq!(end_unbounded_results.len(), 6); // 3 keys * 2 versions
+
+        // Verify content - should have keys 3, 4, and 5, each with versions 1 and 2
+        let mut key_version_map: HashMap<u16, Vec<u64>> = HashMap::new();
+        for (key, value, version, _) in end_unbounded_results {
+            let key_num = from_be_bytes_key(key);
+            key_version_map
+                .entry(key_num as u16)
+                .or_default()
+                .push(version);
+            assert_eq!(key_num, *value as u64, "Key and value should match");
+        }
+        assert!(key_version_map.contains_key(&3));
+        assert!(key_version_map.contains_key(&4));
+        assert!(key_version_map.contains_key(&5));
+        for versions in key_version_map.values() {
+            assert_eq!(versions.len(), 2);
+            assert!(versions.contains(&1));
+            assert!(versions.contains(&2));
+        }
+    }
+
+    #[test]
+    fn test_version_range_large() {
+        let mut tree = Tree::<FixedSizeKey<16>, u16>::new();
+        let num_keys = 1000u16;
+        let versions_per_key = 10;
+
+        for i in 0..num_keys {
+            let key: FixedSizeKey<16> = i.into();
+            for version in 1..=versions_per_key {
+                tree.insert_unchecked(&key, i, version, 0).unwrap();
+            }
+        }
+
+        // Test small range (10..20)
+        let start_small: FixedSizeKey<16> = 10u16.into();
+        let end_small: FixedSizeKey<16> = 20u16.into();
+        let small_range_results: Vec<_> =
+            tree.range_with_versions(start_small..end_small).collect();
+
+        assert_eq!(small_range_results.len(), 10 * versions_per_key as usize);
+
+        // Verify small range content
+        let mut key_version_map: HashMap<u16, Vec<u64>> = HashMap::new();
+        for (key, value, version, _) in small_range_results {
+            let key_num = from_be_bytes_key(key);
+            key_version_map
+                .entry(key_num as u16)
+                .or_default()
+                .push(version);
+            assert_eq!(key_num, *value as u64, "Key and value should match");
+            assert!((10..20).contains(&key_num), "Key should be within range");
+        }
+        assert_eq!(key_version_map.len(), 10, "Should have exactly 10 keys");
+        for versions in key_version_map.values() {
+            assert_eq!(
+                versions.len(),
+                versions_per_key as usize,
+                "Each key should have all versions"
+            );
+            for v in 1..=versions_per_key {
+                assert!(versions.contains(&{ v }), "Version {} should exist", v);
+            }
+        }
+
+        // Test large range (100..900)
+        let start_large: FixedSizeKey<16> = 100u16.into();
+        let end_large: FixedSizeKey<16> = 900u16.into();
+        let large_range_results: Vec<_> =
+            tree.range_with_versions(start_large..end_large).collect();
+
+        assert_eq!(large_range_results.len(), 800 * versions_per_key as usize);
+
+        // Verify large range content
+        let mut key_version_map: HashMap<u16, Vec<u64>> = HashMap::new();
+        for (key, value, version, _) in large_range_results {
+            let key_num = from_be_bytes_key(key);
+            key_version_map
+                .entry(key_num as u16)
+                .or_default()
+                .push(version);
+            assert_eq!(key_num, *value as u64, "Key and value should match");
+            assert!((100..900).contains(&key_num), "Key should be within range");
+        }
+        assert_eq!(key_version_map.len(), 800, "Should have exactly 800 keys");
+        for versions in key_version_map.values() {
+            assert_eq!(
+                versions.len(),
+                versions_per_key as usize,
+                "Each key should have all versions"
+            );
+            for v in 1..=versions_per_key {
+                assert!(versions.contains(&{ v }), "Version {} should exist", v);
+            }
+        }
     }
 }
