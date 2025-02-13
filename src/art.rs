@@ -1590,10 +1590,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// Returns a `Range` iterator instance that iterates over the key-value pairs within the given range.
     /// If the Trie is empty, an empty `Range` iterator is returned.
     ///
-    pub fn range<'a, R>(
-        &'a self,
-        range: R,
-    ) -> impl Iterator<Item = IterItem<'a, V>> + DoubleEndedIterator
+    pub fn range<'a, R>(&'a self, range: R) -> impl DoubleEndedIterator<Item = IterItem<'a, V>>
     where
         R: RangeBounds<P> + 'a,
     {
@@ -1622,7 +1619,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     pub fn range_with_versions<'a, R>(
         &'a self,
         range: R,
-    ) -> impl Iterator<Item = IterItem<'a, V>> + DoubleEndedIterator
+    ) -> impl DoubleEndedIterator<Item = IterItem<'a, V>>
     where
         R: RangeBounds<P> + 'a,
     {
@@ -1718,7 +1715,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         &'a self,
         range: R,
         ts: u64,
-    ) -> impl Iterator<Item = IterItem<'a, V>> + DoubleEndedIterator + 'a
+    ) -> impl DoubleEndedIterator<Item = IterItem<'a, V>> + 'a
     where
         R: RangeBounds<P> + 'a,
     {
