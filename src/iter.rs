@@ -345,32 +345,6 @@ impl<'a, P: KeyTrait + 'a, V: Clone> BackwardIterState<'a, P, V> {
             prefix: node.prefix().as_slice().to_vec(),
         }
     }
-
-    fn scan_at<R>(node: &'a Node<P, V>, range: &R, query_type: QueryType) -> Self
-    where
-        R: RangeBounds<P>,
-    {
-        let mut iters = Vec::new();
-        let mut leafs = BinaryHeap::new();
-
-        if let NodeType::Twig(twig) = &node.node_type {
-            if range.contains(&twig.key) {
-                if let Some(v) = twig.get_leaf_by_query_ref(query_type) {
-                    leafs.push(Leaf(&twig.key, v));
-                }
-            }
-        } else {
-            // Reverse iteration for non-twig nodes
-            iters.push(NodeIter::new(node.iter().rev()));
-        }
-
-        Self {
-            iters,
-            leafs,
-            is_versioned: false,
-            prefix: node.prefix().as_slice().to_vec(),
-        }
-    }
 }
 
 pub struct Range<'a, K: KeyTrait, V: Clone, R> {
@@ -628,15 +602,10 @@ impl<K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> DoubleEndedIterator for Ran
 
 pub(crate) struct QueryIterator<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> {
     forward: ForwardIterState<'a, K, V>,
-    backward: BackwardIterState<'a, K, V>,
+    prefix: Vec<u8>,
+    prefix_lengths: Vec<usize>,
     range: R,
     query_type: QueryType,
-    forward_prefix: Vec<u8>,
-    forward_prefix_lengths: Vec<usize>,
-    backward_prefix: Vec<u8>,
-    backward_prefix_lengths: Vec<usize>,
-    last_forward_key: Option<K>,
-    last_backward_key: Option<K>,
 }
 
 impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> QueryIterator<'a, K, V, R> {
@@ -644,21 +613,14 @@ impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> QueryIterator<'a, K, V, R> {
         let forward = node.map_or_else(ForwardIterState::empty, |n| {
             ForwardIterState::scan_at(n, &range, query_type)
         });
-        let backward = node.map_or_else(BackwardIterState::empty, |n| {
-            BackwardIterState::scan_at(n, &range, query_type)
-        });
+        let prefix = forward.prefix.clone();
 
         Self {
             forward,
-            backward,
+            prefix,
+            prefix_lengths: Vec::new(),
             range,
             query_type,
-            forward_prefix: Vec::new(),
-            forward_prefix_lengths: Vec::new(),
-            backward_prefix: Vec::new(),
-            backward_prefix_lengths: Vec::new(),
-            last_forward_key: None,
-            last_backward_key: None,
         }
     }
 }
@@ -667,22 +629,29 @@ impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for QueryIterator<'a
     type Item = IterItem<'a, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        // First try to get item from the current node iteration
         while let Some(node) = self.forward.iters.last_mut() {
             match node.next() {
                 Some(other) => {
                     if let NodeType::Twig(twig) = &other.node_type {
                         if self.range.contains(&twig.key) {
                             if let Some(leaf) = twig.get_leaf_by_query(self.query_type) {
-                                self.forward.leafs.push_back(Leaf(&twig.key, leaf));
+                                return Some((
+                                    twig.key.as_slice(),
+                                    &leaf.value,
+                                    leaf.version,
+                                    leaf.ts,
+                                ));
                             }
-                            break;
                         } else if is_key_out_of_range(&self.range, &twig.key) {
+                            // stop iteration if the range end is exceeded
                             self.forward.iters.clear();
+                            return None;
                         }
                     } else {
                         handle_non_twig_node(
-                            &mut self.forward_prefix,
-                            &mut self.forward_prefix_lengths,
+                            &mut self.prefix,
+                            &mut self.prefix_lengths,
                             &self.range,
                             other,
                             &mut self.forward.iters,
@@ -690,83 +659,21 @@ impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for QueryIterator<'a
                     }
                 }
                 None => {
+                    // Pop the iterator if no more elements
                     self.forward.iters.pop();
-                    if let Some(prefix_len_before) = self.forward_prefix_lengths.pop() {
-                        self.forward_prefix.truncate(prefix_len_before);
+                    // Restore the prefix to its previous state
+                    if let Some(prefix_len_before) = self.prefix_lengths.pop() {
+                        self.prefix.truncate(prefix_len_before);
                     }
                 }
             }
         }
 
-        self.forward.leafs.pop_front().and_then(|leaf| {
-            self.last_forward_key = Some(leaf.0.clone());
-            if self
-                .last_forward_key
-                .as_ref()
-                .zip(self.last_backward_key.as_ref())
-                .map_or(true, |(k1, k2)| k1 < k2)
-            {
-                Some((leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
-            } else {
-                self.forward.iters.clear();
-                self.forward.leafs.clear();
-                None
-            }
-        })
-    }
-}
-
-impl<K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> DoubleEndedIterator
-    for QueryIterator<'_, K, V, R>
-{
-    fn next_back(&mut self) -> Option<Self::Item> {
-        while let Some(node) = self.backward.iters.last_mut() {
-            match node.next_back() {
-                Some(other) => {
-                    if let NodeType::Twig(twig) = &other.node_type {
-                        if self.range.contains(&twig.key) {
-                            if let Some(leaf) = twig.get_leaf_by_query(self.query_type) {
-                                self.backward.leafs.push(Leaf(&twig.key, leaf));
-                            }
-                            break;
-                        } else if is_key_out_of_range_backward(&self.range, &twig.key) {
-                            self.backward.iters.clear();
-                            break;
-                        }
-                    } else {
-                        handle_non_twig_node(
-                            &mut self.backward_prefix,
-                            &mut self.backward_prefix_lengths,
-                            &self.range,
-                            other,
-                            &mut self.backward.iters,
-                        );
-                    }
-                }
-                None => {
-                    self.backward.iters.pop();
-                    if let Some(len) = self.backward_prefix_lengths.pop() {
-                        self.backward_prefix.truncate(len);
-                    }
-                }
-            }
-        }
-
-        self.backward.leafs.pop().and_then(|leaf| {
-            self.last_backward_key = Some(leaf.0.clone());
-            if self
-                .last_backward_key
-                .as_ref()
-                .zip(self.last_forward_key.as_ref())
-                .map_or(true, |(k1, k2)| k1 > k2)
-            {
-                Some((leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
-            } else {
-                self.backward.iters.clear();
-                self.backward.leafs.clear();
-                None
-            }
-        })
+        // If no more nodes to iterate, try the leaf queue
+        self.forward
+            .leafs
+            .pop_front()
+            .map(|leaf| (leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
     }
 }
 

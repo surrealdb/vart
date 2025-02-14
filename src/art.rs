@@ -1711,7 +1711,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         &'a self,
         range: R,
         ts: u64,
-    ) -> impl DoubleEndedIterator<Item = IterItem<'a, V>> + 'a
+    ) -> impl Iterator<Item = IterItem<'a, V>> + 'a
     where
         R: RangeBounds<P> + 'a,
     {
