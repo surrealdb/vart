@@ -648,6 +648,8 @@ pub(crate) struct QueryIterator<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> {
     forward_prefix_lengths: Vec<usize>,
     backward_prefix: Vec<u8>,
     backward_prefix_lengths: Vec<usize>,
+    last_forward_key: Option<K>,
+    last_backward_key: Option<K>,
 }
 
 impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> QueryIterator<'a, K, V, R> {
@@ -668,6 +670,8 @@ impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> QueryIterator<'a, K, V, R> {
             forward_prefix_lengths: Vec::new(),
             backward_prefix: Vec::new(),
             backward_prefix_lengths: Vec::new(),
+            last_forward_key: None,
+            last_backward_key: None,
         }
     }
 }
@@ -707,10 +711,21 @@ impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for QueryIterator<'a
             }
         }
 
-        self.forward
-            .leafs
-            .pop_front()
-            .map(|leaf| (leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
+        self.forward.leafs.pop_front().and_then(|leaf| {
+            self.last_forward_key = Some(leaf.0.clone());
+            if self
+                .last_forward_key
+                .as_ref()
+                .zip(self.last_backward_key.as_ref())
+                .map_or(true, |(k1, k2)| k1 < k2)
+            {
+                Some((leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
+            } else {
+                self.forward.iters.clear();
+                self.forward.leafs.clear();
+                None
+            }
+        })
     }
 }
 
@@ -750,10 +765,21 @@ impl<K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> DoubleEndedIterator
             }
         }
 
-        self.backward
-            .leafs
-            .pop()
-            .map(|leaf| (leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
+        self.backward.leafs.pop().and_then(|leaf| {
+            self.last_backward_key = Some(leaf.0.clone());
+            if self
+                .last_backward_key
+                .as_ref()
+                .zip(self.last_forward_key.as_ref())
+                .map_or(true, |(k1, k2)| k1 > k2)
+            {
+                Some((leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
+            } else {
+                self.backward.iters.clear();
+                self.backward.leafs.clear();
+                None
+            }
+        })
     }
 }
 
