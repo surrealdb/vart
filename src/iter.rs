@@ -626,19 +626,6 @@ impl<K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> DoubleEndedIterator for Ran
     }
 }
 
-pub(crate) fn scan_node<'a, K, V, R>(
-    node: Option<&'a Arc<Node<K, V>>>,
-    range: R,
-    query_type: QueryType,
-) -> impl DoubleEndedIterator<Item = IterItem<'a, V>> + 'a
-where
-    K: KeyTrait + 'a,
-    V: Clone,
-    R: RangeBounds<K> + 'a,
-{
-    QueryIterator::new(node, range, query_type)
-}
-
 pub(crate) struct QueryIterator<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> {
     forward: ForwardIterState<'a, K, V>,
     backward: BackwardIterState<'a, K, V>,

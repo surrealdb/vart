@@ -5,8 +5,9 @@ use std::ops::RangeBounds;
 use std::sync::Arc;
 
 use crate::iter::IterItem;
+use crate::iter::QueryIterator;
 use crate::iter::VersionRange;
-use crate::iter::{scan_node, Iter, Range};
+use crate::iter::{Iter, Range};
 use crate::node::{FlatNode, LeafValue, Node256, Node48, NodeTrait, TwigNode};
 use crate::{KeyTrait, TrieError};
 
@@ -1714,7 +1715,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     where
         R: RangeBounds<P> + 'a,
     {
-        scan_node(self.root.as_ref(), range, QueryType::LatestByTs(ts))
+        QueryIterator::new(self.root.as_ref(), range, QueryType::LatestByTs(ts))
     }
 
     /// Retrieves the maximum version inside the Trie.
