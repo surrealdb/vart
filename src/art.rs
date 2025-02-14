@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use crate::iter::IterItem;
 use crate::iter::{scan_node, Iter, Range};
-use crate::node::{FlatNode, LeafValue, Node256, Node48, NodeTrait, TwigNode};
+use crate::node::{FlatNode, Node256, Node48, NodeTrait, TwigNode};
+use crate::version::LeafValue;
+use crate::version::LeavesType;
 use crate::{KeyTrait, TrieError};
 
 // Minimum and maximum number of children for Node4
@@ -144,9 +146,16 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     /// Returns a new `Node` instance with a Twig node containing the provided key, value, and version.
     ///
     #[inline]
-    pub(crate) fn new_twig(prefix: P, key: P, value: V, version: u64, ts: u64) -> Node<P, V> {
+    pub(crate) fn new_twig(
+        prefix: P,
+        key: P,
+        value: V,
+        version: u64,
+        ts: u64,
+        leaves_type: LeavesType,
+    ) -> Node<P, V> {
         // Create a new TwigNode instance using the provided prefix and key.
-        let mut twig = TwigNode::new(prefix, key);
+        let mut twig = TwigNode::new(prefix, key, leaves_type);
 
         // Insert the provided value into the TwigNode along with the version.
         twig.insert_mut(value, version, ts);
@@ -796,7 +805,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         commit_version: u64,
         ts: u64,
         depth: usize,
-        replace: bool,
+        leaves_type: LeavesType,
     ) -> NodeArc<P, V> {
         let (key_prefix, new_prefix, shared_prefix, is_prefix_match, shared_prefix_length) =
             Self::common_insert_logic(cur_node.prefix(), key, depth);
@@ -814,6 +823,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 value,
                 commit_version,
                 ts,
+                leaves_type,
             );
 
             let mut n4 = Node::new_node4(shared_prefix);
@@ -831,7 +841,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 // If the current node is a Twig node and the prefixes match up to the end of both prefixes,
                 // update the existing value in the Twig node.
                 if let NodeType::Twig(twig) = &cur_node.node_type {
-                    let new_twig = twig.insert_or_replace(value, commit_version, ts, replace);
+                    let new_twig = twig.insert(value, commit_version, ts);
                     Arc::new(Node {
                         node_type: NodeType::Twig(new_twig),
                     })
@@ -839,10 +849,13 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                     // If the current node is an inner node, then either insert the new value
                     // in its existing inner Twig node, or create new one.
                     let leaf = match cur_node.get_inner_twig() {
-                        Some(twig) => twig.insert_or_replace(value, commit_version, ts, replace),
+                        Some(twig) => twig.insert(value, commit_version, ts),
                         None => {
-                            let mut new_twig =
-                                TwigNode::new(cur_node.prefix().clone(), key.as_slice().into());
+                            let mut new_twig = TwigNode::new(
+                                cur_node.prefix().clone(),
+                                key.as_slice().into(),
+                                leaves_type,
+                            );
                             new_twig.insert_mut(value, commit_version, ts);
                             new_twig
                         }
@@ -867,8 +880,14 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 if let NodeType::Twig(twig) = &cur_node.node_type {
                     let mut n4 = Node::new_node4(shared_prefix);
                     n4.set_inner_twig(twig.clone());
-                    let new_twig =
-                        Node::new_twig(new_prefix, key.clone(), value, commit_version, ts);
+                    let new_twig = Node::new_twig(
+                        new_prefix,
+                        key.clone(),
+                        value,
+                        commit_version,
+                        ts,
+                        leaves_type,
+                    );
                     n4.add_child_mut(k, new_twig);
                     Arc::new(n4)
                 } else {
@@ -881,7 +900,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                             commit_version,
                             ts,
                             depth + shared_prefix_length,
-                            replace,
+                            leaves_type,
                         );
                         let new_node = cur_node.replace_child(k, new_child);
                         return Arc::new(new_node);
@@ -894,6 +913,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                         value,
                         commit_version,
                         ts,
+                        leaves_type,
                     );
                     let new_node = cur_node.add_child(k, new_twig);
                     Arc::new(new_node)
@@ -908,7 +928,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 // Current node is also replaced by a new Node4, but this time its prefix is
                 // adjusted and it becomes the Node4's child, while the new Twig node becomes
                 // Node4's inner Twig.
-                let mut inner_twig = TwigNode::new(key_prefix.into(), key.clone());
+                let mut inner_twig = TwigNode::new(key_prefix.into(), key.clone(), leaves_type);
                 inner_twig.insert_mut(value, commit_version, ts);
                 let old_node_key = new_prefix.at(0);
                 let mut old_node = cur_node.clone_node();
@@ -929,7 +949,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         commit_version: u64,
         ts: u64,
         depth: usize,
-        replace: bool,
+        leaves_type: LeavesType,
     ) {
         let (key_prefix, new_prefix, shared_prefix, is_prefix_match, shared_prefix_length) =
             Self::common_insert_logic(cur_node.prefix(), key, depth);
@@ -952,6 +972,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 value,
                 commit_version,
                 ts,
+                leaves_type,
             );
             cur_node.add_child_mut(k1, old_node);
             cur_node.add_child_mut(k2, new_twig);
@@ -969,31 +990,20 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 // If the current node is a Twig node and the prefixes match up to the
                 // end of both prefixes, update the existing value in the Twig node.
                 if let NodeType::Twig(ref mut twig) = &mut cur_node.node_type {
-                    if replace {
-                        // Only replace if the provided value is more recent than
-                        // the existing ones. This is important because this method
-                        // is used for loading the index in SurrealKV and thus must
-                        // be able to handle segments left by an unfinished compaction
-                        // where older versions can end up in more recent segments
-                        // after the newer versions.
-                        twig.replace_if_newer_mut(value, commit_version, ts);
-                    } else {
-                        twig.insert_mut(value, commit_version, ts);
-                    }
+                    twig.insert_mut(value, commit_version, ts);
                 } else {
                     // If the current node is an inner node, then either insert the new value
                     // in its existing inner Twig node, or create new one.
                     match cur_node.get_inner_twig_mut() {
                         Some(twig) => {
-                            if replace {
-                                twig.replace_if_newer_mut(value, commit_version, ts);
-                            } else {
-                                twig.insert_mut(value, commit_version, ts);
-                            }
+                            twig.insert_mut(value, commit_version, ts);
                         }
                         None => {
-                            let mut new_twig =
-                                TwigNode::new(cur_node.prefix().clone(), key.as_slice().into());
+                            let mut new_twig = TwigNode::new(
+                                cur_node.prefix().clone(),
+                                key.as_slice().into(),
+                                leaves_type,
+                            );
                             new_twig.insert_mut(value, commit_version, ts);
                             cur_node.set_inner_twig(new_twig);
                         }
@@ -1018,8 +1028,14 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                         NodeType::Twig(n) => cur_node.set_inner_twig(n),
                         _ => panic!("must be Twig"),
                     }
-                    let new_twig =
-                        Node::new_twig(new_prefix, key.clone(), value, commit_version, ts);
+                    let new_twig = Node::new_twig(
+                        new_prefix,
+                        key.clone(),
+                        value,
+                        commit_version,
+                        ts,
+                        leaves_type,
+                    );
                     cur_node.add_child_mut(k, new_twig);
                 } else {
                     // Case 2b2: Continue traversal with existing child
@@ -1031,7 +1047,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                             commit_version,
                             ts,
                             depth + shared_prefix_length,
-                            replace,
+                            leaves_type,
                         );
                         return;
                     }
@@ -1044,6 +1060,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                         value,
                         commit_version,
                         ts,
+                        leaves_type,
                     );
                     cur_node.add_child_mut(k, new_twig);
                 }
@@ -1060,7 +1077,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 // Node4's inner Twig.
                 let n4 = Node::new_node4(key_prefix.into());
                 let mut old_node = std::mem::replace(cur_node, n4);
-                let mut inner_twig = TwigNode::new(key_prefix.into(), key.clone());
+                let mut inner_twig = TwigNode::new(key_prefix.into(), key.clone(), leaves_type);
                 inner_twig.insert_mut(value, commit_version, ts);
                 cur_node.set_inner_twig(inner_twig);
                 let old_node_key = new_prefix.at(0);
@@ -1154,6 +1171,7 @@ pub struct Tree<P: KeyTrait, V: Clone> {
     pub(crate) root: Option<Arc<Node<P, V>>>,
     pub size: usize,
     pub version: u64,
+    pub leaves_type: LeavesType,
 }
 
 // A type alias for a node reference.
@@ -1185,6 +1203,7 @@ impl<P: KeyTrait, V: Clone> Clone for Tree<P, V> {
             root: self.root.as_ref().cloned(),
             size: self.size,
             version: self.version,
+            leaves_type: self.leaves_type,
         }
     }
 }
@@ -1195,6 +1214,16 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
             root: None,
             size: 0,
             version: 0,
+            leaves_type: LeavesType::Vector,
+        }
+    }
+
+    pub fn with_leaves_type(leaves_type: LeavesType) -> Self {
+        Tree {
+            root: None,
+            size: 0,
+            version: 0,
+            leaves_type,
         }
     }
 
@@ -1215,7 +1244,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         version: u64,
         ts: u64,
         check_version: bool,
-        replace: bool,
     ) -> Result<(), TrieError> {
         let new_root = match &self.root {
             None => {
@@ -1226,6 +1254,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                     value,
                     commit_version,
                     ts,
+                    self.leaves_type,
                 ))
             }
             Some(root) => {
@@ -1236,7 +1265,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                 } else if check_version && curr_version > version {
                     return Err(TrieError::VersionIsOld);
                 }
-                Node::insert_recurse(root, key, value, commit_version, ts, 0, replace)
+                Node::insert_recurse(root, key, value, commit_version, ts, 0, self.leaves_type)
             }
         };
 
@@ -1254,7 +1283,6 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         version: u64,
         ts: u64,
         check_version: bool,
-        replace: bool,
     ) -> Result<(), TrieError> {
         if let Some(root_arc) = self.root.as_mut() {
             let curr_version = self.version;
@@ -1265,7 +1293,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                 return Err(TrieError::VersionIsOld);
             }
             if let Some(root) = Arc::get_mut(root_arc) {
-                Node::insert_recurse_mut(root, key, value, commit_version, ts, 0, replace)
+                Node::insert_recurse_mut(root, key, value, commit_version, ts, 0, self.leaves_type)
             } else {
                 return Err(TrieError::RootIsNotUniquelyOwned);
             }
@@ -1277,6 +1305,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                 value,
                 commit_version,
                 ts,
+                self.leaves_type,
             )));
         }
         self.size += 1;
@@ -1311,32 +1340,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     ///
     /// Returns an error if the given version is older than the root's current version.
     pub fn insert(&mut self, key: &P, value: V, version: u64, ts: u64) -> Result<(), TrieError> {
-        self.insert_common(key, value, version, ts, true, false)
-    }
-
-    /// Inserts or replaces a key-value pair in the trie.
-    ///
-    /// This function inserts a new key-value pair into the trie or replaces the existing value
-    /// if the key already exists. It ensures that the insertion is checked, meaning it will
-    /// validate the keys are inserted in increasing order of version numbers.
-    ///
-    /// # Parameters
-    /// - `key`: A reference to the key to be inserted or replaced.
-    /// - `value`: The value to be associated with the key.
-    /// - `version`: The version number for the key-value pair.
-    /// - `ts`: The timestamp for the key-value pair.
-    ///
-    /// # Returns
-    /// - `Result<(), TrieError>`: Returns `Ok(())` if the insertion or replacement is successful,
-    ///   or a `TrieError` if an error occurs during the operation.
-    pub fn insert_or_replace(
-        &mut self,
-        key: &P,
-        value: V,
-        version: u64,
-        ts: u64,
-    ) -> Result<(), TrieError> {
-        self.insert_common(key, value, version, ts, true, true)
+        self.insert_common(key, value, version, ts, true)
     }
 
     /// Inserts a key-value pair into the trie without checking for existing keys.
@@ -1366,33 +1370,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         version: u64,
         ts: u64,
     ) -> Result<(), TrieError> {
-        self.insert_common_mut(key, value, version, ts, false, false)
-    }
-
-    /// Inserts or replaces a key-value pair in the trie without checking for existing keys.
-    ///
-    /// This function inserts a new key-value pair into the trie or replaces the existing value
-    /// if the key already exists. It is an unchecked insertion, meaning it will not check if the versions
-    /// are incremental during insertion. This can be faster but may lead to inconsistencies
-    /// if not used carefully.
-    ///
-    /// # Parameters
-    /// - `key`: A reference to the key to be inserted or replaced.
-    /// - `value`: The value to be associated with the key.
-    /// - `version`: The version number for the key-value pair.
-    /// - `ts`: The timestamp for the key-value pair.
-    ///
-    /// # Returns
-    /// - `Result<(), TrieError>`: Returns `Ok(())` if the insertion or replacement is successful,
-    ///   or a `TrieError` if an error occurs during the operation.
-    pub fn insert_or_replace_unchecked(
-        &mut self,
-        key: &P,
-        value: V,
-        version: u64,
-        ts: u64,
-    ) -> Result<(), TrieError> {
-        self.insert_common_mut(key, value, version, ts, false, true)
+        self.insert_common_mut(key, value, version, ts, false)
     }
 
     /// Removes the key from the current node or one of its child nodes
@@ -1739,10 +1717,12 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 mod tests {
     use super::Tree;
     use crate::art::QueryType;
-    use crate::{FixedSizeKey, VariableSizeKey};
+    use crate::version::LeavesType;
+    use crate::{FixedSizeKey, KeyTrait, VariableSizeKey};
     use rand::{seq::SliceRandom, thread_rng, Rng};
     use std::ops::RangeFull;
     use std::str::FromStr;
+    use std::time::Instant;
 
     use rand::distributions::Alphanumeric;
     use std::fs::File;
@@ -3288,11 +3268,11 @@ mod tests {
 
     #[test]
     fn test_insert_or_replace() {
-        let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::with_leaves_type(LeavesType::Single);
         let key = VariableSizeKey::from_str("key").unwrap();
 
-        tree.insert_or_replace(&key, 1, 10, 100).unwrap();
-        tree.insert_or_replace(&key, 2, 20, 200).unwrap();
+        tree.insert(&key, 1, 10, 100).unwrap();
+        tree.insert(&key, 2, 20, 200).unwrap();
 
         let history = tree.get_version_history(&key).unwrap();
         assert_eq!(history.len(), 1);
@@ -3301,12 +3281,12 @@ mod tests {
 
     #[test]
     fn test_insert_or_replace_unchecked() {
-        let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::with_leaves_type(LeavesType::Single);
         let key = VariableSizeKey::from_str("key").unwrap();
 
         // Scenario 1: the second value is more recent than the first one.
-        tree.insert_or_replace_unchecked(&key, 1, 10, 100).unwrap();
-        tree.insert_or_replace_unchecked(&key, 2, 20, 200).unwrap();
+        tree.insert_unchecked(&key, 1, 10, 100).unwrap();
+        tree.insert_unchecked(&key, 2, 20, 200).unwrap();
 
         let history = tree.get_version_history(&key).unwrap();
         assert_eq!(history.len(), 1);
@@ -3315,7 +3295,7 @@ mod tests {
         // Scenario 2: the new value has the smaller version and hence
         // is older than the one already in the tree. Discard the new
         // value.
-        tree.insert_or_replace_unchecked(&key, 1, 1, 1).unwrap();
+        tree.insert_unchecked(&key, 1, 1, 1).unwrap();
 
         let history = tree.get_version_history(&key).unwrap();
         assert_eq!(history.len(), 1);
@@ -3539,6 +3519,110 @@ mod tests {
 
             assert!(tree.remove(&key17));
             assert!(tree.remove(&key1));
+        }
+    }
+
+    #[test]
+    fn test_insert_multiple_version_keys() {
+        let mut tree = Tree::<VariableSizeKey, i32>::new();
+
+        let start = std::time::Instant::now();
+
+        let num_keys = 100; // Number of keys
+        let versions_per_key = 10_000; // Number of versions per key
+
+        // Insert 100,00 versions for each of the 100 keys
+        for key_index in 0..num_keys {
+            let key = VariableSizeKey::from_str(&format!("key_{}", key_index)).unwrap();
+
+            for version_index in 0..versions_per_key {
+                let value = key_index * versions_per_key + version_index; // Value for versioning
+                tree.insert_unchecked(&key, value, 0, 0).unwrap();
+            }
+        }
+
+        println!(
+            "Insertion time for 1M key-version pairs: {:?}",
+            start.elapsed()
+        );
+    }
+
+    fn run_query_benchmark<P: KeyTrait + Clone, V: Clone>(
+        tree: &Tree<P, V>,
+        key: &P,
+        query_type: QueryType,
+        iterations: u32,
+    ) -> std::time::Duration {
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let _ = tree.get_value_by_query(key, query_type);
+        }
+        start.elapsed()
+    }
+
+    #[test]
+    fn benchmark_timestamp_queries() {
+        let mut tree = Tree::<VariableSizeKey, i32>::with_leaves_type(LeavesType::Vector);
+
+        // Test parameters
+        let num_keys = 100;
+        let versions_per_key = 10_000;
+        let query_iterations = 1;
+
+        println!("Setting up test data...");
+        let setup_start = Instant::now();
+
+        // Insert test data with incrementing timestamps
+        for key_idx in 0..num_keys {
+            let key = VariableSizeKey::from_str(&format!("key_{}", key_idx)).unwrap();
+            for version in 0..versions_per_key {
+                let value = key_idx * versions_per_key + version;
+                let ts = version as u64; // Using version as timestamp for predictable ordering
+                tree.insert_unchecked(&key, value, version as u64, ts)
+                    .unwrap();
+            }
+        }
+
+        println!("Setup completed in {:?}", setup_start.elapsed());
+
+        // Select a key in the middle for testing
+        let test_key = VariableSizeKey::from_str("key_50").unwrap();
+        let mid_ts = (versions_per_key / 2) as u64;
+
+        // Test cases
+        let test_cases = vec![
+            ("LatestByVersion", QueryType::LatestByVersion(mid_ts)),
+            ("LatestByTs", QueryType::LatestByTs(mid_ts)),
+            ("LastLessThanTs", QueryType::LastLessThanTs(mid_ts)),
+            ("LastLessOrEqualTs", QueryType::LastLessOrEqualTs(mid_ts)),
+            ("FirstGreaterThanTs", QueryType::FirstGreaterThanTs(mid_ts)),
+            (
+                "FirstGreaterOrEqualTs",
+                QueryType::FirstGreaterOrEqualTs(mid_ts),
+            ),
+        ];
+
+        println!("\nRunning performance tests...");
+        println!(
+            "Each query type will be executed {} times",
+            query_iterations
+        );
+        println!(
+            "Tree contains {} keys with {} versions each",
+            num_keys, versions_per_key
+        );
+        println!("\nResults:");
+        println!(
+            "{:<25} {:<15} {:<10}",
+            "Query Type", "Total Time", "Avg Time"
+        );
+        println!("{}", "-".repeat(50));
+
+        for (name, query_type) in test_cases {
+            let duration = run_query_benchmark(&tree, &test_key, query_type, query_iterations);
+            let avg_duration = duration.div_f64(query_iterations as f64);
+
+            println!("{:<25} {:?} {:?}", name, duration, avg_duration);
         }
     }
 }
