@@ -245,7 +245,7 @@ pub(crate) struct FlatNode<P: KeyTrait, N, const WIDTH: usize> {
 
 impl<P: KeyTrait, N, const WIDTH: usize> FlatNode<P, N, WIDTH> {
     pub(crate) fn new(prefix: P) -> Self {
-        let children: [Option<Arc<N>>; WIDTH] = std::array::from_fn(|_| None);
+        let children: [Option<Arc<N>>; WIDTH] = [const { None }; WIDTH];
 
         Self {
             prefix,
@@ -410,7 +410,7 @@ impl<P: KeyTrait, N> Node48<P, N> {
         Self {
             prefix,
             keys: Box::new([u8::MAX; 256]),
-            children: Box::new(std::array::from_fn(|_| None)),
+            children: Box::new([const { None }; 48]),
             inner_twig: None,
             child_bitmap: 0,
         }
@@ -554,7 +554,7 @@ impl<P: KeyTrait, N> Node256<P, N> {
     pub(crate) fn new(prefix: P) -> Self {
         Self {
             prefix,
-            children: Box::new(std::array::from_fn(|_| None)),
+            children: Box::new([const { None }; 256]),
             inner_twig: None,
             num_children: 0,
         }
