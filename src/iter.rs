@@ -125,8 +125,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
             self.last_forward_key = Some(leaf.0);
             if self
                 .last_forward_key
-                .zip(self.last_backward_key)
-                .map_or(true, |(k1, k2)| k1 < k2)
+                .zip(self.last_backward_key).is_none_or(|(k1, k2)| k1 < k2)
             {
                 Some((leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
             } else {
@@ -167,8 +166,7 @@ impl<'a, P: KeyTrait + 'a, V: Clone> DoubleEndedIterator for Iter<'a, P, V> {
             self.last_backward_key = Some(leaf.0);
             if self
                 .last_backward_key
-                .zip(self.last_forward_key)
-                .map_or(true, |(k1, k2)| k1 > k2)
+                .zip(self.last_forward_key).is_none_or(|(k1, k2)| k1 > k2)
             {
                 Some((leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
             } else {
@@ -522,8 +520,7 @@ impl<'a, K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, 
             if self
                 .last_forward_key
                 .as_ref()
-                .zip(self.last_backward_key.as_ref())
-                .map_or(true, |(k1, k2)| k1 < k2)
+                .zip(self.last_backward_key.as_ref()).is_none_or(|(k1, k2)| k1 < k2)
             {
                 Some((leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
             } else {
@@ -587,8 +584,7 @@ impl<K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> DoubleEndedIterator for Ran
             if self
                 .last_backward_key
                 .as_ref()
-                .zip(self.last_forward_key.as_ref())
-                .map_or(true, |(k1, k2)| k1 > k2)
+                .zip(self.last_forward_key.as_ref()).is_none_or(|(k1, k2)| k1 > k2)
             {
                 Some((leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
             } else {

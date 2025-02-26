@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.9.1] - 2025-02-06
+## [0.9.2] - 2025-02-22
 
 ### Miscellaneous Tasks
 
@@ -11,6 +11,10 @@ All notable changes to this project will be documented in this file.
 ### Perf
 
 - Simpler way to set version (#84)
+
+### Performance
+
+- Replace `std::array::from_fn` with const block initializer (#87)
 
 ### Release
 
