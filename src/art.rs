@@ -3560,8 +3560,10 @@ mod tests {
         let scan_iter = tree.scan_at_ts(key1.clone()..=key3.clone(), 175);
         let forward_results: Vec<_> = scan_iter.collect();
 
-        let expected_forward = [(key1.as_slice(), "value1_ts100", 1, 100),
-            (key2.as_slice(), "value2_ts150", 1, 150)];
+        let expected_forward = [
+            (key1.as_slice(), "value1_ts100", 1, 100),
+            (key2.as_slice(), "value2_ts150", 1, 150),
+        ];
 
         assert_eq!(forward_results.len(), expected_forward.len());
         for (i, (actual, expected)) in forward_results
@@ -3579,8 +3581,10 @@ mod tests {
         let scan_iter = tree.scan_at_ts(key1.clone()..=key3.clone(), 175);
         let backward_results: Vec<_> = scan_iter.rev().collect();
 
-        let expected_backward = [(key2.as_slice(), "value2_ts150", 1, 150),
-            (key1.as_slice(), "value1_ts100", 1, 100)];
+        let expected_backward = [
+            (key2.as_slice(), "value2_ts150", 1, 150),
+            (key1.as_slice(), "value1_ts100", 1, 100),
+        ];
 
         assert_eq!(backward_results.len(), expected_backward.len());
         for (i, (actual, expected)) in backward_results
