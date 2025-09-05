@@ -1711,7 +1711,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         &'a self,
         range: R,
         ts: u64,
-    ) -> impl Iterator<Item = IterItem<'a, V>> + 'a
+    ) -> impl DoubleEndedIterator<Item = IterItem<'a, V>> + 'a
     where
         R: RangeBounds<P> + 'a,
     {
@@ -1738,7 +1738,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
 mod tests {
     use super::Tree;
     use crate::art::QueryType;
-    use crate::{FixedSizeKey, VariableSizeKey};
+    use crate::{FixedSizeKey, Key, VariableSizeKey};
     use rand::{seq::SliceRandom, thread_rng, Rng};
     use std::ops::RangeFull;
     use std::str::FromStr;
@@ -3539,5 +3539,329 @@ mod tests {
             assert!(tree.remove(&key17));
             assert!(tree.remove(&key1));
         }
+    }
+
+    #[test]
+    fn test_scan_at_ts_double_ended_iterator() {
+        let mut tree: Tree<FixedSizeKey<16>, String> = Tree::new();
+
+        let key1: FixedSizeKey<16> = 1u16.into();
+        let key2: FixedSizeKey<16> = 2u16.into();
+        let key3: FixedSizeKey<16> = 3u16.into();
+
+        // Insert keys at different timestamps
+        let _ = tree.insert_unchecked(&key1, "value1_ts100".to_string(), 1, 100);
+        let _ = tree.insert_unchecked(&key1, "value1_ts200".to_string(), 2, 200);
+        let _ = tree.insert_unchecked(&key2, "value2_ts150".to_string(), 1, 150);
+        let _ = tree.insert_unchecked(&key2, "value2_ts250".to_string(), 2, 250);
+        let _ = tree.insert_unchecked(&key3, "value3_ts300".to_string(), 1, 300);
+
+        // Test scan_at_ts at timestamp 175 (should get key1@ts100, key2@ts150)
+        let scan_iter = tree.scan_at_ts(key1.clone()..=key3.clone(), 175);
+        let forward_results: Vec<_> = scan_iter.collect();
+
+        let expected_forward = [(key1.as_slice(), "value1_ts100", 1, 100),
+            (key2.as_slice(), "value2_ts150", 1, 150)];
+
+        assert_eq!(forward_results.len(), expected_forward.len());
+        for (i, (actual, expected)) in forward_results
+            .iter()
+            .zip(expected_forward.iter())
+            .enumerate()
+        {
+            assert_eq!(actual.0, expected.0, "Key mismatch at index {}", i);
+            assert_eq!(actual.1, expected.1, "Value mismatch at index {}", i);
+            assert_eq!(actual.2, expected.2, "Version mismatch at index {}", i);
+            assert_eq!(actual.3, expected.3, "Timestamp mismatch at index {}", i);
+        }
+
+        // Test backward iteration
+        let scan_iter = tree.scan_at_ts(key1.clone()..=key3.clone(), 175);
+        let backward_results: Vec<_> = scan_iter.rev().collect();
+
+        let expected_backward = [(key2.as_slice(), "value2_ts150", 1, 150),
+            (key1.as_slice(), "value1_ts100", 1, 100)];
+
+        assert_eq!(backward_results.len(), expected_backward.len());
+        for (i, (actual, expected)) in backward_results
+            .iter()
+            .zip(expected_backward.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                actual.0, expected.0,
+                "Key mismatch at index {} in backward iteration",
+                i
+            );
+            assert_eq!(
+                actual.1, expected.1,
+                "Value mismatch at index {} in backward iteration",
+                i
+            );
+            assert_eq!(
+                actual.2, expected.2,
+                "Version mismatch at index {} in backward iteration",
+                i
+            );
+            assert_eq!(
+                actual.3, expected.3,
+                "Timestamp mismatch at index {} in backward iteration",
+                i
+            );
+        }
+
+        // Test that forward and backward results are exact reverses
+        let mut forward_reversed = forward_results.clone();
+        forward_reversed.reverse();
+        assert_eq!(
+            backward_results, forward_reversed,
+            "Backward iteration should be exact reverse of forward"
+        );
+    }
+
+    #[test]
+    fn test_scan_at_ts_single_element_double_ended() {
+        let mut tree: Tree<FixedSizeKey<16>, String> = Tree::new();
+        let key: FixedSizeKey<16> = 5u16.into();
+        tree.insert(&key, "value".to_string(), 1, 100).unwrap();
+
+        // Test forward iteration
+        let scan_iter = tree.scan_at_ts(key.clone()..=key.clone(), 150);
+        let forward: Vec<_> = scan_iter.collect();
+
+        // Test backward iteration
+        let scan_iter = tree.scan_at_ts(key.clone()..=key.clone(), 150);
+        let backward: Vec<_> = scan_iter.rev().collect();
+
+        assert_eq!(forward.len(), 1);
+        assert_eq!(backward.len(), 1);
+        assert_eq!(forward, backward); // Single element should be same both ways
+
+        // Test with timestamp before insertion
+        let scan_iter = tree.scan_at_ts(key.clone()..=key.clone(), 50);
+        let before_ts: Vec<_> = scan_iter.collect();
+        assert!(before_ts.is_empty());
+
+        // Test backward iteration with timestamp before insertion
+        let scan_iter = tree.scan_at_ts(key.clone()..=key.clone(), 50);
+        let before_ts_backward: Vec<_> = scan_iter.rev().collect();
+        assert!(before_ts_backward.is_empty());
+    }
+
+    #[test]
+    fn test_scan_at_ts_mixed_iteration() {
+        let mut tree: Tree<FixedSizeKey<16>, String> = Tree::new();
+        let keys: Vec<FixedSizeKey<16>> = (1..=10).map(|i| (i as u16).into()).collect();
+
+        // Insert keys with different timestamps
+        for (i, key) in keys.iter().enumerate() {
+            tree.insert(key, format!("value_{}", i), 1, (i * 10) as u64)
+                .unwrap();
+        }
+
+        let start_key: FixedSizeKey<16> = 3u16.into();
+        let end_key: FixedSizeKey<16> = 8u16.into();
+        let scan_iter = tree.scan_at_ts(start_key..=end_key, 50); // Should get keys 3,4,5
+
+        let mut iter = scan_iter;
+        let mut seen_values = std::collections::HashSet::new();
+        let mut forward_results = Vec::new();
+        let mut backward_results = Vec::new();
+
+        // Mix forward and backward iteration
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+
+        while seen_values.len() < 3 {
+            // We expect 3 keys (3,4,5)
+            if rng.gen_bool(0.5) {
+                // Forward iteration
+                if let Some((_, v, _, _)) = iter.next() {
+                    if seen_values.insert(v.clone()) {
+                        forward_results.push(v);
+                    }
+                }
+            } else {
+                // Backward iteration
+                if let Some((_, v, _, _)) = iter.next_back() {
+                    if seen_values.insert(v.clone()) {
+                        backward_results.push(v);
+                    }
+                }
+            }
+        }
+
+        // Verify we got all expected values
+        assert_eq!(seen_values.len(), 3);
+
+        // Verify forward and backward results combined contain all expected values
+        let mut all_results = forward_results.clone();
+        all_results.extend(backward_results);
+        assert_eq!(all_results.len(), 3);
+    }
+
+    #[test]
+    fn test_scan_at_ts_timestamp_edge_cases() {
+        let mut tree: Tree<FixedSizeKey<16>, String> = Tree::new();
+        let key1: FixedSizeKey<16> = 1u16.into();
+        let key2: FixedSizeKey<16> = 2u16.into();
+        let key3: FixedSizeKey<16> = 3u16.into();
+
+        // Insert keys at specific timestamps
+        tree.insert(&key1, "value1_ts100".to_string(), 1, 100)
+            .unwrap();
+        tree.insert(&key2, "value2_ts200".to_string(), 1, 200)
+            .unwrap();
+        tree.insert(&key3, "value3_ts300".to_string(), 1, 300)
+            .unwrap();
+
+        // Test scanning before any entries exist
+        let scan_iter = tree.scan_at_ts(key1.clone()..=key3.clone(), 50);
+        let before_any: Vec<_> = scan_iter.collect();
+        assert!(before_any.is_empty());
+
+        // Test scanning at exact timestamp of first entry
+        let scan_iter = tree.scan_at_ts(key1.clone()..=key3.clone(), 100);
+        let at_first: Vec<_> = scan_iter.collect();
+        assert_eq!(at_first.len(), 1);
+        assert_eq!(at_first[0].1, "value1_ts100");
+
+        // Test scanning between entries
+        let scan_iter = tree.scan_at_ts(key1.clone()..=key3.clone(), 150);
+        let between: Vec<_> = scan_iter.collect();
+        assert_eq!(between.len(), 1);
+        assert_eq!(between[0].1, "value1_ts100");
+
+        // Test scanning at exact timestamp of last entry
+        let scan_iter = tree.scan_at_ts(key1.clone()..=key3.clone(), 300);
+        let at_last: Vec<_> = scan_iter.collect();
+        assert_eq!(at_last.len(), 3);
+
+        // Test scanning after all entries exist
+        let scan_iter = tree.scan_at_ts(key1.clone()..=key3.clone(), 400);
+        let after_all: Vec<_> = scan_iter.collect();
+        assert_eq!(after_all.len(), 3);
+
+        // Test backward iteration at different timestamps
+        let scan_iter = tree.scan_at_ts(key1.clone()..=key3.clone(), 150);
+        let backward_between: Vec<_> = scan_iter.rev().collect();
+        assert_eq!(backward_between.len(), 1);
+        assert_eq!(backward_between[0].1, "value1_ts100");
+    }
+
+    #[test]
+    fn test_scan_at_ts_range_boundaries_double_ended() {
+        let mut tree: Tree<FixedSizeKey<16>, String> = Tree::new();
+        let keys: Vec<FixedSizeKey<16>> = (1..=5).map(|i| (i as u16).into()).collect();
+
+        // Insert keys
+        for (i, key) in keys.iter().enumerate() {
+            tree.insert(key, format!("value_{}", i + 1), 1, 100)
+                .unwrap();
+        }
+
+        let test_cases = vec![
+            // Empty range (no keys in range)
+            (6u16, 7u16, 0),
+            // Single element range
+            (3u16, 3u16, 1),
+            // Full range
+            (1u16, 5u16, 5),
+            // Partial range at start
+            (1u16, 3u16, 3),
+            // Partial range at end
+            (3u16, 5u16, 3),
+            // Range with only one boundary included
+            (2u16, 4u16, 3),
+        ];
+
+        for (start, end, expected_count) in test_cases {
+            let start_key: FixedSizeKey<16> = start.into();
+            let end_key: FixedSizeKey<16> = end.into();
+
+            // Test forward iteration
+            let scan_iter = tree.scan_at_ts(start_key.clone()..=end_key.clone(), 150);
+            let forward: Vec<_> = scan_iter.collect();
+
+            // Test backward iteration
+            let scan_iter = tree.scan_at_ts(start_key.clone()..=end_key.clone(), 150);
+            let backward: Vec<_> = scan_iter.rev().collect();
+
+            assert_eq!(
+                forward.len(),
+                expected_count,
+                "Forward iteration failed for range {}..={}",
+                start,
+                end
+            );
+            assert_eq!(
+                backward.len(),
+                expected_count,
+                "Backward iteration failed for range {}..={}",
+                start,
+                end
+            );
+
+            // Verify they are exact reverses
+            let mut forward_reversed = forward.clone();
+            forward_reversed.reverse();
+            assert_eq!(
+                backward, forward_reversed,
+                "Forward and backward results don't match for range {}..={}",
+                start, end
+            );
+        }
+    }
+
+    #[test]
+    fn test_scan_at_ts_large_dataset_double_ended() {
+        let mut tree: Tree<FixedSizeKey<16>, String> = Tree::new();
+        let total_items = 1000u16;
+
+        // Insert many keys with different timestamps
+        for i in 1..=total_items {
+            let key: FixedSizeKey<16> = i.into();
+            let timestamp = (i * 10) as u64;
+            tree.insert(&key, format!("value_{}", i), 1, timestamp)
+                .unwrap();
+        }
+
+        // Test with a subset range
+        let start_key: FixedSizeKey<16> = 250u16.into();
+        let end_key: FixedSizeKey<16> = 750u16.into();
+        let query_timestamp = 5000u64; // Should include keys 1-500
+
+        let scan_iter = tree.scan_at_ts(start_key.clone()..=end_key.clone(), query_timestamp);
+        let forward: Vec<_> = scan_iter.collect();
+
+        let scan_iter = tree.scan_at_ts(start_key.clone()..=end_key.clone(), query_timestamp);
+        let backward: Vec<_> = scan_iter.rev().collect();
+
+        // Should get keys 250-500 (251 keys total)
+        let expected_count = 251;
+        assert_eq!(forward.len(), expected_count);
+        assert_eq!(backward.len(), expected_count);
+
+        // Verify they are exact reverses
+        let mut forward_reversed = forward.clone();
+        forward_reversed.reverse();
+        assert_eq!(backward, forward_reversed);
+
+        // Verify all results are within the expected range
+        for (key_slice, _, _, _) in &forward {
+            let key_value = u16::from_be_bytes([key_slice[0], key_slice[1]]);
+            assert!((250..=500).contains(&key_value));
+        }
+
+        // Test with different timestamp ranges
+        let early_timestamp = 1000u64; // Should include keys 1-100
+        let scan_iter = tree.scan_at_ts(start_key.clone()..=end_key.clone(), early_timestamp);
+        let early_results: Vec<_> = scan_iter.collect();
+        assert_eq!(early_results.len(), 0); // No keys in range 250-750 have timestamp <= 1000
+
+        let late_timestamp = 10000u64; // Should include all keys in range
+        let scan_iter = tree.scan_at_ts(start_key..=end_key, late_timestamp);
+        let late_results: Vec<_> = scan_iter.collect();
+        assert_eq!(late_results.len(), 501); // All keys 250-750 inclusive
     }
 }
