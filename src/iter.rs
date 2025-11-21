@@ -1444,7 +1444,7 @@ mod tests {
             .map(|_| {
                 let length = rng.gen_range(length_range.clone());
                 (0..length)
-                    .map(|_| (rng.gen_range(b'a'..=b'z') as char))
+                    .map(|_| rng.gen_range(b'a'..=b'z') as char)
                     .collect()
             })
             .collect()
