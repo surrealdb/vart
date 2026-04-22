@@ -40,7 +40,7 @@ const NODE256MIN: usize = NODE48MAX + 1;
 /// # Fields
 ///
 /// - `node_type`: The `NodeType` variant representing the type of the node, containing its
-///                specific structure and associated data.
+///   specific structure and associated data.
 ///
 pub(crate) struct Node<P: KeyTrait, V: Clone> {
     pub(crate) node_type: NodeType<P, V>, // Type of the node
@@ -1565,7 +1565,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     ///
     /// Returns an `Iter` instance that iterates over the key-value pairs in the Trie.
     ///
-    pub fn iter(&self) -> Iter<P, V> {
+    pub fn iter(&self) -> Iter<'_, P, V> {
         Iter::new(self.root.as_ref(), false)
     }
 
@@ -1573,7 +1573,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     ///
     /// This function creates and returns an iterator that can be used to traverse all the versions
     /// for all the key-value pairs stored in the Trie. The iterator starts from the root of the Trie.
-    pub fn iter_with_versions(&self) -> Iter<P, V> {
+    pub fn iter_with_versions(&self) -> Iter<'_, P, V> {
         Iter::new(self.root.as_ref(), true)
     }
 
