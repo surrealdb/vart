@@ -20,7 +20,7 @@ keywords = [
 [dependencies]
 
 [dev-dependencies]
-rand = "0.8.5"
+rand = "0.8.6"
 criterion = "0.5.1"
 divan = "0.1.14"
 
