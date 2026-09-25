@@ -2706,17 +2706,13 @@ mod tests {
 
         // Insert keys
         for key_data in &set_keys {
-            let key = VariableSizeKey {
-                data: key_data.to_vec(),
-            };
+            let key = VariableSizeKey::from_slice(key_data);
             tree.insert(&key, 1, version, 0).unwrap();
         }
 
         // Delete one key at a time and check remaining keys
         for (index, key_data_to_delete) in set_keys.iter().enumerate() {
-            let key_to_delete = VariableSizeKey {
-                data: key_data_to_delete.to_vec(),
-            };
+            let key_to_delete = VariableSizeKey::from_slice(key_data_to_delete);
             tree.remove(&key_to_delete);
 
             // Check remaining keys are still present
@@ -2731,9 +2727,7 @@ mod tests {
                     // This key has been deleted; skip
                     continue;
                 }
-                let remaining_key = VariableSizeKey {
-                    data: remaining_key_data.to_vec(),
-                };
+                let remaining_key = VariableSizeKey::from_slice(remaining_key_data);
                 assert!(
                     tree.get(&remaining_key, version).is_some(),
                     "Key {:?} should exist",
@@ -2770,17 +2764,13 @@ mod tests {
 
         // Insert keys
         for key_data in &set_keys {
-            let key = VariableSizeKey {
-                data: key_data.clone(),
-            };
+            let key = VariableSizeKey::from_slice(key_data);
             tree.insert(&key, 1, version, 0).unwrap();
         }
 
         // Delete one key at a time and check remaining keys
         for (index, key_data_to_delete) in set_keys.iter().enumerate() {
-            let key_to_delete = VariableSizeKey {
-                data: key_data_to_delete.clone(),
-            };
+            let key_to_delete = VariableSizeKey::from_slice(key_data_to_delete);
             tree.remove(&key_to_delete);
 
             // Check remaining keys are still present
@@ -2795,9 +2785,7 @@ mod tests {
                     // This key has been deleted; skip
                     continue;
                 }
-                let remaining_key = VariableSizeKey {
-                    data: remaining_key_data.clone(),
-                };
+                let remaining_key = VariableSizeKey::from_slice(remaining_key_data);
                 assert!(
                     tree.get(&remaining_key, version).is_some(),
                     "Key {:?} should exist",

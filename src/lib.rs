@@ -253,67 +253,146 @@ impl<const SIZE: usize> std::hash::Hash for FixedSizeKey<SIZE> {
     }
 }
 
+impl Key for byteslice::ByteSlice {
+    #[inline(always)]
+    fn at(&self, pos: usize) -> u8 {
+        assert!(pos < self.len());
+        self[pos]
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.len()
+    }
+
+    #[inline(always)]
+    fn prefix_before(&self, length: usize) -> &[u8] {
+        assert!(length <= self.len());
+        &self[..length]
+    }
+
+    #[inline(always)]
+    fn prefix_after(&self, start: usize) -> &[u8] {
+        assert!(start <= self.len());
+        &self[start..]
+    }
+
+    #[inline(always)]
+    fn longest_common_prefix(&self, key: &[u8]) -> usize {
+        let len = self.len().min(key.len());
+        self[..len]
+            .iter()
+            .zip(key)
+            .take_while(|&(a, &b)| *a == b)
+            .count()
+    }
+
+    #[inline(always)]
+    fn as_slice(&self) -> &[u8] {
+        self
+    }
+
+    #[inline]
+    fn extend(&self, other: &Self) -> Self {
+        let mut v = Vec::with_capacity(self.len() + other.len());
+        v.extend_from_slice(self);
+        v.extend_from_slice(other);
+        byteslice::ByteSlice::from(v)
+    }
+}
+
 // VariableSizeKey is a variable-length key type stored as a byte vector.
-#[derive(Clone, PartialEq, PartialOrd, Ord, Eq, Debug, Default)]
+#[derive(Clone, PartialEq, PartialOrd, Ord, Eq, Debug, Default, Hash)]
 pub struct VariableSizeKey {
-    data: Vec<u8>,
+    data: byteslice::ByteSlice,
 }
 
 impl VariableSizeKey {
+    #[inline]
     pub fn key(src: &[u8]) -> Self {
         Self::from_slice(src)
     }
 
+    #[inline]
     pub fn from_slice(src: &[u8]) -> Self {
         Self {
-            data: Vec::from(src),
+            data: byteslice::ByteSlice::from(src),
         }
     }
 
+    #[inline]
     pub fn to_slice(&self) -> &[u8] {
         &self.data
     }
 
+    #[inline]
     pub fn from_string(s: &str) -> Self {
         Self::from_slice(s.as_bytes())
+    }
+
+    #[inline]
+    pub fn is_inline(&self) -> bool {
+        self.data.is_inline()
     }
 }
 
 impl From<Vec<u8>> for VariableSizeKey {
+    #[inline]
     fn from(data: Vec<u8>) -> Self {
-        Self { data }
+        Self {
+            data: byteslice::ByteSlice::from(data),
+        }
     }
 }
 
 impl From<Box<[u8]>> for VariableSizeKey {
+    #[inline]
     fn from(data: Box<[u8]>) -> Self {
         Self {
-            data: data.into_vec(),
+            data: byteslice::ByteSlice::from(data.into_vec()),
         }
     }
 }
 
 impl From<&str> for VariableSizeKey {
+    #[inline]
     fn from(s: &str) -> Self {
         Self::from_slice(s.as_bytes())
     }
 }
 
 impl From<String> for VariableSizeKey {
+    #[inline]
     fn from(s: String) -> Self {
         Self {
-            data: s.into_bytes(),
+            data: byteslice::ByteSlice::from(s.into_bytes()),
         }
     }
 }
 
+impl From<byteslice::ByteSlice> for VariableSizeKey {
+    #[inline]
+    fn from(data: byteslice::ByteSlice) -> Self {
+        Self { data }
+    }
+}
+
+impl From<VariableSizeKey> for byteslice::ByteSlice {
+    #[inline]
+    fn from(k: VariableSizeKey) -> Self {
+        k.data
+    }
+}
+
 impl AsRef<[u8]> for VariableSizeKey {
+    #[inline]
     fn as_ref(&self) -> &[u8] {
         &self.data
     }
 }
 
 impl std::borrow::Borrow<[u8]> for VariableSizeKey {
+    #[inline]
     fn borrow(&self) -> &[u8] {
         &self.data
     }
@@ -322,46 +401,42 @@ impl std::borrow::Borrow<[u8]> for VariableSizeKey {
 impl std::ops::Deref for VariableSizeKey {
     type Target = [u8];
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.data
-    }
-}
-
-impl std::hash::Hash for VariableSizeKey {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.data.hash(state);
     }
 }
 
 impl FromStr for VariableSizeKey {
     type Err = std::convert::Infallible;
 
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self::from_slice(s.as_bytes()))
     }
 }
 
 impl From<&[u8]> for VariableSizeKey {
+    #[inline]
     fn from(src: &[u8]) -> Self {
         Self::from_slice(src)
     }
 }
 
 impl Key for VariableSizeKey {
+    #[inline(always)]
     fn prefix_before(&self, length: usize) -> &[u8] {
-        assert!(length <= self.data.len());
-        &self.data[..length]
+        self.data.prefix_before(length)
     }
 
+    #[inline(always)]
     fn prefix_after(&self, start: usize) -> &[u8] {
-        assert!(start <= self.data.len());
-        &self.data[start..self.data.len()]
+        self.data.prefix_after(start)
     }
 
     #[inline(always)]
     fn at(&self, pos: usize) -> u8 {
-        assert!(pos < self.data.len());
-        self.data[pos]
+        self.data.at(pos)
     }
 
     #[inline(always)]
@@ -369,25 +444,21 @@ impl Key for VariableSizeKey {
         self.data.len()
     }
 
-    // Returns the length of the longest common prefix between this object's content and the given byte slice
+    #[inline(always)]
     fn longest_common_prefix(&self, key: &[u8]) -> usize {
-        let len = self.data.len().min(key.len());
-        self.data[..len]
-            .iter()
-            .zip(key)
-            .take_while(|&(a, &b)| *a == b)
-            .count()
+        self.data.longest_common_prefix(key)
     }
 
+    #[inline(always)]
     fn as_slice(&self) -> &[u8] {
-        &self.data[..self.data.len()]
+        self.data.as_slice()
     }
 
+    #[inline]
     fn extend(&self, other: &Self) -> Self {
-        let mut data = Vec::with_capacity(self.data.len() + other.data.len());
-        data.extend_from_slice(&self.data);
-        data.extend_from_slice(&other.data);
-        Self { data }
+        Self {
+            data: self.data.extend(&other.data),
+        }
     }
 }
 
@@ -424,6 +495,7 @@ const _: () = {
         assert_send_sync::<iter::Iter<'_, P, V>>();
         assert_send_sync::<FixedSizeKey<16>>();
         assert_send_sync::<VariableSizeKey>();
+        assert_send_sync::<byteslice::ByteSlice>();
     }
     let _ = check::<FixedSizeKey<16>, usize>;
 };
@@ -431,6 +503,29 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_byteslice_sso_and_key() {
+        use byteslice::ByteSlice;
+
+        // 1. SSO short key (<= 20 bytes) -> inline
+        let short = VariableSizeKey::from("user:0001:profile");
+        assert_eq!(short.len(), 17);
+        assert!(short.is_inline());
+        assert_eq!(&*short, b"user:0001:profile");
+
+        // 2. Long key (> 20 bytes) -> heap
+        let long = VariableSizeKey::from("user:00000000000001:settings:advanced:profile");
+        assert_eq!(long.len(), 45);
+        assert!(!long.is_inline());
+
+        // 3. Tree works directly with ByteSlice as Key
+        let mut bs_tree: crate::art::Tree<ByteSlice, i32> = crate::art::Tree::new();
+        let bs_key = ByteSlice::from("tenant_42");
+        bs_tree.insert(&bs_key, 999, 1, 10).unwrap();
+        assert_eq!(bs_tree.get(&bs_key, 0).unwrap().0, 999);
+        assert_eq!(bs_tree.get_by_slice(b"tenant_42", 0).unwrap().0, 999);
+    }
 
     #[test]
     fn test_key_traits() {
