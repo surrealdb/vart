@@ -255,15 +255,20 @@ impl<P: KeyTrait, N: Clone, const WIDTH: usize> FlatNode<P, N, WIDTH> {
         }
     }
 
+    #[inline]
     fn find_pos(&self, key: u8) -> Option<usize> {
-        let idx = (0..self.num_children as usize).find(|&i| key < self.keys[i]);
-        idx.or(Some(self.num_children as usize))
+        let count = self.num_children as usize;
+        if count >= WIDTH {
+            None
+        } else {
+            Some(self.keys[..count].partition_point(|&c| c < key))
+        }
     }
 
+    #[inline]
     fn index(&self, key: u8) -> Option<usize> {
-        self.keys[..std::cmp::min(WIDTH, self.num_children as usize)]
-            .iter()
-            .position(|&c| key == c)
+        let count = (self.num_children as usize).min(WIDTH);
+        self.keys[..count].binary_search(&key).ok()
     }
 
     pub(crate) fn resize<const NEW_WIDTH: usize>(&self) -> FlatNode<P, N, NEW_WIDTH> {
