@@ -547,10 +547,15 @@ impl<P: KeyTrait, N: Clone, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N, 
 // A Node48 is a 256-entry array of pointers to children. The pointers are stored in
 // a Vector Array, which is a Vector of length WIDTH (48) that stores the pointers.
 
+#[derive(Clone)]
+struct Node48Storage<N> {
+    keys: [u8; 256],
+    children: [Option<Arc<N>>; 48],
+}
+
 pub(crate) struct Node48<P: KeyTrait, N> {
     pub(crate) prefix: P,
-    keys: Box<[u8; 256]>,
-    children: Box<[Option<Arc<N>>; 48]>,
+    storage: Box<Node48Storage<N>>,
     pub(crate) inner_twig: Option<Arc<N>>,
     child_bitmap: u64,
 }
@@ -559,8 +564,10 @@ impl<P: KeyTrait, N: Clone> Node48<P, N> {
     pub(crate) fn new(prefix: P) -> Self {
         Self {
             prefix,
-            keys: Box::new([u8::MAX; 256]),
-            children: Box::new([const { None }; 48]),
+            storage: Box::new(Node48Storage {
+                keys: [u8::MAX; 256],
+                children: [const { None }; 48],
+            }),
             inner_twig: None,
             child_bitmap: 0,
         }
@@ -570,20 +577,21 @@ impl<P: KeyTrait, N: Clone> Node48<P, N> {
         let pos = self.child_bitmap.trailing_ones();
         assert!(pos < 48);
 
-        self.keys[key as usize] = pos as u8;
-        self.children[pos as usize] = Some(node);
+        self.storage.keys[key as usize] = pos as u8;
+        self.storage.children[pos as usize] = Some(node);
         self.child_bitmap |= 1 << pos;
     }
 
     pub(crate) fn shrink<const NEW_WIDTH: usize>(&self) -> FlatNode<P, N, NEW_WIDTH> {
         let mut fnode = FlatNode::new(self.prefix.clone());
         for (key, pos) in self
+            .storage
             .keys
             .iter()
             .enumerate()
             .filter(|(_, idx)| **idx != u8::MAX)
         {
-            let child = Arc::clone(self.children[*pos as usize].as_ref().unwrap());
+            let child = Arc::clone(self.storage.children[*pos as usize].as_ref().unwrap());
             let idx = fnode.find_pos(key as u8).expect("node is full");
             fnode.insert_child(idx, key as u8, child);
         }
@@ -594,12 +602,13 @@ impl<P: KeyTrait, N: Clone> Node48<P, N> {
     pub(crate) fn grow(&self) -> Node256<P, N> {
         let mut n256 = Node256::new(self.prefix.clone());
         for (key, pos) in self
+            .storage
             .keys
             .iter()
             .enumerate()
             .filter(|(_, idx)| **idx != u8::MAX)
         {
-            let child = Arc::clone(self.children[*pos as usize].as_ref().unwrap());
+            let child = Arc::clone(self.storage.children[*pos as usize].as_ref().unwrap());
             n256.insert_child(key as u8, child);
         }
         n256.inner_twig.clone_from(&self.inner_twig);
@@ -627,13 +636,13 @@ impl<P: KeyTrait, N: Clone> Node48<P, N> {
             ));
         }
         let mut keys_count = 0;
-        for &slot in self.keys.iter() {
+        for &slot in self.storage.keys.iter() {
             if slot != u8::MAX {
                 keys_count += 1;
                 if slot >= 48 {
                     return Err(format!("Node48 slot {} >= 48", slot));
                 }
-                if self.children[slot as usize].is_none() {
+                if self.storage.children[slot as usize].is_none() {
                     return Err(format!("Node48 slot {} is None in children", slot));
                 }
                 if (self.child_bitmap & (1u64 << slot)) == 0 {
@@ -651,9 +660,9 @@ impl<P: KeyTrait, N: Clone> Node48<P, N> {
         if let Some(inner) = &self.inner_twig {
             total += validate_child(inner)?;
         }
-        for &slot in self.keys.iter() {
+        for &slot in self.storage.keys.iter() {
             if slot != u8::MAX {
-                let child = self.children[slot as usize].as_ref().unwrap();
+                let child = self.storage.children[slot as usize].as_ref().unwrap();
                 total += validate_child(child)?;
             }
         }
@@ -665,8 +674,7 @@ impl<P: KeyTrait, N: Clone> NodeTrait<N> for Node48<P, N> {
     fn clone(&self) -> Self {
         Node48 {
             prefix: self.prefix.clone(),
-            keys: self.keys.clone(),
-            children: self.children.clone(),
+            storage: self.storage.clone(),
             inner_twig: self.inner_twig.clone(),
             child_bitmap: self.child_bitmap,
         }
@@ -674,9 +682,9 @@ impl<P: KeyTrait, N: Clone> NodeTrait<N> for Node48<P, N> {
 
     fn replace_child(&self, key: u8, node: Arc<N>) -> Self {
         let mut new_node = self.clone();
-        let idx = new_node.keys[key as usize];
+        let idx = new_node.storage.keys[key as usize];
         assert!(idx != u8::MAX);
-        new_node.children[idx as usize] = Some(node);
+        new_node.storage.children[idx as usize] = Some(node);
 
         new_node
     }
@@ -686,31 +694,31 @@ impl<P: KeyTrait, N: Clone> NodeTrait<N> for Node48<P, N> {
     }
 
     fn delete_child(&self, key: u8) -> Self {
-        let pos = self.keys[key as usize];
+        let pos = self.storage.keys[key as usize];
         assert!(pos != u8::MAX);
         let mut new_node = self.clone();
-        new_node.keys[key as usize] = u8::MAX;
-        new_node.children[pos as usize] = None;
+        new_node.storage.keys[key as usize] = u8::MAX;
+        new_node.storage.children[pos as usize] = None;
         new_node.child_bitmap &= !(1 << pos);
 
         new_node
     }
 
     fn find_child(&self, key: u8) -> Option<&Arc<N>> {
-        let idx = self.keys[key as usize];
+        let idx = self.storage.keys[key as usize];
         if idx == u8::MAX {
             return None;
         }
-        Some(self.children[idx as usize].as_ref().unwrap())
+        Some(self.storage.children[idx as usize].as_ref().unwrap())
     }
 
     // New find_child_mut method
     fn find_child_mut(&mut self, key: u8) -> Option<&mut N> {
-        let idx = self.keys[key as usize];
+        let idx = self.storage.keys[key as usize];
         if idx == u8::MAX {
             return None;
         }
-        let child_arc = self.children[idx as usize].as_mut()?;
+        let child_arc = self.storage.children[idx as usize].as_mut()?;
         Some(Arc::make_mut(child_arc))
     }
 
@@ -951,10 +959,10 @@ impl<'a, P: KeyTrait, N: Clone> Iterator for Node48Children<'a, P, N> {
             }
         }
         while self.front < self.back {
-            let slot = self.node.keys[self.front];
+            let slot = self.node.storage.keys[self.front];
             self.front += 1;
             if slot != u8::MAX {
-                return self.node.children[slot as usize].as_ref();
+                return self.node.storage.children[slot as usize].as_ref();
             }
         }
         None
@@ -966,9 +974,9 @@ impl<'a, P: KeyTrait, N: Clone> DoubleEndedIterator for Node48Children<'a, P, N>
     fn next_back(&mut self) -> Option<Self::Item> {
         while self.back > self.front {
             self.back -= 1;
-            let slot = self.node.keys[self.back];
+            let slot = self.node.storage.keys[self.back];
             if slot != u8::MAX {
-                return self.node.children[slot as usize].as_ref();
+                return self.node.storage.children[slot as usize].as_ref();
             }
         }
         if !self.inner_yielded {

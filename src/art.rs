@@ -816,7 +816,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             let k2 = key_prefix[shared_prefix_length];
             let new_twig = Node::new_twig(
                 key_prefix[shared_prefix_length..].into(),
-                key.as_slice().into(),
+                key.clone(),
                 value,
                 commit_version,
                 ts,
@@ -854,7 +854,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                         ),
                         None => {
                             let mut new_twig =
-                                TwigNode::new(cur_node.prefix().clone(), key.as_slice().into());
+                                TwigNode::new(cur_node.prefix().clone(), key.clone());
                             new_twig.insert_mut(value, commit_version, ts);
                             (new_twig, true)
                         }
@@ -902,7 +902,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                     // Case 2b3: Create new child node
                     let new_twig = Node::new_twig(
                         key_prefix[shared_prefix_length..].into(),
-                        key.as_slice().into(),
+                        key.clone(),
                         value,
                         commit_version,
                         ts,
@@ -960,7 +960,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
             let new_twig = Node::new_twig(
                 key_prefix[shared_prefix_length..].into(),
-                key.as_slice().into(),
+                key.clone(),
                 value,
                 commit_version,
                 ts,
@@ -1007,7 +1007,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                         }
                         None => {
                             let mut new_twig =
-                                TwigNode::new(cur_node.prefix().clone(), key.as_slice().into());
+                                TwigNode::new(cur_node.prefix().clone(), key.clone());
                             new_twig.insert_mut(value, commit_version, ts);
                             cur_node.set_inner_twig(new_twig);
                             true
@@ -1055,7 +1055,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                     // If no child exists for the key's character, create a new Twig node and add it as a child.
                     let new_twig = Node::new_twig(
                         key_prefix[shared_prefix_length..].into(),
-                        key.as_slice().into(),
+                        key.clone(),
                         value,
                         commit_version,
                         ts,
@@ -1291,8 +1291,8 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                 let commit_version = if version == 0 { 1 } else { version };
                 (
                     Arc::new(Node::new_twig(
-                        key.as_slice().into(),
-                        key.as_slice().into(),
+                        key.clone(),
+                        key.clone(),
                         value,
                         commit_version,
                         ts,
@@ -1346,8 +1346,8 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         } else {
             let commit_version = if version == 0 { 1 } else { version };
             self.root = Some(Arc::new(Node::new_twig(
-                key.as_slice().into(),
-                key.as_slice().into(),
+                key.clone(),
+                key.clone(),
                 value,
                 commit_version,
                 ts,
