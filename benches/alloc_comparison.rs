@@ -68,6 +68,17 @@ fn alloc_im_ordmap_insert(bencher: divan::Bencher<'_, '_>, count: usize) {
     });
 }
 
+#[divan::bench(args = COUNTS)]
+fn alloc_imbl_ordmap_insert(bencher: divan::Bencher<'_, '_>, count: usize) {
+    let mut map = imbl::OrdMap::new();
+    let mut key = 0usize;
+
+    bencher.counter(count).bench_local(|| {
+        map.insert(key, key);
+        key += 1;
+    });
+}
+
 #[divan::bench]
 fn alloc_vart_range_scan_zero_alloc(bencher: divan::Bencher<'_, '_>) {
     let mut tree = Tree::<FixedSizeKey<16>, usize>::new();

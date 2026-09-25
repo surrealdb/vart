@@ -30,12 +30,13 @@ Benchmarked on bare metal (**AMD Ryzen Threadripper 9970X 32-Core / 64-Thread Pr
 | :--- | ---: | ---: | ---: | ---: |
 | **`vart::Tree` (Slice Lookup)** | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**27.6 ns** (36.1M/s) | — | — | **0 allocs** |
 | **`vart::Tree` (Standard Key)** | **29.2 ns** (34.1M/s) | **93.7 ns** (10.6M/s) | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**8.12 ns** | **1.0 allocs** |
-| `im::OrdMap` (Persistent B-Tree) | 38.2 ns (26.1M/s) | 52.2 ns (19.0M/s) | **7.93 ns** | ~0.06 allocs |
-| `std::collections::BTreeMap` | 70.0 ns (14.2M/s) | 36.8 ns (27.0M/s) | 577.1 µs (~70,000× slower) | ~0.16 allocs |
-| `std::collections::HashMap` | 14.2 ns (70.0M/s) | 28.4 ns (34.3M/s) | N/A | ~0 allocs |
+| `imbl::OrdMap` (Persistent B-Tree v7) | 46.3 ns (21.6M/s) | 71.8 ns (13.9M/s) | **8.12 ns** | ~0.14 allocs |
+| `im::OrdMap` (Persistent B-Tree v15) | 38.7 ns (25.8M/s) | 53.7 ns (18.6M/s) | **7.93 ns** | ~0.06 allocs |
+| `std::collections::BTreeMap` | 71.6 ns (14.0M/s) | 37.5 ns (26.6M/s) | 572.1 µs (~70,000× slower) | ~0.16 allocs |
+| `std::collections::HashMap` | 14.5 ns (68.9M/s) | 28.7 ns (34.8M/s) | N/A | ~0 allocs |
 
 - **Zero-Allocation Range Scanning**: Traverses 1,000 contiguous items in **8.19 microseconds** (~122,000,000 items/sec) with zero heap allocations during iteration via the unboxed `ChildrenIter` enum.
-- **Zero-Allocation Point Lookups**: Queries directly by raw byte slice (`tree.get_by_slice` / `tree.contains_key_slice`) in **18.7 ns**, avoiding key wrapping allocations.
+- **Fastest Persistent Point Lookups**: Point reads in `vart` (**27.6 ns**) are **58% faster than `imbl::OrdMap`** and **2.4× faster than standard `BTreeMap`**.
 - **Snapshot Creation**: Instantaneous $O(1)$ snapshot creation via atomic reference counting (`tree.clone()`), enabling point-in-time isolation without cloning tree data.
 - **In-Place Mutation Bypass**: High-throughput ingestion via `tree.insert_unchecked`, avoiding copy-on-write overhead when writing to uniquely owned trees while safely falling back to copy-on-write for shared snapshot paths.
 
