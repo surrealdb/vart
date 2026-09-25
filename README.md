@@ -1,10 +1,6 @@
 <br>
 
-<p align="center">
-    <a href="https://surrealdb.com" target="_blank">
-        <img width="100" src="https://raw.githubusercontent.com/surrealdb/surrealdb/main/img/icon.svg" alt="SurrealDB Logo">
-    </a>
-</p>
+<h1 align="center">vart</h1>
 
 <p align="center">An immutable, versioned, adaptive radix trie data structure for Rust.</p>
 
@@ -32,8 +28,8 @@ Benchmarked on bare metal (**AMD Ryzen Threadripper 9970X 32-Core / 64-Thread Pr
 
 | Data Structure | Point Read (Random Hit) | Point Insert (In-Place) | Snapshot Clone | Allocations / Insert |
 | :--- | ---: | ---: | ---: | ---: |
-| **`vart::Tree` (Slice Lookup)** | <img width="16" align="absmiddle" src="https://raw.githubusercontent.com/surrealdb/surrealdb/main/img/rocket.png" alt="🚀">&nbsp;**27.6 ns** (36.1M/s) | — | — | **0 allocs** |
-| **`vart::Tree` (Standard Key)** | **29.2 ns** (34.1M/s) | **93.7 ns** (10.6M/s) | <img width="16" align="absmiddle" src="https://raw.githubusercontent.com/surrealdb/surrealdb/main/img/rocket.png" alt="🚀">&nbsp;**8.12 ns** | **1.0 allocs** |
+| **`vart::Tree` (Slice Lookup)** | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**27.6 ns** (36.1M/s) | — | — | **0 allocs** |
+| **`vart::Tree` (Standard Key)** | **29.2 ns** (34.1M/s) | **93.7 ns** (10.6M/s) | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**8.12 ns** | **1.0 allocs** |
 | `im::OrdMap` (Persistent B-Tree) | 38.2 ns (26.1M/s) | 52.2 ns (19.0M/s) | **7.93 ns** | ~0.06 allocs |
 | `std::collections::BTreeMap` | 70.0 ns (14.2M/s) | 36.8 ns (27.0M/s) | 577.1 µs (~70,000× slower) | ~0.16 allocs |
 | `std::collections::HashMap` | 14.2 ns (70.0M/s) | 28.4 ns (34.3M/s) | N/A | ~0 allocs |
