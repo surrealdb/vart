@@ -798,7 +798,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         ts: u64,
         depth: usize,
         replace: bool,
-    ) -> NodeArc<P, V> {
+    ) -> (NodeArc<P, V>, bool) {
         let (key_prefix, new_prefix, shared_prefix, is_prefix_match, shared_prefix_length) =
             Self::common_insert_logic(cur_node.prefix(), key, depth);
 
@@ -819,7 +819,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
 
             let mut n4 = Node::new_node4(shared_prefix);
             n4 = n4.add_child(k1, old_node).add_child(k2, new_twig);
-            return Arc::new(n4);
+            return (Arc::new(n4), true);
         }
 
         // Case 2: Handle prefix match scenarios
@@ -833,24 +833,27 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 // update the existing value in the Twig node.
                 if let NodeType::Twig(twig) = &cur_node.node_type {
                     let new_twig = twig.insert_or_replace(value, commit_version, ts, replace);
-                    Arc::new(Node {
-                        node_type: NodeType::Twig(new_twig),
-                    })
+                    (
+                        Arc::new(Node {
+                            node_type: NodeType::Twig(new_twig),
+                        }),
+                        false,
+                    )
                 } else {
                     // If the current node is an inner node, then either insert the new value
                     // in its existing inner Twig node, or create new one.
-                    let leaf = match cur_node.get_inner_twig() {
-                        Some(twig) => twig.insert_or_replace(value, commit_version, ts, replace),
+                    let (leaf, is_new_key) = match cur_node.get_inner_twig() {
+                        Some(twig) => (twig.insert_or_replace(value, commit_version, ts, replace), false),
                         None => {
                             let mut new_twig =
                                 TwigNode::new(cur_node.prefix().clone(), key.as_slice().into());
                             new_twig.insert_mut(value, commit_version, ts);
-                            new_twig
+                            (new_twig, true)
                         }
                     };
                     let mut new_node = cur_node.clone_node();
                     new_node.set_inner_twig(leaf);
-                    Arc::new(new_node)
+                    (Arc::new(new_node), is_new_key)
                 }
             }
 
@@ -871,11 +874,11 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                     let new_twig =
                         Node::new_twig(new_prefix, key.clone(), value, commit_version, ts);
                     n4.add_child_mut(k, new_twig);
-                    Arc::new(n4)
+                    (Arc::new(n4), true)
                 } else {
                     // Case 2b2: Continue traversal with existing child
                     if let Some(child) = cur_node.find_child(k) {
-                        let new_child = Node::insert_recurse(
+                        let (new_child, is_new_key) = Node::insert_recurse(
                             child,
                             key,
                             value,
@@ -885,7 +888,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                             replace,
                         );
                         let new_node = cur_node.replace_child(k, new_child);
-                        return Arc::new(new_node);
+                        return (Arc::new(new_node), is_new_key);
                     }
 
                     // Case 2b3: Create new child node
@@ -897,7 +900,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                         ts,
                     );
                     let new_node = cur_node.add_child(k, new_twig);
-                    Arc::new(new_node)
+                    (Arc::new(new_node), true)
                 }
             }
 
@@ -918,7 +921,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 let mut n4 = Node::new_node4(key_prefix.into());
                 n4.set_inner_twig(inner_twig);
                 n4.add_child_mut(old_node_key, old_node);
-                Arc::new(n4)
+                (Arc::new(n4), true)
             }
         }
     }
@@ -931,7 +934,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         ts: u64,
         depth: usize,
         replace: bool,
-    ) {
+    ) -> bool {
         let (key_prefix, new_prefix, shared_prefix, is_prefix_match, shared_prefix_length) =
             Self::common_insert_logic(cur_node.prefix(), key, depth);
 
@@ -957,7 +960,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             cur_node.add_child_mut(k1, old_node);
             cur_node.add_child_mut(k2, new_twig);
 
-            return;
+            return true;
         }
 
         // Case 2: Handle prefix match scenarios
@@ -981,6 +984,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                     } else {
                         twig.insert_mut(value, commit_version, ts);
                     }
+                    false
                 } else {
                     // If the current node is an inner node, then either insert the new value
                     // in its existing inner Twig node, or create new one.
@@ -991,12 +995,14 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                             } else {
                                 twig.insert_mut(value, commit_version, ts);
                             }
+                            false
                         }
                         None => {
                             let mut new_twig =
                                 TwigNode::new(cur_node.prefix().clone(), key.as_slice().into());
                             new_twig.insert_mut(value, commit_version, ts);
                             cur_node.set_inner_twig(new_twig);
+                            true
                         }
                     }
                 }
@@ -1022,10 +1028,11 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                     let new_twig =
                         Node::new_twig(new_prefix, key.clone(), value, commit_version, ts);
                     cur_node.add_child_mut(k, new_twig);
+                    true
                 } else {
                     // Case 2b2: Continue traversal with existing child
                     if let Some(child) = cur_node.find_child_mut(k) {
-                        Node::insert_recurse_mut(
+                        return Node::insert_recurse_mut(
                             child,
                             key,
                             value,
@@ -1034,7 +1041,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                             depth + shared_prefix_length,
                             replace,
                         );
-                        return;
                     }
 
                     // Case 2b3: Create new child node
@@ -1047,6 +1053,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                         ts,
                     );
                     cur_node.add_child_mut(k, new_twig);
+                    true
                 }
             }
 
@@ -1067,6 +1074,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 let old_node_key = new_prefix.at(0);
                 old_node.set_prefix(new_prefix);
                 cur_node.add_child_mut(old_node_key, old_node);
+                true
             }
         }
     }
@@ -1215,16 +1223,19 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         check_version: bool,
         replace: bool,
     ) -> Result<(), TrieError> {
-        let new_root = match &self.root {
+        let (new_root, is_new_key) = match &self.root {
             None => {
                 let commit_version = if version == 0 { 1 } else { version };
-                Arc::new(Node::new_twig(
-                    key.as_slice().into(),
-                    key.as_slice().into(),
-                    value,
-                    commit_version,
-                    ts,
-                ))
+                (
+                    Arc::new(Node::new_twig(
+                        key.as_slice().into(),
+                        key.as_slice().into(),
+                        value,
+                        commit_version,
+                        ts,
+                    )),
+                    true,
+                )
             }
             Some(root) => {
                 let curr_version = self.version;
@@ -1239,7 +1250,9 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         };
 
         self.root = Some(new_root);
-        self.size += 1;
+        if is_new_key {
+            self.size += 1;
+        }
         self.update_version(version);
 
         Ok(())
@@ -1254,7 +1267,7 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         check_version: bool,
         replace: bool,
     ) -> Result<(), TrieError> {
-        if let Some(root_arc) = self.root.as_mut() {
+        let is_new_key = if let Some(root_arc) = self.root.as_mut() {
             let curr_version = self.version;
             let mut commit_version = version;
             if version == 0 {
@@ -1276,8 +1289,11 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
                 commit_version,
                 ts,
             )));
+            true
+        };
+        if is_new_key {
+            self.size += 1;
         }
-        self.size += 1;
         self.update_version(version);
 
         Ok(())
@@ -3861,4 +3877,44 @@ mod tests {
         let late_results: Vec<_> = scan_iter.collect();
         assert_eq!(late_results.len(), 501); // All keys 250-750 inclusive
     }
+
+    #[test]
+    fn test_tree_size_tracking_with_duplicates_and_removals() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let key_a = VariableSizeKey::from_slice(b"key_a");
+        let key_b = VariableSizeKey::from_slice(b"key_b");
+
+        assert_eq!(tree.size, 0);
+        assert!(tree.is_empty());
+
+        // Insert key_a multiple times with different versions and values
+        assert!(tree.insert(&key_a, 1, 1, 10).is_ok());
+        assert_eq!(tree.size, 1);
+        assert!(!tree.is_empty());
+
+        assert!(tree.insert(&key_a, 2, 2, 20).is_ok());
+        assert_eq!(tree.size, 1, "size should not increase on new version of existing key");
+
+        assert!(tree.insert_or_replace(&key_a, 3, 3, 30).is_ok());
+        assert_eq!(tree.size, 1, "size should not increase on replacement of existing key");
+
+        // Insert key_b
+        assert!(tree.insert(&key_b, 10, 4, 40).is_ok());
+        assert_eq!(tree.size, 2);
+
+        // Remove key_a
+        assert!(tree.remove(&key_a));
+        assert_eq!(tree.size, 1);
+        assert!(!tree.is_empty());
+
+        // Remove key_b
+        assert!(tree.remove(&key_b));
+        assert_eq!(tree.size, 0);
+        assert!(tree.is_empty(), "tree must be empty after removing all keys");
+
+        // Removing non-existent key should not alter size
+        assert!(!tree.remove(&key_a));
+        assert_eq!(tree.size, 0);
+    }
+
 }
