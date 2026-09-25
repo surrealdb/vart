@@ -63,24 +63,30 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Ord for Leaf<'a, P, V> {
 pub struct Iter<'a, P: KeyTrait + 'a, V: Clone> {
     forward: ForwardIterState<'a, P, V>,
     last_forward_key: Option<&'a P>,
-    backward: BackwardIterState<'a, P, V>,
+    backward: Option<BackwardIterState<'a, P, V>>,
     last_backward_key: Option<&'a P>,
+    node: Option<&'a Arc<Node<P, V>>>,
+    is_versioned: bool,
 }
 
 impl<'a, P: KeyTrait + 'a, V: Clone> Iter<'a, P, V> {
     pub(crate) fn new(node: Option<&'a Arc<Node<P, V>>>, is_versioned: bool) -> Self {
         match node {
-            Some(node) => Self {
-                forward: ForwardIterState::new(node, is_versioned),
+            Some(n) => Self {
+                forward: ForwardIterState::new(n, is_versioned),
                 last_forward_key: None,
-                backward: BackwardIterState::new(node, is_versioned),
+                backward: None,
                 last_backward_key: None,
+                node,
+                is_versioned,
             },
             None => Self {
                 forward: ForwardIterState::empty(),
-                backward: BackwardIterState::empty(),
+                backward: Some(BackwardIterState::empty()),
                 last_backward_key: None,
                 last_forward_key: None,
+                node: None,
+                is_versioned,
             },
         }
     }
@@ -133,30 +139,38 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
 
 impl<'a, P: KeyTrait + 'a, V: Clone> DoubleEndedIterator for Iter<'a, P, V> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        while let Some(node) = self.backward.iters.last_mut() {
+        let is_versioned = self.is_versioned;
+        let node = self.node;
+        let backward = self.backward.get_or_insert_with(|| {
+            node.map_or_else(BackwardIterState::empty, |n| {
+                BackwardIterState::new(n, is_versioned)
+            })
+        });
+
+        while let Some(node) = backward.iters.last_mut() {
             let e = node.next_back();
             match e {
                 None => {
-                    self.backward.iters.pop();
+                    backward.iters.pop();
                 }
                 Some(other) => {
                     if let NodeType::Twig(twig) = &other.node_type {
-                        if self.backward.is_versioned {
+                        if backward.is_versioned {
                             for leaf in twig.iter() {
-                                self.backward.leafs.push(Leaf(&twig.key, leaf));
+                                backward.leafs.push(Leaf(&twig.key, leaf));
                             }
                         } else if let Some(v) = twig.get_latest_leaf() {
-                            self.backward.leafs.push(Leaf(&twig.key, v));
+                            backward.leafs.push(Leaf(&twig.key, v));
                         }
                         break;
                     } else {
-                        self.backward.iters.push(NodeIter::new(other.iter()));
+                        backward.iters.push(NodeIter::new(other.iter()));
                     }
                 }
             }
         }
 
-        self.backward.leafs.pop().and_then(|leaf| {
+        backward.leafs.pop().and_then(|leaf| {
             self.last_backward_key = Some(leaf.0);
             if self
                 .last_backward_key
@@ -165,8 +179,8 @@ impl<'a, P: KeyTrait + 'a, V: Clone> DoubleEndedIterator for Iter<'a, P, V> {
             {
                 Some((leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
             } else {
-                self.backward.iters.clear();
-                self.backward.leafs.clear();
+                backward.iters.clear();
+                backward.leafs.clear();
                 None
             }
         })
@@ -368,8 +382,9 @@ impl<'a, P: KeyTrait + 'a, V: Clone> BackwardIterState<'a, P, V> {
 
 pub struct Range<'a, K: KeyTrait, V: Clone, R> {
     forward: ForwardIterState<'a, K, V>,
-    backward: BackwardIterState<'a, K, V>,
+    backward: Option<BackwardIterState<'a, K, V>>,
     range: R,
+    node: Option<&'a Arc<Node<K, V>>>,
     forward_prefix: Vec<u8>,
     forward_prefix_lengths: Vec<usize>,
     backward_prefix: Vec<u8>,
@@ -386,8 +401,9 @@ where
     pub(crate) fn empty(range: R) -> Self {
         Self {
             forward: ForwardIterState::empty(),
-            backward: BackwardIterState::empty(),
+            backward: Some(BackwardIterState::empty()),
             range,
+            node: None,
             forward_prefix: Vec::new(),
             forward_prefix_lengths: Vec::new(),
             backward_prefix: Vec::new(),
@@ -404,18 +420,16 @@ where
         let forward = node.map_or_else(ForwardIterState::empty, |n| {
             ForwardIterState::forward_scan(n, &range, false)
         });
-        let backward = node.map_or_else(BackwardIterState::empty, |n| {
-            BackwardIterState::backward_scan(n, &range, false)
-        });
 
         Self {
             range,
+            node,
             forward_prefix: forward.prefix.clone(),
             forward_prefix_lengths: Vec::new(),
-            backward_prefix: backward.prefix.clone(),
+            backward_prefix: Vec::new(),
             backward_prefix_lengths: Vec::new(),
             forward,
-            backward,
+            backward: None,
             last_forward_key: None,
             last_backward_key: None,
         }
@@ -574,17 +588,27 @@ where
 
 impl<K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> DoubleEndedIterator for Range<'_, K, V, R> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        while let Some(node) = self.backward.iters.last_mut() {
+        if self.backward.is_none() {
+            let range = &self.range;
+            let backward = self.node.map_or_else(BackwardIterState::empty, |n| {
+                BackwardIterState::backward_scan(n, range, false)
+            });
+            self.backward_prefix = backward.prefix.clone();
+            self.backward = Some(backward);
+        }
+        let backward = self.backward.as_mut().unwrap();
+
+        while let Some(node) = backward.iters.last_mut() {
             match node.next_back() {
                 Some(other) => {
                     if let NodeType::Twig(twig) = &other.node_type {
                         if self.range.contains(&twig.key) {
                             if let Some(v) = twig.get_latest_leaf() {
-                                self.backward.leafs.push(Leaf(&twig.key, v));
+                                backward.leafs.push(Leaf(&twig.key, v));
                             }
                             break;
                         } else if is_key_out_of_range_backward(&self.range, &twig.key) {
-                            self.backward.iters.clear();
+                            backward.iters.clear();
                             break;
                         }
                     } else {
@@ -593,12 +617,12 @@ impl<K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> DoubleEndedIterator for Ran
                             &mut self.backward_prefix_lengths,
                             &self.range,
                             other,
-                            &mut self.backward.iters,
+                            &mut backward.iters,
                         );
                     }
                 }
                 None => {
-                    self.backward.iters.pop();
+                    backward.iters.pop();
                     if let Some(len) = self.backward_prefix_lengths.pop() {
                         self.backward_prefix.truncate(len);
                     }
@@ -606,7 +630,7 @@ impl<K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> DoubleEndedIterator for Ran
             }
         }
 
-        self.backward.leafs.pop().and_then(|leaf| {
+        backward.leafs.pop().and_then(|leaf| {
             self.last_backward_key = Some(leaf.0);
             if self
                 .last_backward_key
@@ -615,8 +639,8 @@ impl<K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> DoubleEndedIterator for Ran
             {
                 Some((leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
             } else {
-                self.backward.iters.clear();
-                self.backward.leafs.clear();
+                backward.iters.clear();
+                backward.leafs.clear();
                 None
             }
         })
