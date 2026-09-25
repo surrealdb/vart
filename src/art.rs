@@ -208,79 +208,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         }
     }
 
-    /// Adds a child node with the given key to the current node.
-    ///
-    /// Inserts a child node with the specified key into the current node.
-    /// Depending on the node type, this may lead to growth if the node becomes full.
-    ///
-    /// # Parameters
-    ///
-    /// - `key`: The key associated with the child node.
-    /// - `child`: The child node to be added.
-    ///
-    /// # Returns
-    ///
-    /// Returns a new `Node` instance with the added child node.
-    ///
-    #[inline]
-    fn add_child(&self, key: u8, child: Node<P, V>) -> Self {
-        let cloned_node = if self.is_full() {
-            self.grow()
-        } else {
-            match &self.node_type {
-                NodeType::Node4(n) => Self {
-                    node_type: NodeType::Node4(n.clone()),
-                },
-                NodeType::Node16(n) => Self {
-                    node_type: NodeType::Node16(n.clone()),
-                },
-                NodeType::Node48(n) => Self {
-                    node_type: NodeType::Node48(n.clone()),
-                },
-                NodeType::Node256(n) => Self {
-                    node_type: NodeType::Node256(n.clone()),
-                },
-                NodeType::Twig(_) => panic!("Unexpected Twig node encountered in add_child()"),
-            }
-        };
-
-        match cloned_node.node_type {
-            NodeType::Node4(mut n) => {
-                // Add the child node to the Node4 instance.
-                n.add_child(key, child);
-                let node = NodeType::Node4(n);
-
-                // Create a new Node instance with the updated NodeType.
-                Self { node_type: node }
-            }
-            NodeType::Node16(mut n) => {
-                // Add the child node to the Node16 instance.
-                n.add_child(key, child);
-                let node = NodeType::Node16(n);
-
-                // Create a new Node instance with the updated NodeType.
-                Self { node_type: node }
-            }
-            NodeType::Node48(mut n) => {
-                // Add the child node to the Node48 instance.
-                n.add_child(key, child);
-                let node = NodeType::Node48(n);
-
-                // Create a new Node instance with the updated NodeType.
-                Self { node_type: node }
-            }
-            NodeType::Node256(mut n) => {
-                // Add the child node to the Node256 instance.
-                n.add_child(key, child);
-                let node = NodeType::Node256(n);
-
-                // Create a new Node instance with the updated NodeType.
-                Self { node_type: node }
-            }
-            NodeType::Twig(_) => panic!("Unexpected Twig node encountered in add_child_mut()"),
-        }
-    }
-
     #[inline]
     fn add_child_mut(&mut self, key: u8, child: Node<P, V>) {
         if self.is_full() {
@@ -794,146 +721,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         )
     }
 
-    /// Recursively inserts a key-value pair into the current node and its child nodes.
-    pub(crate) fn insert_recurse(
-        cur_node: &Arc<Node<P, V>>,
-        key: &P,
-        value: V,
-        commit_version: u64,
-        ts: u64,
-        depth: usize,
-        replace: bool,
-    ) -> (NodeArc<P, V>, bool) {
-        let (key_prefix, new_prefix, shared_prefix, is_prefix_match, shared_prefix_length) =
-            Self::common_insert_logic(cur_node.prefix(), key, depth);
-
-        // Case 1: No prefix match - create new Node4 with split
-        if !is_prefix_match {
-            // If the prefixes don't match, create a new Node4 with the old node and a new Twig as children.
-            let mut old_node = cur_node.clone_node();
-            old_node.set_prefix(new_prefix);
-            let k1 = cur_node.prefix().at(shared_prefix_length);
-            let k2 = key_prefix[shared_prefix_length];
-            let new_twig = Node::new_twig(
-                key_prefix[shared_prefix_length..].into(),
-                key.clone(),
-                value,
-                commit_version,
-                ts,
-            );
-
-            let mut n4 = Node::new_node4(shared_prefix);
-            n4 = n4.add_child(k1, old_node).add_child(k2, new_twig);
-            return (Arc::new(n4), true);
-        }
-
-        // Case 2: Handle prefix match scenarios
-        let cur_prefix_len = cur_node.prefix().len();
-        let key_prefix_len = key_prefix.len();
-
-        match cur_prefix_len.cmp(&key_prefix_len) {
-            // Case 2a: Exact prefix match
-            Ordering::Equal => {
-                // If the current node is a Twig node and the prefixes match up to the end of both prefixes,
-                // update the existing value in the Twig node.
-                if let NodeType::Twig(twig) = &cur_node.node_type {
-                    let new_twig = twig.insert_or_replace(value, commit_version, ts, replace);
-                    (
-                        Arc::new(Node {
-                            node_type: NodeType::Twig(new_twig),
-                        }),
-                        false,
-                    )
-                } else {
-                    // If the current node is an inner node, then either insert the new value
-                    // in its existing inner Twig node, or create new one.
-                    let (leaf, is_new_key) = match cur_node.get_inner_twig() {
-                        Some(twig) => (
-                            twig.insert_or_replace(value, commit_version, ts, replace),
-                            false,
-                        ),
-                        None => {
-                            let mut new_twig =
-                                TwigNode::new(cur_node.prefix().clone(), key.clone());
-                            new_twig.insert_mut(value, commit_version, ts);
-                            (new_twig, true)
-                        }
-                    };
-                    let mut new_node = cur_node.clone_node();
-                    new_node.set_inner_twig(leaf);
-                    (Arc::new(new_node), is_new_key)
-                }
-            }
-
-            // Case 2b: Current prefix is shorter and node is Twig
-            Ordering::Less => {
-                // The current node is Twig and there is a prefix match and the current node's
-                // prefix is shorter than the remainder of the key, e.g. current node is "key1"
-                // and "key123" is inserted.
-                // Current Twig must be replaced by a Node4, made its inner Twig node, and a new
-                // Twig node created as a normal child node with a prefix being the reminder of
-                // the new key.
-                let k = key_prefix[shared_prefix_length];
-
-                // Case 2b1: Current node is Twig
-                if let NodeType::Twig(twig) = &cur_node.node_type {
-                    let mut n4 = Node::new_node4(shared_prefix);
-                    n4.set_inner_twig(twig.clone());
-                    let new_twig =
-                        Node::new_twig(new_prefix, key.clone(), value, commit_version, ts);
-                    n4.add_child_mut(k, new_twig);
-                    (Arc::new(n4), true)
-                } else {
-                    // Case 2b2: Continue traversal with existing child
-                    if let Some(child) = cur_node.find_child(k) {
-                        let (new_child, is_new_key) = Node::insert_recurse(
-                            child,
-                            key,
-                            value,
-                            commit_version,
-                            ts,
-                            depth + shared_prefix_length,
-                            replace,
-                        );
-                        let new_node = cur_node.replace_child(k, new_child);
-                        return (Arc::new(new_node), is_new_key);
-                    }
-
-                    // Case 2b3: Create new child node
-                    let new_twig = Node::new_twig(
-                        key_prefix[shared_prefix_length..].into(),
-                        key.clone(),
-                        value,
-                        commit_version,
-                        ts,
-                    );
-                    let new_node = cur_node.add_child(k, new_twig);
-                    (Arc::new(new_node), true)
-                }
-            }
-
-            // Case 2c: Current prefix is longer
-            Ordering::Greater => {
-                // Similar to the case above, but this time the current node's prefix is longer
-                // than the remainder of the key, e.g. current node is "key123" and "key1" is
-                // inserted.
-                // Current node is also replaced by a new Node4, but this time its prefix is
-                // adjusted and it becomes the Node4's child, while the new Twig node becomes
-                // Node4's inner Twig.
-                let mut inner_twig = TwigNode::new(key_prefix.into(), key.clone());
-                inner_twig.insert_mut(value, commit_version, ts);
-                let old_node_key = new_prefix.at(0);
-                let mut old_node = cur_node.clone_node();
-                old_node.set_prefix(new_prefix);
-
-                let mut n4 = Node::new_node4(key_prefix.into());
-                n4.set_inner_twig(inner_twig);
-                n4.add_child_mut(old_node_key, old_node);
-                (Arc::new(n4), true)
-            }
-        }
-    }
-
     pub(crate) fn insert_recurse_mut(
         cur_node: &mut Node<P, V>,
         key: &P,
@@ -1197,7 +984,6 @@ pub struct Tree<P: KeyTrait, V: Clone> {
 }
 
 // A type alias for a node reference.
-type NodeArc<P, V> = Arc<Node<P, V>>;
 
 impl<P: KeyTrait, V: Clone> NodeType<P, V> {
     fn clone(&self) -> Self {
@@ -1286,33 +1072,28 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
         check_version: bool,
         replace: bool,
     ) -> Result<(), TrieError> {
-        let (new_root, is_new_key) = match &self.root {
-            None => {
-                let commit_version = if version == 0 { 1 } else { version };
-                (
-                    Arc::new(Node::new_twig(
-                        key.clone(),
-                        key.clone(),
-                        value,
-                        commit_version,
-                        ts,
-                    )),
-                    true,
-                )
+        let is_new_key = if let Some(root_arc) = self.root.as_mut() {
+            let curr_version = self.version;
+            let mut commit_version = version;
+            if version == 0 {
+                commit_version = curr_version + 1;
+            } else if check_version && curr_version > version {
+                return Err(TrieError::VersionIsOld);
             }
-            Some(root) => {
-                let curr_version = self.version;
-                let mut commit_version = version;
-                if version == 0 {
-                    commit_version = curr_version + 1;
-                } else if check_version && curr_version > version {
-                    return Err(TrieError::VersionIsOld);
-                }
-                Node::insert_recurse(root, key, value, commit_version, ts, 0, replace)
-            }
+            let root = Arc::make_mut(root_arc);
+            Node::insert_recurse_mut(root, key, value, commit_version, ts, 0, replace)
+        } else {
+            let commit_version = if version == 0 { 1 } else { version };
+            self.root = Some(Arc::new(Node::new_twig(
+                key.clone(),
+                key.clone(),
+                value,
+                commit_version,
+                ts,
+            )));
+            true
         };
 
-        self.root = Some(new_root);
         if is_new_key {
             self.size += 1;
         }

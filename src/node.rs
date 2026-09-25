@@ -90,6 +90,7 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         }
     }
 
+    #[cfg(test)]
     #[inline]
     pub(crate) fn insert(&self, value: V, version: u64, ts: u64) -> TwigNode<K, V> {
         let mut new_twig = self.clone();
@@ -132,22 +133,6 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         if version > self.version {
             self.values = LeafPayload::Single(LeafValue::new(value, version, ts));
             self.version = version;
-        }
-    }
-
-    pub(crate) fn insert_or_replace(
-        &self,
-        value: V,
-        version: u64,
-        ts: u64,
-        replace: bool,
-    ) -> TwigNode<K, V> {
-        if replace {
-            let mut new_twig = TwigNode::new(self.prefix.clone(), self.key.clone());
-            new_twig.insert_mut(value, version, ts);
-            new_twig
-        } else {
-            self.insert(value, version, ts)
         }
     }
 
