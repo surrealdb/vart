@@ -145,7 +145,7 @@ impl<const SIZE: usize> Key for FixedSizeKey<SIZE> {
     }
 
     fn extend(&self, other: &Self) -> Self {
-        assert!(self.len + other.len < SIZE);
+        assert!(self.len + other.len <= SIZE);
         let mut content = [0; SIZE];
         content[..self.len].copy_from_slice(&self.content[..self.len]);
         content[self.len..self.len + other.len].copy_from_slice(&other.content[..other.len]);
@@ -338,3 +338,17 @@ const _: () = {
     }
     let _ = check::<FixedSizeKey<16>, usize>;
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fixed_size_key_extend_to_capacity() {
+        let k1: FixedSizeKey<8> = FixedSizeKey::from_slice(b"1234");
+        let k2: FixedSizeKey<8> = FixedSizeKey::from_slice(b"5678");
+        let k3 = k1.extend(&k2);
+        assert_eq!(k3.len(), 8);
+        assert_eq!(k3.as_slice(), b"12345678");
+    }
+}
