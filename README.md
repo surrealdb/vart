@@ -5,7 +5,7 @@
 <br>
 
 <p align="center">
-    <a href="https://github.com/surrealdb/vart"><img src="https://img.shields.io/badge/status-stable-ff00bb.svg?style=flat-square"></a>
+    <a href="https://github.com/surrealdb/vart"><img src="https://img.shields.io/badge/status-beta-ff00bb.svg?style=flat-square"></a>
     &nbsp;
     <a href="https://docs.rs/vart/"><img src="https://img.shields.io/docsrs/vart?style=flat-square"></a>
     &nbsp;
