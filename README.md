@@ -1,5 +1,3 @@
-<br>
-
 <h1 align="center">vart</h1>
 
 <p align="center">An immutable, versioned, adaptive radix trie data structure for Rust.</p>
