@@ -348,7 +348,34 @@ impl<P: KeyTrait, N: Clone, const WIDTH: usize> FlatNode<P, N, WIDTH> {
     #[inline]
     fn index(&self, key: u8) -> Option<usize> {
         let count = (self.num_children as usize).min(WIDTH);
-        self.keys[..count].binary_search(&key).ok()
+        if WIDTH == 16 && cfg!(target_endian = "little") {
+            let k_broadcast = u64::from_ne_bytes([key; 8]);
+            let w0 = u64::from_ne_bytes(self.keys[0..8].try_into().unwrap());
+            let diff0 = w0 ^ k_broadcast;
+            let zeroes0 =
+                (diff0.wrapping_sub(0x0101_0101_0101_0101)) & (!diff0) & 0x8080_8080_8080_8080;
+            if zeroes0 != 0 {
+                let pos = (zeroes0.trailing_zeros() / 8) as usize;
+                if pos < count {
+                    return Some(pos);
+                }
+            }
+            if count > 8 {
+                let w1 = u64::from_ne_bytes(self.keys[8..16].try_into().unwrap());
+                let diff1 = w1 ^ k_broadcast;
+                let zeroes1 =
+                    (diff1.wrapping_sub(0x0101_0101_0101_0101)) & (!diff1) & 0x8080_8080_8080_8080;
+                if zeroes1 != 0 {
+                    let pos = 8 + (zeroes1.trailing_zeros() / 8) as usize;
+                    if pos < count {
+                        return Some(pos);
+                    }
+                }
+            }
+            None
+        } else {
+            self.keys[..count].binary_search(&key).ok()
+        }
     }
 
     pub(crate) fn resize<const NEW_WIDTH: usize>(&self) -> FlatNode<P, N, NEW_WIDTH> {
