@@ -41,9 +41,14 @@ const NODE256MIN: usize = NODE48MAX + 1;
 ///
 /// - `node_type`: The `NodeType` variant representing the type of the node, containing its
 ///   specific structure and associated data.
-///
 pub(crate) struct Node<P: KeyTrait, V: Clone> {
     pub(crate) node_type: NodeType<P, V>, // Type of the node
+}
+
+impl<P: KeyTrait, V: Clone> Clone for Node<P, V> {
+    fn clone(&self) -> Self {
+        self.clone_node()
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -109,10 +114,10 @@ impl<P: KeyTrait, V: Clone> NodeType<P, V> {
 
     fn get_inner_twig_mut(&mut self) -> Option<&mut Node<P, V>> {
         match self {
-            NodeType::Node4(n) => Arc::get_mut(n.inner_twig.as_mut()?),
-            NodeType::Node16(n) => Arc::get_mut(n.inner_twig.as_mut()?),
-            NodeType::Node48(n) => Arc::get_mut(n.inner_twig.as_mut()?),
-            NodeType::Node256(n) => Arc::get_mut(n.inner_twig.as_mut()?),
+            NodeType::Node4(n) => Some(Arc::make_mut(n.inner_twig.as_mut()?)),
+            NodeType::Node16(n) => Some(Arc::make_mut(n.inner_twig.as_mut()?)),
+            NodeType::Node48(n) => Some(Arc::make_mut(n.inner_twig.as_mut()?)),
+            NodeType::Node256(n) => Some(Arc::make_mut(n.inner_twig.as_mut()?)),
             NodeType::Twig(_) => None,
         }
     }
@@ -843,7 +848,10 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                     // If the current node is an inner node, then either insert the new value
                     // in its existing inner Twig node, or create new one.
                     let (leaf, is_new_key) = match cur_node.get_inner_twig() {
-                        Some(twig) => (twig.insert_or_replace(value, commit_version, ts, replace), false),
+                        Some(twig) => (
+                            twig.insert_or_replace(value, commit_version, ts, replace),
+                            false,
+                        ),
                         None => {
                             let mut new_twig =
                                 TwigNode::new(cur_node.prefix().clone(), key.as_slice().into());
@@ -3893,10 +3901,16 @@ mod tests {
         assert!(!tree.is_empty());
 
         assert!(tree.insert(&key_a, 2, 2, 20).is_ok());
-        assert_eq!(tree.size, 1, "size should not increase on new version of existing key");
+        assert_eq!(
+            tree.size, 1,
+            "size should not increase on new version of existing key"
+        );
 
         assert!(tree.insert_or_replace(&key_a, 3, 3, 30).is_ok());
-        assert_eq!(tree.size, 1, "size should not increase on replacement of existing key");
+        assert_eq!(
+            tree.size, 1,
+            "size should not increase on replacement of existing key"
+        );
 
         // Insert key_b
         assert!(tree.insert(&key_b, 10, 4, 40).is_ok());
@@ -3910,11 +3924,88 @@ mod tests {
         // Remove key_b
         assert!(tree.remove(&key_b));
         assert_eq!(tree.size, 0);
-        assert!(tree.is_empty(), "tree must be empty after removing all keys");
+        assert!(
+            tree.is_empty(),
+            "tree must be empty after removing all keys"
+        );
 
         // Removing non-existent key should not alter size
         assert!(!tree.remove(&key_a));
         assert_eq!(tree.size, 0);
     }
 
+    #[test]
+    fn test_cow_snapshot_and_insert_unchecked_isolation() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let k1 = VariableSizeKey::from_slice(b"abc1");
+        let k2 = VariableSizeKey::from_slice(b"abc2");
+        let k3 = VariableSizeKey::from_slice(b"abc3");
+        tree.insert(&k1, 1, 1, 1).unwrap();
+        tree.insert(&k2, 2, 1, 1).unwrap();
+
+        let snapshot = tree.clone();
+
+        // Mutate tree via CoW insert, making tree.root unique while children remain shared
+        tree.insert(&VariableSizeKey::from_slice(b"other"), 99, 2, 2)
+            .unwrap();
+
+        // Mutate tree via insert_unchecked
+        let res = tree.insert_unchecked(&k3, 3, 3, 3);
+        assert!(res.is_ok());
+
+        // Verify tree has all keys
+        assert_eq!(
+            tree.get(&k1, 0).map(|(v, _, _)| v),
+            Some(1),
+            "k1 lost in tree!"
+        );
+        assert_eq!(
+            tree.get(&k2, 0).map(|(v, _, _)| v),
+            Some(2),
+            "k2 lost in tree!"
+        );
+        assert_eq!(
+            tree.get(&k3, 0).map(|(v, _, _)| v),
+            Some(3),
+            "k3 missing in tree!"
+        );
+
+        // Verify snapshot still has k1, k2, but not other or k3
+        assert!(snapshot.get(&k1, 0).is_some());
+        assert!(snapshot.get(&k2, 0).is_some());
+        assert!(snapshot.get(&k3, 0).is_none());
+    }
+
+    #[test]
+    fn test_shared_child_insert_unchecked_corruption() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let k1 = VariableSizeKey::from_slice(b"abc1");
+        let k2 = VariableSizeKey::from_slice(b"abc2");
+        tree.insert(&k1, 1, 1, 1).unwrap();
+        tree.insert(&k2, 2, 1, 1).unwrap();
+
+        let snapshot = tree.clone();
+
+        // Mutate tree via CoW insert, so tree.root is unique but child 'abc1' is shared with snapshot
+        tree.insert(&VariableSizeKey::from_slice(b"other"), 99, 2, 2)
+            .unwrap();
+
+        // Now update k1 via insert_unchecked
+        tree.insert_unchecked(&k1, 100, 3, 3).unwrap();
+
+        // Check tree has exactly 3 keys with no duplicate keys
+        assert_eq!(tree.size, 3);
+        let items: Vec<_> = tree.iter().collect();
+        assert_eq!(items.len(), 3);
+        assert_eq!(tree.get(&k1, 0).unwrap().0, 100);
+        assert_eq!(tree.get(&k2, 0).unwrap().0, 2);
+
+        // Snapshot is completely isolated and retains original values
+        assert_eq!(snapshot.size, 2);
+        assert_eq!(snapshot.get(&k1, 0).unwrap().0, 1);
+        assert_eq!(snapshot.get(&k2, 0).unwrap().0, 2);
+        assert!(snapshot
+            .get(&VariableSizeKey::from_slice(b"other"), 0)
+            .is_none());
+    }
 }

@@ -7,7 +7,7 @@ use crate::{art::QueryType, KeyTrait};
     Immutable nodes
 */
 
-pub(crate) trait NodeTrait<N> {
+pub(crate) trait NodeTrait<N: Clone> {
     fn clone(&self) -> Self;
     fn add_child(&mut self, key: u8, node: N);
     fn find_child(&self, key: u8) -> Option<&Arc<N>>;
@@ -221,7 +221,7 @@ pub(crate) struct FlatNode<P: KeyTrait, N, const WIDTH: usize> {
     num_children: u8,
 }
 
-impl<P: KeyTrait, N, const WIDTH: usize> FlatNode<P, N, WIDTH> {
+impl<P: KeyTrait, N: Clone, const WIDTH: usize> FlatNode<P, N, WIDTH> {
     pub(crate) fn new(prefix: P) -> Self {
         let children: [Option<Arc<N>>; WIDTH] = [const { None }; WIDTH];
 
@@ -295,7 +295,7 @@ impl<P: KeyTrait, N, const WIDTH: usize> FlatNode<P, N, WIDTH> {
     }
 }
 
-impl<P: KeyTrait, N, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N, WIDTH> {
+impl<P: KeyTrait, N: Clone, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N, WIDTH> {
     fn clone(&self) -> Self {
         let mut new_node = Self::new(self.prefix.clone());
         for i in 0..self.num_children as usize {
@@ -330,7 +330,7 @@ impl<P: KeyTrait, N, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N, WIDTH> 
     fn find_child_mut(&mut self, key: u8) -> Option<&mut N> {
         let idx = self.index(key)?;
         let child = self.children[idx].as_mut()?;
-        Arc::get_mut(child)
+        Some(Arc::make_mut(child))
     }
 
     fn delete_child(&self, key: u8) -> Self {
@@ -383,7 +383,7 @@ pub(crate) struct Node48<P: KeyTrait, N> {
     child_bitmap: u64,
 }
 
-impl<P: KeyTrait, N> Node48<P, N> {
+impl<P: KeyTrait, N: Clone> Node48<P, N> {
     pub(crate) fn new(prefix: P) -> Self {
         Self {
             prefix,
@@ -449,7 +449,7 @@ impl<P: KeyTrait, N> Node48<P, N> {
     }
 }
 
-impl<P: KeyTrait, N> NodeTrait<N> for Node48<P, N> {
+impl<P: KeyTrait, N: Clone> NodeTrait<N> for Node48<P, N> {
     fn clone(&self) -> Self {
         Node48 {
             prefix: self.prefix.clone(),
@@ -499,7 +499,7 @@ impl<P: KeyTrait, N> NodeTrait<N> for Node48<P, N> {
             return None;
         }
         let child_arc = self.children[idx as usize].as_mut()?;
-        Arc::get_mut(child_arc)
+        Some(Arc::make_mut(child_arc))
     }
 
     fn num_children(&self) -> usize {
@@ -528,7 +528,7 @@ pub(crate) struct Node256<P: KeyTrait, N> {
     num_children: usize,
 }
 
-impl<P: KeyTrait, N> Node256<P, N> {
+impl<P: KeyTrait, N: Clone> Node256<P, N> {
     pub(crate) fn new(prefix: P) -> Self {
         Self {
             prefix,
@@ -539,7 +539,7 @@ impl<P: KeyTrait, N> Node256<P, N> {
     }
 
     pub(crate) fn shrink(&self) -> Node48<P, N> {
-        debug_assert!(self.num_children() < 49);
+        debug_assert!(self.num_children < 49);
         let mut indexed = Node48::new(self.prefix.clone());
         for (key, v) in self
             .children
@@ -570,7 +570,7 @@ impl<P: KeyTrait, N> Node256<P, N> {
     }
 }
 
-impl<P: KeyTrait, N> NodeTrait<N> for Node256<P, N> {
+impl<P: KeyTrait, N: Clone> NodeTrait<N> for Node256<P, N> {
     fn clone(&self) -> Self {
         Self {
             prefix: self.prefix.clone(),
@@ -601,7 +601,7 @@ impl<P: KeyTrait, N> NodeTrait<N> for Node256<P, N> {
     // New find_child_mut method
     fn find_child_mut(&mut self, key: u8) -> Option<&mut N> {
         let child_arc = self.children[key as usize].as_mut()?;
-        Arc::get_mut(child_arc)
+        Some(Arc::make_mut(child_arc))
     }
 
     #[inline]
@@ -1117,5 +1117,4 @@ mod tests {
         let entries: Vec<_> = twig.iter().map(|l| (l.value, l.version, l.ts)).collect();
         assert_eq!(entries, vec![(3, 10, 50), (99, 10, 100), (2, 10, 200)]);
     }
-
 }
