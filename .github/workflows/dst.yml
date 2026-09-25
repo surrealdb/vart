@@ -1,0 +1,46 @@
+name: DST
+
+run-name: "Deterministic Simulation Testing '${{ github.head_ref || github.ref_name }}'"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *' # Run nightly at 02:00 UTC
+  push:
+    branches:
+      - main
+      - next
+  pull_request:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  dst:
+    name: Simulation (Seeds ${{ matrix.seed_range }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        seed_range:
+          - "1001-1005"
+          - "2001-2005"
+          - "3001-3005"
+          - "4001-4005"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run Multi-Seed Deterministic Simulation
+        run: |
+          START_SEED=$(echo "${{ matrix.seed_range }}" | cut -d'-' -f1)
+          END_SEED=$(echo "${{ matrix.seed_range }}" | cut -d'-' -f2)
+          for (( seed=START_SEED; seed<=END_SEED; seed++ )); do
+            echo "==> Running DST with seed ${seed}..."
+            VART_SIM_SEED=${seed} cargo test --test sim -- --nocapture
+          done
