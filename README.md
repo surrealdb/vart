@@ -28,12 +28,14 @@ Benchmarked on bare metal (**AMD Ryzen Threadripper 9970X 32-Core / 64-Thread Pr
 
 | Data Structure | Point Read (Random Hit) | Point Insert (In-Place) | Snapshot Clone | Allocations / Insert |
 | :--- | ---: | ---: | ---: | ---: |
-| **`vart::Tree` (Slice Lookup)** | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**27.6 ns** (36.1M/s) | — | — | **0 allocs** |
-| **`vart::Tree` (Standard Key)** | **29.2 ns** (34.1M/s) | **93.7 ns** (10.6M/s) | **8.12 ns** | **1.0 allocs** |
-| `imbl::OrdMap` (Persistent B-Tree v7) | 46.3 ns (21.6M/s) | 71.8 ns (13.9M/s) | **8.12 ns** | ~0.14 allocs |
-| `im::OrdMap` (Persistent B-Tree v15) | 38.7 ns (25.8M/s) | 53.7 ns (18.6M/s) | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**7.93 ns** | ~0.06 allocs |
-| `std::collections::BTreeMap` | 71.6 ns (14.0M/s) | 37.5 ns (26.6M/s) | 572.1 µs (~70,000× slower) | ~0.16 allocs |
-| `std::collections::HashMap` | 14.5 ns (68.9M/s) | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**28.7 ns** (34.8M/s) | N/A | ~0 allocs |
+| **`vart::Tree` (Slice Lookup)** | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**27.6 ns**<br><sub>(36.1M/s)</sub> | — | — | **0 allocs** |
+| **`vart::Tree` (Standard Key)** | **29.2 ns**<br><sub>(34.1M/s)</sub> | **93.7 ns**<br><sub>(10.6M/s)</sub> | **8.12 ns** | **1.0 allocs** |
+| `imbl::OrdMap` (Persistent B-Tree v7) | 46.3 ns<br><sub>(21.6M/s)</sub> | 71.8 ns<br><sub>(13.9M/s)</sub> | **8.12 ns** | ~0.14 allocs |
+| `im::OrdMap` (Persistent B-Tree v15) | 38.7 ns<br><sub>(25.8M/s)</sub> | 53.7 ns<br><sub>(18.6M/s)</sub> | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**7.93 ns** | ~0.06 allocs |
+| `std::collections::BTreeMap` | 71.6 ns<br><sub>(14.0M/s)</sub> | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**37.5 ns**<br><sub>(26.6M/s)</sub> | 572.1 µs<br><sub>(~70,000× slower)</sub> | ~0.16 allocs |
+| `std::collections::HashMap`* | 14.5 ns<br><sub>(68.9M/s)</sub> | 28.7 ns<br><sub>(34.8M/s)</sub> | N/A | ~0 allocs |
+
+<small>\* Rocket badge denotes the fastest implementation among ordered, range-scannable maps. `std::collections::HashMap` is included as an unordered $O(1)$ reference baseline and does not support range queries, sorted scans, or snapshots.</small>
 
 - **Zero-Allocation Range Scanning**: Traverses 1,000 contiguous items in **8.19 microseconds** (~122,000,000 items/sec) with zero heap allocations during iteration via the unboxed `ChildrenIter` enum.
 - **Fastest Persistent Point Lookups**: Point reads in `vart` (**27.6 ns**) are **58% faster than `imbl::OrdMap`** and **2.4× faster than standard `BTreeMap`**.
