@@ -494,7 +494,13 @@ where
 
     let within_end_bound = match range.end_bound() {
         Bound::Included(_) => prefix_slice <= end_bound_slice,
-        Bound::Excluded(_) => prefix_slice <= end_bound_slice,
+        Bound::Excluded(end_key) => {
+            if prefix_slice.len() >= end_key.as_slice().len() {
+                prefix_slice < end_key.as_slice()
+            } else {
+                prefix_slice <= end_bound_slice
+            }
+        }
         Bound::Unbounded => true,
     };
 
