@@ -18,8 +18,6 @@
 
 It is designed as an in-memory index engine for databases, storage engines, and analytical applications that require microsecond-latency point lookups, zero-allocation range scans, snapshot reads, and point-in-time historical queries.
 
----
-
 ## Performance
 
 Benchmarked on bare metal (**AMD Ryzen Threadripper 9970X 32-Core / 64-Thread Processor @ 5.48 GHz, 128 GB DDR5 RAM**, Linux 6.8):
@@ -40,8 +38,6 @@ Benchmarked on bare metal (**AMD Ryzen Threadripper 9970X 32-Core / 64-Thread Pr
 - **Snapshot Creation**: Instantaneous $O(1)$ snapshot creation via atomic reference counting (`tree.clone()`), enabling point-in-time isolation without cloning tree data.
 - **In-Place Mutation Bypass**: High-throughput ingestion via `tree.insert_unchecked`, avoiding copy-on-write overhead when writing to uniquely owned trees while safely falling back to copy-on-write for shared snapshot paths.
 
----
-
 ## Features
 
 - **100% Safe Rust**: Enforced with `#![forbid(unsafe_code)]` at the crate root.
@@ -54,8 +50,6 @@ Benchmarked on bare metal (**AMD Ryzen Threadripper 9970X 32-Core / 64-Thread Pr
 - **Standard Rust Collection Traits**: Implements `len()`, `is_empty()`, `fmt::Debug`, `IntoIterator`, `FromIterator`, `Deref`, `Borrow`, `AsRef`, `From`, `Default`, and `Hash`.
 - **Thread Safety Guaranteed**: Compile-time static assertions ensure `Tree<P, V>`, `Node<P, V>`, and iterators implement `Send + Sync`.
 - **Deterministic Simulation Tested (DST)**: Continuously validated by a seeded PRNG fuzzer against an in-memory `BTreeMap` reference oracle across millions of operations with continuous structural invariant verification.
-
----
 
 ## Quick Start
 
@@ -116,8 +110,6 @@ fn main() {
     }
 }
 ```
-
----
 
 ## Core Operations
 
@@ -186,8 +178,6 @@ for (k, v, _, _) in tree.range(&start..&end).rev() {
 1. **`VariableSizeKey`**: General-purpose variable-length byte key backed by `Vec<u8>`. Implements `From<Vec<u8>>`, `From<String>`, `From<&str>`, `Deref<Target = [u8]>`, `Borrow<[u8]>`, and `Hash`.
 2. **`FixedSizeKey<const SIZE: usize>`**: Inline array-backed key (`[u8; SIZE]`) for fixed-size keys (e.g. 64-bit/128-bit integers, UUIDs, or hashes) eliminating heap allocations for key storage.
 
----
-
 ## Deterministic Simulation Testing (DST)
 
 `vart` includes a deterministic simulation testing harness in `tests/sim.rs` inspired by FoundationDB and TigerBeetle:
@@ -206,8 +196,6 @@ cargo test --test sim -- --nocapture
 VART_SIM_SEED=20202 cargo test --test sim -- --nocapture
 ```
 
----
-
 ## Benchmarks
 
 Benchmarks can be run locally or executed on a dedicated bare-metal server using the included remote runner:
@@ -222,8 +210,6 @@ cargo bench --bench alloc_comparison
 # Run on remote dedicated hardware (AMD Threadripper)
 ./scripts/bench-remote.sh --all
 ```
-
----
 
 ## License
 
