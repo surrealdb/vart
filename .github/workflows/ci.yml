@@ -7,6 +7,7 @@ on:
   push:
     branches:
       - main
+      - next
   pull_request:
   merge_group:
 
@@ -23,28 +24,16 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v2
-      - name: Cache
-        id: rust-cache
-        uses: actions/cache@v3
-        with:
-            path: |
-                ~/.cargo/bin/
-                ~/.cargo/registry/index/
-                ~/.cargo/registry/cache/
-                ~/.cargo/git/db/
-                target/
-            key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml', '.github/workflows/*.yml') }}
+      - uses: actions/checkout@v4
 
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
           components: rustfmt, clippy
-          default: true
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-deny
-        if: steps.rust-cache.outputs.cache-hit != 'true'
-        run: cargo install --debug --locked cargo-deny@0.15.1
+        run: cargo install --debug --locked cargo-deny@0.15.1 || true
 
       - name: Compile
         run: cargo build --all-targets --all-features
@@ -53,7 +42,7 @@ jobs:
         run: make test
 
       - name: Clippy
-        run: cargo clippy --all --all-targets -- -Dwarnings
+        run: cargo clippy --all --all-targets -- -D warnings
 
       - name: Format
         run: cargo fmt --all -- --check
