@@ -285,22 +285,8 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     }
 }
 
-// Source: https://www.the-paper-trail.org/post/art-paper-notes/
-//
-// Node4: For nodes with up to four children, ART stores all the keys in a list,
-// and the child pointers in a parallel list. Looking up the next character
-// in a string means searching the list of child keys, and then using the
-// index to look up the corresponding pointer.
-//
-// Node16: Keys in a Node16 are stored sorted, so binary search could be used to
-// find a particular key. Nodes with from 5 to 16 children have an identical layout
-// to Node4, just with 16 children per node
-//
-// A FlatNode is a node with a fixed number of children. It is used for nodes with
-// more than 16 children. The children are stored in a fixed-size array, and the
-// keys are stored in a parallel array. The keys are stored in sorted order, so
-// binary search can be used to find a particular key. The FlatNode is used for
-// storing Node4 and Node16 since they have identical layouts.
+/// Inner node holding up to `WIDTH` sorted keys and parallel child pointers.
+/// Used for `Node4` and `Node16` layouts.
 pub(crate) struct FlatNode<P: KeyTrait, N, const WIDTH: usize> {
     pub(crate) prefix: P,
     keys: [u8; WIDTH],
@@ -483,7 +469,6 @@ impl<P: KeyTrait, N: Clone, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N, 
         child
     }
 
-    // New find_child_mut method
     fn find_child_mut(&mut self, key: u8) -> Option<&mut N> {
         let idx = self.index(key)?;
         let child = self.children[idx].as_mut()?;
@@ -522,15 +507,7 @@ impl<P: KeyTrait, N: Clone, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N, 
     }
 }
 
-// Source: https://www.the-paper-trail.org/post/art-paper-notes/
-//
-// Node48: It can hold up to three times as many keys as a Node16. As the paper says,
-// when there are more than 16 children, searching for the key can become expensive,
-// so instead the keys are stored implicitly in an array of 256 indexes. The entries
-// in that array index a separate array of up to 48 pointers.
-//
-// A Node48 is a 256-entry array of pointers to children. The pointers are stored in
-// a Vector Array, which is a Vector of length WIDTH (48) that stores the pointers.
+/// Inner node holding up to 48 child pointers indexed through a 256-byte key table.
 
 #[derive(Clone)]
 struct Node48Storage<N> {
@@ -697,7 +674,6 @@ impl<P: KeyTrait, N: Clone> NodeTrait<N> for Node48<P, N> {
         Some(self.storage.children[idx as usize].as_ref().unwrap())
     }
 
-    // New find_child_mut method
     fn find_child_mut(&mut self, key: u8) -> Option<&mut N> {
         let idx = self.storage.keys[key as usize];
         if idx == u8::MAX {
@@ -717,15 +693,7 @@ impl<P: KeyTrait, N: Clone> NodeTrait<N> for Node48<P, N> {
     }
 }
 
-// Source: https://www.the-paper-trail.org/post/art-paper-notes/
-//
-// Node256: It is the traditional trie node, used when a node has
-// between 49 and 256 children. Looking up child pointers is obviously
-// very efficient - the most efficient of all the node types - and when
-// occupancy is at least 49 children the wasted space is less significant.
-//
-// A Node256 is a 256-entry array of pointers to children. The pointers are stored in
-// a Vector Array, which is a Vector of length WIDTH (256) that stores the pointers.
+/// Inner node holding up to 256 child pointers indexed directly by byte value.
 pub(crate) struct Node256<P: KeyTrait, N> {
     pub(crate) prefix: P, // Prefix associated with the node
     children: Box<[Option<Arc<N>>; 256]>,
@@ -825,7 +793,6 @@ impl<P: KeyTrait, N: Clone> NodeTrait<N> for Node256<P, N> {
         self.children[key as usize].as_ref()
     }
 
-    // New find_child_mut method
     fn find_child_mut(&mut self, key: u8) -> Option<&mut N> {
         let child_arc = self.children[key as usize].as_mut()?;
         Some(Arc::make_mut(child_arc))

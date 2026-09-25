@@ -9,11 +9,8 @@ use std::fmt;
 use std::fmt::Debug;
 use std::str::FromStr;
 
-// "Partial" in the Adaptive Radix Tree paper refers to "partial keys", a technique employed
-// for prefix compression in this data structure. Instead of storing entire keys in the nodes,
-// ART nodes often only store partial keys, which are the differing prefixes of the keys.
-// This approach significantly reduces the memory requirements of the data structure.
-// Key is a trait that provides an abstraction for partial keys.
+/// Key abstraction for Adaptive Radix Tree operations, providing prefix extraction,
+/// longest common prefix calculation, and byte-wise indexing.
 pub trait Key {
     fn at(&self, pos: usize) -> u8;
     fn len(&self) -> usize;
@@ -34,18 +31,8 @@ impl<T: Key + Clone + Ord + Debug + for<'a> From<&'a [u8]>> KeyTrait for T {}
     Key trait implementations
 */
 
-// Source: https://www.the-paper-trail.org/post/art-paper-notes/
-//
-// Keys can be of two types:
-// 1. Fixed-length datatypes such as 128-bit integers, or strings of exactly 64-bytes,
-// don’t have any problem because there can, by construction, never be any key that’s
-// a prefix of any other.
-//
-// 2. Variable-length datatypes such as general strings, can be transformed into types
-// where no key is the prefix of any other by a simple trick: append the NULL byte to every key.
-// The NULL byte, as it does in C-style strings, indicates that this is the end of the key, and
-// no characters can come after it. Therefore no string with a null-byte can be a prefix of any other,
-// because no string can have any characters after the NULL byte!
+/// Fixed-capacity byte array key, suitable for integers, UUIDs, and fixed-length hashes.
+/// Eliminates heap allocations by inlining key bytes up to `SIZE`.
 //
 #[derive(Clone, Debug, Eq)]
 pub struct FixedSizeKey<const SIZE: usize> {
@@ -111,18 +98,15 @@ impl<const SIZE: usize> FixedSizeKey<SIZE> {
 }
 
 impl<const SIZE: usize> Key for FixedSizeKey<SIZE> {
-    // Returns slice of the internal data up to the actual length
     fn as_slice(&self) -> &[u8] {
         &self.content[..self.len]
     }
 
-    // Creates a new instance of FixedSizeKey consisting only of the initial part of the content
     fn prefix_before(&self, length: usize) -> &[u8] {
         assert!(length <= self.len);
         &self.content[..length]
     }
 
-    // Creates a new instance of FixedSizeKey excluding the initial part of the content
     fn prefix_after(&self, start: usize) -> &[u8] {
         assert!(start <= self.len);
         &self.content[start..self.len]
@@ -139,7 +123,6 @@ impl<const SIZE: usize> Key for FixedSizeKey<SIZE> {
         self.len
     }
 
-    // Returns the length of the longest common prefix between this object's content and the given byte slice
     fn longest_common_prefix(&self, key: &[u8]) -> usize {
         let len = self.len.min(key.len()).min(SIZE);
         self.content[..len]
