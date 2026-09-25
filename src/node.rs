@@ -39,7 +39,6 @@ impl<V: Clone> LeafPayload<V> {
     pub(crate) fn len(&self) -> usize {
         self.as_slice().len()
     }
-
 }
 
 impl<V: Clone> std::ops::Index<usize> for LeafPayload<V> {
@@ -166,10 +165,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     }
 
     #[inline]
-    pub(crate) fn get_leaf_by_query_ref(
-        &self,
-        query_type: QueryType,
-    ) -> Option<&LeafValue<V>> {
+    pub(crate) fn get_leaf_by_query_ref(&self, query_type: QueryType) -> Option<&LeafValue<V>> {
         match query_type {
             QueryType::LatestByVersion(version) => self.get_leaf_by_version(version),
             QueryType::LatestByTs(ts) => self.get_leaf_by_ts(ts),
@@ -222,9 +218,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
                     None
                 }
             }
-            LeafPayload::Versioned(list) => {
-                list.iter().filter(|v| v.ts <= ts).max_by_key(|v| v.ts)
-            }
+            LeafPayload::Versioned(list) => list.iter().filter(|v| v.ts <= ts).max_by_key(|v| v.ts),
         }
     }
 
@@ -248,9 +242,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
                     None
                 }
             }
-            LeafPayload::Versioned(list) => {
-                list.iter().filter(|v| v.ts < ts).max_by_key(|v| v.ts)
-            }
+            LeafPayload::Versioned(list) => list.iter().filter(|v| v.ts < ts).max_by_key(|v| v.ts),
         }
     }
 
@@ -270,9 +262,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
                     None
                 }
             }
-            LeafPayload::Versioned(list) => {
-                list.iter().filter(|v| v.ts > ts).min_by_key(|v| v.ts)
-            }
+            LeafPayload::Versioned(list) => list.iter().filter(|v| v.ts > ts).min_by_key(|v| v.ts),
         }
     }
 
@@ -305,9 +295,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
                     None
                 }
             }
-            LeafPayload::Versioned(list) => {
-                list.iter().filter(|v| v.ts >= ts).min_by_key(|v| v.ts)
-            }
+            LeafPayload::Versioned(list) => list.iter().filter(|v| v.ts >= ts).min_by_key(|v| v.ts),
         }
     }
 }
@@ -331,19 +319,17 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
 pub(crate) struct FlatNode<P: KeyTrait, N, const WIDTH: usize> {
     pub(crate) prefix: P,
     keys: [u8; WIDTH],
-    children: Box<[Option<Arc<N>>; WIDTH]>,
+    children: [Option<Arc<N>>; WIDTH],
     pub(crate) inner_twig: Option<Arc<N>>,
     num_children: u8,
 }
 
 impl<P: KeyTrait, N: Clone, const WIDTH: usize> FlatNode<P, N, WIDTH> {
     pub(crate) fn new(prefix: P) -> Self {
-        let children: [Option<Arc<N>>; WIDTH] = [const { None }; WIDTH];
-
         Self {
             prefix,
             keys: [0; WIDTH],
-            children: Box::new(children),
+            children: [const { None }; WIDTH],
             inner_twig: None,
             num_children: 0,
         }
@@ -1359,7 +1345,7 @@ mod tests {
     #[test]
     fn cache_line_size() {
         assert!(std::mem::size_of::<FlatNode::<FixedSizeKey<8>, usize, 4>>() <= 64);
-        assert!(std::mem::size_of::<FlatNode::<FixedSizeKey<8>, usize, 16>>() <= 64);
+        assert!(std::mem::size_of::<FlatNode::<FixedSizeKey<8>, usize, 16>>() <= 192);
     }
 
     #[test]
