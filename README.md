@@ -29,9 +29,9 @@ Benchmarked on bare metal (**AMD Ryzen Threadripper 9970X 32-Core / 64-Thread Pr
 | Data Structure | Point Read (Random Hit) | Point Insert (In-Place) | Snapshot Clone | Allocations / Insert |
 | :--- | ---: | ---: | ---: | ---: |
 | **`vart::Tree` (Slice Lookup)** | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**27.6 ns** (36.1M/s) | — | — | **0 allocs** |
-| **`vart::Tree` (Standard Key)** | **29.2 ns** (34.1M/s) | **93.7 ns** (10.6M/s) | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**8.12 ns** | **1.0 allocs** |
+| **`vart::Tree` (Standard Key)** | **29.2 ns** (34.1M/s) | **93.7 ns** (10.6M/s) | **8.12 ns** | **1.0 allocs** |
 | `imbl::OrdMap` (Persistent B-Tree v7) | 46.3 ns (21.6M/s) | 71.8 ns (13.9M/s) | **8.12 ns** | ~0.14 allocs |
-| `im::OrdMap` (Persistent B-Tree v15) | 38.7 ns (25.8M/s) | 53.7 ns (18.6M/s) | **7.93 ns** | ~0.06 allocs |
+| `im::OrdMap` (Persistent B-Tree v15) | 38.7 ns (25.8M/s) | 53.7 ns (18.6M/s) | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**7.93 ns** | ~0.06 allocs |
 | `std::collections::BTreeMap` | 71.6 ns (14.0M/s) | 37.5 ns (26.6M/s) | 572.1 µs (~70,000× slower) | ~0.16 allocs |
 | `std::collections::HashMap` | 14.5 ns (68.9M/s) | 28.7 ns (34.8M/s) | N/A | ~0 allocs |
 
