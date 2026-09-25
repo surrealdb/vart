@@ -1203,6 +1203,35 @@ impl<P: KeyTrait, V: Clone> NodeType<P, V> {
 }
 
 // Default implementation for the Tree struct
+impl<P: KeyTrait, V: Clone + std::fmt::Debug> std::fmt::Debug for Tree<P, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tree")
+            .field("size", &self.size)
+            .field("version", &self.version)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a, P: KeyTrait, V: Clone> IntoIterator for &'a Tree<P, V> {
+    type Item = IterItem<'a, V>;
+    type IntoIter = Iter<'a, P, V>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<P: KeyTrait, V: Clone> FromIterator<(P, V)> for Tree<P, V> {
+    fn from_iter<I: IntoIterator<Item = (P, V)>>(iter: I) -> Self {
+        let mut tree = Tree::new();
+        for (k, v) in iter {
+            let _ = tree.insert(&k, v, 0, 0);
+        }
+        tree
+    }
+}
+
 impl<P: KeyTrait, V: Clone> Default for Tree<P, V> {
     fn default() -> Self {
         Tree::new()
@@ -1761,6 +1790,14 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// # Returns
     ///
     /// Returns `true` if the Trie is empty, `false` otherwise.
+    /// Returns the number of distinct keys in the Trie.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.size
+    }
+
+    /// Returns `true` if the Trie is empty, `false` otherwise.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.size == 0
     }
@@ -4063,5 +4100,28 @@ mod tests {
         assert_eq!(res_ts, Some((42, 1, 100)));
 
         assert_eq!(tree.get_by_slice(b"user:1001:none", 0), None);
+    }
+
+    #[test]
+    fn test_tree_collection_traits() {
+        let pairs = vec![
+            (VariableSizeKey::from_slice(b"k1"), 10),
+            (VariableSizeKey::from_slice(b"k2"), 20),
+            (VariableSizeKey::from_slice(b"k3"), 30),
+        ];
+
+        let tree: Tree<VariableSizeKey, i32> = pairs.into_iter().collect();
+        assert_eq!(tree.len(), 3);
+        assert!(!tree.is_empty());
+
+        let debug_str = format!("{:?}", tree);
+        assert!(debug_str.contains("Tree"));
+        assert!(debug_str.contains("size: 3"));
+
+        let mut collected_keys = Vec::new();
+        for (k, v, _, _) in &tree {
+            collected_keys.push((k.to_vec(), *v));
+        }
+        assert_eq!(collected_keys.len(), 3);
     }
 }
