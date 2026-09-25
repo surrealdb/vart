@@ -32,7 +32,7 @@ Benchmarked on bare metal (**AMD Ryzen Threadripper 9970X 32-Core / 64-Thread Pr
 | **`vart::Tree` (Standard Key)** | **29.2 ns**<br><sup>(34.1M/s)</sup> | **93.7 ns**<br><sup>(10.6M/s)</sup> | **8.12 ns** | **1.0 allocs** |
 | `imbl::OrdMap` (Persistent B-Tree v7) | 46.3 ns<br><sup>(21.6M/s)</sup> | 71.8 ns<br><sup>(13.9M/s)</sup> | **8.12 ns** | ~0.14 allocs |
 | `im::OrdMap` (Persistent B-Tree v15) | 38.7 ns<br><sup>(25.8M/s)</sup> | 53.7 ns<br><sup>(18.6M/s)</sup> | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**7.93 ns** | ~0.06 allocs |
-| `std::collections::BTreeMap` | 71.6 ns<br><sup>(14.0M/s)</sup> | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**37.5 ns**<br><sup>(26.6M/s)</sup> | 572.1 µs<br><sup>(~70,000× slower)</sup> | ~0.16 allocs |
+| `std::collections::BTreeMap` | 71.6 ns<br><sup>(14.0M/s)</sup> | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**37.5 ns**<br><sup>(26.6M/s)</sup> | 572.1 µs | ~0.16 allocs |
 | `std::collections::HashMap`* | 14.5 ns<br><sup>(68.9M/s)</sup> | 28.7 ns<br><sup>(34.8M/s)</sup> | N/A | ~0 allocs |
 
 <small>\* Rocket badge denotes the fastest implementation among ordered, range-scannable maps. `std::collections::HashMap` is included as an unordered $O(1)$ reference baseline and does not support range queries, sorted scans, or snapshots.</small>
