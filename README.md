@@ -30,14 +30,13 @@ It is designed as an in-memory index engine for databases, storage engines, and 
 
 Benchmarked on bare metal (**AMD Ryzen Threadripper 9970X 32-Core / 64-Thread Processor @ 5.48 GHz, 128 GB DDR5 RAM**, Linux 6.8):
 
-| Data Structure | Point Insert (Latency) | Point Read (Hit) | Range Scan (1,000 keys) | Allocations / Op |
+| Data Structure | Point Read (Random Hit) | Point Insert (In-Place) | Snapshot Clone | Allocations / Insert |
 | :--- | ---: | ---: | ---: | ---: |
-| **`vart::Tree` (In-Place)** | **79.8 ns** | **24.1 ns** | **8.19 µs** (~8.19 ns / item) | **~3 allocs** |
-| **`vart::Tree` (Slice Lookup)** | — | **18.7 ns** | — | **0 allocs** |
-| **`vart::Tree` (CoW Insert)** | **1.20 µs** | **24.1 ns** | **8.19 µs** (~8.19 ns / item) | ~7 allocs |
-| `std::collections::BTreeMap` | 67.9 ns | 16.3 ns | 6.45 µs (~6.45 ns / item) | ~0.17 allocs |
-| `std::collections::HashMap` | 10.4 ns | 8.2 ns | N/A (unsupported) | ~0 allocs |
-| `im::OrdMap` (Persistent) | 34.0 ns | 21.8 ns | 11.2 µs (~11.2 ns / item) | ~0.06 allocs |
+| **`vart::Tree` (Slice Lookup)** | <img width="16" align="absmiddle" src="https://raw.githubusercontent.com/surrealdb/surrealdb/main/img/rocket.png" alt="🚀">&nbsp;**27.6 ns** (36.1M/s) | — | — | **0 allocs** |
+| **`vart::Tree` (Standard Key)** | **29.2 ns** (34.1M/s) | **93.7 ns** (10.6M/s) | <img width="16" align="absmiddle" src="https://raw.githubusercontent.com/surrealdb/surrealdb/main/img/rocket.png" alt="🚀">&nbsp;**8.12 ns** | **1.0 allocs** |
+| `im::OrdMap` (Persistent B-Tree) | 38.2 ns (26.1M/s) | 52.2 ns (19.0M/s) | **7.93 ns** | ~0.06 allocs |
+| `std::collections::BTreeMap` | 70.0 ns (14.2M/s) | 36.8 ns (27.0M/s) | 577.1 µs (~70,000× slower) | ~0.16 allocs |
+| `std::collections::HashMap` | 14.2 ns (70.0M/s) | 28.4 ns (34.3M/s) | N/A | ~0 allocs |
 
 - **Zero-Allocation Range Scanning**: Traverses 1,000 contiguous items in **8.19 microseconds** (~122,000,000 items/sec) with zero heap allocations during iteration via the unboxed `ChildrenIter` enum.
 - **Zero-Allocation Point Lookups**: Queries directly by raw byte slice (`tree.get_by_slice` / `tree.contains_key_slice`) in **18.7 ns**, avoiding key wrapping allocations.
