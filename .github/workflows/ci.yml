@@ -33,7 +33,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Install cargo-deny
-        run: cargo install --debug --locked cargo-deny@0.15.1 || true
+        run: cargo install --debug --locked cargo-deny@0.20.2 || true
 
       - name: Compile
         run: cargo build --all-targets --all-features
