@@ -6,42 +6,38 @@ use crate::art::{Node, NodeType, QueryType};
 use crate::node::LeafValue;
 use crate::KeyTrait;
 
-type NodeIterator<'a, P, V> = Box<dyn DoubleEndedIterator<Item = &'a Arc<Node<P, V>>> + 'a>;
-
 // A type alias for the Item type
 pub(crate) type IterItem<'a, V> = (&'a [u8], &'a V, u64, u64);
 
-/// An iterator over the nodes in the Trie.
-struct NodeIter<'a, P: KeyTrait, V: Clone> {
-    node: NodeIterator<'a, P, V>,
+/// An iterator over the child nodes in the Trie.
+struct NodeIter<'a, P: KeyTrait + 'a, V: Clone + 'a> {
+    iter: crate::node::ChildrenIter<'a, P, V>,
 }
 
-impl<'a, P: KeyTrait, V: Clone> NodeIter<'a, P, V> {
-    fn new<I>(iter: I) -> Self
-    where
-        I: DoubleEndedIterator<Item = &'a Arc<Node<P, V>>> + 'a,
-    {
-        Self {
-            node: Box::new(iter),
-        }
+impl<'a, P: KeyTrait + 'a, V: Clone + 'a> NodeIter<'a, P, V> {
+    #[inline]
+    fn new(iter: crate::node::ChildrenIter<'a, P, V>) -> Self {
+        Self { iter }
     }
 }
 
 impl<'a, P: KeyTrait, V: Clone> Iterator for NodeIter<'a, P, V> {
     type Item = &'a Arc<Node<P, V>>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        self.node.next()
+        self.iter.next()
     }
 }
 
 impl<P: KeyTrait, V: Clone> DoubleEndedIterator for NodeIter<'_, P, V> {
+    #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.node.next_back()
+        self.iter.next_back()
     }
 }
 
-struct Leaf<'a, P: KeyTrait + 'a, V: Clone>(&'a P, &'a Arc<LeafValue<V>>);
+struct Leaf<'a, P: KeyTrait + 'a, V: Clone>(&'a P, &'a LeafValue<V>);
 
 impl<'a, P: KeyTrait + 'a, V: Clone> PartialEq for Leaf<'a, P, V> {
     fn eq(&self, other: &Self) -> bool {
@@ -67,27 +63,30 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Ord for Leaf<'a, P, V> {
 pub struct Iter<'a, P: KeyTrait + 'a, V: Clone> {
     forward: ForwardIterState<'a, P, V>,
     last_forward_key: Option<&'a P>,
-    backward: BackwardIterState<'a, P, V>,
+    backward: Option<BackwardIterState<'a, P, V>>,
     last_backward_key: Option<&'a P>,
-    _marker: std::marker::PhantomData<P>,
+    node: Option<&'a Arc<Node<P, V>>>,
+    is_versioned: bool,
 }
 
 impl<'a, P: KeyTrait + 'a, V: Clone> Iter<'a, P, V> {
     pub(crate) fn new(node: Option<&'a Arc<Node<P, V>>>, is_versioned: bool) -> Self {
         match node {
-            Some(node) => Self {
-                forward: ForwardIterState::new(node, is_versioned),
+            Some(n) => Self {
+                forward: ForwardIterState::new(n, is_versioned),
                 last_forward_key: None,
-                backward: BackwardIterState::new(node, is_versioned),
+                backward: None,
                 last_backward_key: None,
-                _marker: Default::default(),
+                node,
+                is_versioned,
             },
             None => Self {
                 forward: ForwardIterState::empty(),
-                backward: BackwardIterState::empty(),
+                backward: Some(BackwardIterState::empty()),
                 last_backward_key: None,
                 last_forward_key: None,
-                _marker: Default::default(),
+                node: None,
+                is_versioned,
             },
         }
     }
@@ -140,30 +139,38 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iterator for Iter<'a, P, V> {
 
 impl<'a, P: KeyTrait + 'a, V: Clone> DoubleEndedIterator for Iter<'a, P, V> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        while let Some(node) = self.backward.iters.last_mut() {
+        let is_versioned = self.is_versioned;
+        let node = self.node;
+        let backward = self.backward.get_or_insert_with(|| {
+            node.map_or_else(BackwardIterState::empty, |n| {
+                BackwardIterState::new(n, is_versioned)
+            })
+        });
+
+        while let Some(node) = backward.iters.last_mut() {
             let e = node.next_back();
             match e {
                 None => {
-                    self.backward.iters.pop();
+                    backward.iters.pop();
                 }
                 Some(other) => {
                     if let NodeType::Twig(twig) = &other.node_type {
-                        if self.backward.is_versioned {
+                        if backward.is_versioned {
                             for leaf in twig.iter() {
-                                self.backward.leafs.push(Leaf(&twig.key, leaf));
+                                backward.leafs.push(Leaf(&twig.key, leaf));
                             }
                         } else if let Some(v) = twig.get_latest_leaf() {
-                            self.backward.leafs.push(Leaf(&twig.key, v));
+                            backward.leafs.push(Leaf(&twig.key, v));
                         }
                         break;
                     } else {
-                        self.backward.iters.push(NodeIter::new(other.iter()));
+                        backward.iters.push(NodeIter::new(other.iter()));
                     }
                 }
             }
         }
 
-        self.backward.leafs.pop().and_then(|leaf| {
+        backward.leafs.pop().and_then(|leaf| {
             self.last_backward_key = Some(leaf.0);
             if self
                 .last_backward_key
@@ -172,8 +179,8 @@ impl<'a, P: KeyTrait + 'a, V: Clone> DoubleEndedIterator for Iter<'a, P, V> {
             {
                 Some((leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
             } else {
-                self.backward.iters.clear();
-                self.backward.leafs.clear();
+                backward.iters.clear();
+                backward.leafs.clear();
                 None
             }
         })
@@ -345,18 +352,45 @@ impl<'a, P: KeyTrait + 'a, V: Clone> BackwardIterState<'a, P, V> {
             prefix: node.prefix().as_slice().to_vec(),
         }
     }
+
+    fn backward_scan_at<R>(node: &'a Node<P, V>, range: &R, query_type: QueryType) -> Self
+    where
+        R: RangeBounds<P>,
+    {
+        let mut iters = Vec::new();
+        let mut leafs = BinaryHeap::new();
+
+        if let NodeType::Twig(twig) = &node.node_type {
+            if range.contains(&twig.key) {
+                // Apply the same query filtering as forward iteration
+                if let Some(v) = twig.get_leaf_by_query_ref(query_type) {
+                    leafs.push(Leaf(&twig.key, v));
+                }
+            }
+        } else {
+            iters.push(NodeIter::new(node.iter()));
+        }
+
+        Self {
+            iters,
+            leafs,
+            is_versioned: false, // Not used in QueryIterator
+            prefix: node.prefix().as_slice().to_vec(),
+        }
+    }
 }
 
 pub struct Range<'a, K: KeyTrait, V: Clone, R> {
     forward: ForwardIterState<'a, K, V>,
-    backward: BackwardIterState<'a, K, V>,
+    backward: Option<BackwardIterState<'a, K, V>>,
     range: R,
+    node: Option<&'a Arc<Node<K, V>>>,
     forward_prefix: Vec<u8>,
     forward_prefix_lengths: Vec<usize>,
     backward_prefix: Vec<u8>,
     backward_prefix_lengths: Vec<usize>,
-    last_forward_key: Option<K>,
-    last_backward_key: Option<K>,
+    last_forward_key: Option<&'a K>,
+    last_backward_key: Option<&'a K>,
 }
 
 impl<'a, K: KeyTrait, V: Clone, R> Range<'a, K, V, R>
@@ -367,8 +401,9 @@ where
     pub(crate) fn empty(range: R) -> Self {
         Self {
             forward: ForwardIterState::empty(),
-            backward: BackwardIterState::empty(),
+            backward: Some(BackwardIterState::empty()),
             range,
+            node: None,
             forward_prefix: Vec::new(),
             forward_prefix_lengths: Vec::new(),
             backward_prefix: Vec::new(),
@@ -385,18 +420,16 @@ where
         let forward = node.map_or_else(ForwardIterState::empty, |n| {
             ForwardIterState::forward_scan(n, &range, false)
         });
-        let backward = node.map_or_else(BackwardIterState::empty, |n| {
-            BackwardIterState::backward_scan(n, &range, false)
-        });
 
         Self {
             range,
+            node,
             forward_prefix: forward.prefix.clone(),
             forward_prefix_lengths: Vec::new(),
-            backward_prefix: backward.prefix.clone(),
+            backward_prefix: Vec::new(),
             backward_prefix_lengths: Vec::new(),
             forward,
-            backward,
+            backward: None,
             last_forward_key: None,
             last_backward_key: None,
         }
@@ -475,7 +508,13 @@ where
 
     let within_end_bound = match range.end_bound() {
         Bound::Included(_) => prefix_slice <= end_bound_slice,
-        Bound::Excluded(_) => prefix_slice <= end_bound_slice,
+        Bound::Excluded(end_key) => {
+            if prefix_slice.len() >= end_key.as_slice().len() {
+                prefix_slice < end_key.as_slice()
+            } else {
+                prefix_slice <= end_bound_slice
+            }
+        }
         Bound::Unbounded => true,
     };
 
@@ -518,11 +557,10 @@ impl<'a, K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, 
         }
 
         self.forward.leafs.pop_front().and_then(|leaf| {
-            self.last_forward_key = Some(leaf.0.clone());
+            self.last_forward_key = Some(leaf.0);
             if self
                 .last_forward_key
-                .as_ref()
-                .zip(self.last_backward_key.as_ref())
+                .zip(self.last_backward_key)
                 .is_none_or(|(k1, k2)| k1 < k2)
             {
                 Some((leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
@@ -550,17 +588,27 @@ where
 
 impl<K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> DoubleEndedIterator for Range<'_, K, V, R> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        while let Some(node) = self.backward.iters.last_mut() {
+        if self.backward.is_none() {
+            let range = &self.range;
+            let backward = self.node.map_or_else(BackwardIterState::empty, |n| {
+                BackwardIterState::backward_scan(n, range, false)
+            });
+            self.backward_prefix = backward.prefix.clone();
+            self.backward = Some(backward);
+        }
+        let backward = self.backward.as_mut().unwrap();
+
+        while let Some(node) = backward.iters.last_mut() {
             match node.next_back() {
                 Some(other) => {
                     if let NodeType::Twig(twig) = &other.node_type {
                         if self.range.contains(&twig.key) {
                             if let Some(v) = twig.get_latest_leaf() {
-                                self.backward.leafs.push(Leaf(&twig.key, v));
+                                backward.leafs.push(Leaf(&twig.key, v));
                             }
                             break;
                         } else if is_key_out_of_range_backward(&self.range, &twig.key) {
-                            self.backward.iters.clear();
+                            backward.iters.clear();
                             break;
                         }
                     } else {
@@ -569,12 +617,12 @@ impl<K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> DoubleEndedIterator for Ran
                             &mut self.backward_prefix_lengths,
                             &self.range,
                             other,
-                            &mut self.backward.iters,
+                            &mut backward.iters,
                         );
                     }
                 }
                 None => {
-                    self.backward.iters.pop();
+                    backward.iters.pop();
                     if let Some(len) = self.backward_prefix_lengths.pop() {
                         self.backward_prefix.truncate(len);
                     }
@@ -582,18 +630,17 @@ impl<K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> DoubleEndedIterator for Ran
             }
         }
 
-        self.backward.leafs.pop().and_then(|leaf| {
-            self.last_backward_key = Some(leaf.0.clone());
+        backward.leafs.pop().and_then(|leaf| {
+            self.last_backward_key = Some(leaf.0);
             if self
                 .last_backward_key
-                .as_ref()
-                .zip(self.last_forward_key.as_ref())
+                .zip(self.last_forward_key)
                 .is_none_or(|(k1, k2)| k1 > k2)
             {
                 Some((leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
             } else {
-                self.backward.iters.clear();
-                self.backward.leafs.clear();
+                backward.iters.clear();
+                backward.leafs.clear();
                 None
             }
         })
@@ -602,8 +649,11 @@ impl<K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> DoubleEndedIterator for Ran
 
 pub(crate) struct QueryIterator<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> {
     forward: ForwardIterState<'a, K, V>,
-    prefix: Vec<u8>,
-    prefix_lengths: Vec<usize>,
+    backward: BackwardIterState<'a, K, V>,
+    forward_prefix: Vec<u8>,
+    forward_prefix_lengths: Vec<usize>,
+    backward_prefix: Vec<u8>,
+    backward_prefix_lengths: Vec<usize>,
     range: R,
     query_type: QueryType,
 }
@@ -613,12 +663,20 @@ impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> QueryIterator<'a, K, V, R> {
         let forward = node.map_or_else(ForwardIterState::empty, |n| {
             ForwardIterState::scan_at(n, &range, query_type)
         });
-        let prefix = forward.prefix.clone();
+        let backward = node.map_or_else(BackwardIterState::empty, |n| {
+            BackwardIterState::backward_scan_at(n, &range, query_type)
+        });
+
+        let forward_prefix = forward.prefix.clone();
+        let backward_prefix = backward.prefix.clone();
 
         Self {
             forward,
-            prefix,
-            prefix_lengths: Vec::new(),
+            backward,
+            forward_prefix,
+            forward_prefix_lengths: Vec::new(),
+            backward_prefix,
+            backward_prefix_lengths: Vec::new(),
             range,
             query_type,
         }
@@ -650,8 +708,8 @@ impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for QueryIterator<'a
                         }
                     } else {
                         handle_non_twig_node(
-                            &mut self.prefix,
-                            &mut self.prefix_lengths,
+                            &mut self.forward_prefix,
+                            &mut self.forward_prefix_lengths,
                             &self.range,
                             other,
                             &mut self.forward.iters,
@@ -662,8 +720,8 @@ impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for QueryIterator<'a
                     // Pop the iterator if no more elements
                     self.forward.iters.pop();
                     // Restore the prefix to its previous state
-                    if let Some(prefix_len_before) = self.prefix_lengths.pop() {
-                        self.prefix.truncate(prefix_len_before);
+                    if let Some(prefix_len_before) = self.forward_prefix_lengths.pop() {
+                        self.forward_prefix.truncate(prefix_len_before);
                     }
                 }
             }
@@ -674,6 +732,55 @@ impl<'a, K: KeyTrait, V: Clone, R: RangeBounds<K>> Iterator for QueryIterator<'a
             .leafs
             .pop_front()
             .map(|leaf| (leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
+    }
+}
+
+impl<K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> DoubleEndedIterator
+    for QueryIterator<'_, K, V, R>
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        // First check if we have any leaves in the backward state
+        if let Some(leaf) = self.backward.leafs.pop() {
+            return Some((leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts));
+        }
+
+        while let Some(node) = self.backward.iters.last_mut() {
+            match node.next_back() {
+                Some(other) => {
+                    if let NodeType::Twig(twig) = &other.node_type {
+                        if self.range.contains(&twig.key) {
+                            if let Some(leaf) = twig.get_leaf_by_query(self.query_type) {
+                                return Some((
+                                    twig.key.as_slice(),
+                                    &leaf.value,
+                                    leaf.version,
+                                    leaf.ts,
+                                ));
+                            }
+                        } else if is_key_out_of_range_backward(&self.range, &twig.key) {
+                            self.backward.iters.clear();
+                            break;
+                        }
+                    } else {
+                        handle_non_twig_node(
+                            &mut self.backward_prefix,
+                            &mut self.backward_prefix_lengths,
+                            &self.range,
+                            other,
+                            &mut self.backward.iters,
+                        );
+                    }
+                }
+                None => {
+                    self.backward.iters.pop();
+                    if let Some(len) = self.backward_prefix_lengths.pop() {
+                        self.backward_prefix.truncate(len);
+                    }
+                }
+            }
+        }
+
+        None
     }
 }
 
@@ -822,10 +929,8 @@ mod tests {
         for versions in versions_map.values() {
             assert_eq!(versions.len() as u64, versions_per_key);
 
-            let mut expected_version = 1;
-            for version in versions {
+            for (expected_version, version) in (1..).zip(versions.iter()) {
                 assert_eq!(*version, expected_version);
-                expected_version += 1;
             }
         }
 
@@ -881,10 +986,8 @@ mod tests {
             );
 
             // Check if versions are in decreasing order
-            let mut expected_version = 1;
-            for version in versions {
+            for (expected_version, version) in (1..).zip(versions.iter()) {
                 assert_eq!(*version, expected_version, "Version order mismatch");
-                expected_version += 1;
             }
         }
 
@@ -951,14 +1054,12 @@ mod tests {
                     key
                 );
 
-                let mut expected_version = 1;
-                for version in versions {
+                for (expected_version, version) in (1..).zip(versions.iter()) {
                     assert_eq!(
                         *version, expected_version,
                         "Version sequence mismatch for key {}",
                         key
                     );
-                    expected_version += 1;
                 }
             } else {
                 panic!(
@@ -1328,19 +1429,19 @@ mod tests {
         let mut tree: Tree<VariableSizeKey, u16> = Tree::<VariableSizeKey, u16>::new();
         let mut map: BTreeMap<VariableSizeKey, u16> = BTreeMap::new();
         let keys = vec![
-            VariableSizeKey::from_string(&"/!nstest".to_string()),
-            VariableSizeKey::from_string(&"/*test!dbtest".to_string()),
-            VariableSizeKey::from_string(&"/*test*test!tbtest".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*b9ns6pmsa3sbsp0hjnzw".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*gp46l3i2cj57wja4k18g".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*6enirwrmcqwdi2xjd8qh".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*ehk18bp7mn54pfrx1523".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*ycadgte5z1uuc424niqw".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*v583rkcd9l2tml9ms7o9".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*fylh5a0cy9khkvc2nkyg".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*ughityuap0flmrssvhyf".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*mklf5j29ytbbo497hlhq".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*ufh1obqdltnj4lrt59y4".to_string()),
+            VariableSizeKey::from("/!nstest"),
+            VariableSizeKey::from("/*test!dbtest"),
+            VariableSizeKey::from("/*test*test!tbtest"),
+            VariableSizeKey::from("/*test*test*test*b9ns6pmsa3sbsp0hjnzw"),
+            VariableSizeKey::from("/*test*test*test*gp46l3i2cj57wja4k18g"),
+            VariableSizeKey::from("/*test*test*test*6enirwrmcqwdi2xjd8qh"),
+            VariableSizeKey::from("/*test*test*test*ehk18bp7mn54pfrx1523"),
+            VariableSizeKey::from("/*test*test*test*ycadgte5z1uuc424niqw"),
+            VariableSizeKey::from("/*test*test*test*v583rkcd9l2tml9ms7o9"),
+            VariableSizeKey::from("/*test*test*test*fylh5a0cy9khkvc2nkyg"),
+            VariableSizeKey::from("/*test*test*test*ughityuap0flmrssvhyf"),
+            VariableSizeKey::from("/*test*test*test*mklf5j29ytbbo497hlhq"),
+            VariableSizeKey::from("/*test*test*test*ufh1obqdltnj4lrt59y4"),
         ];
 
         for key in &keys {
@@ -1357,8 +1458,8 @@ mod tests {
     #[test]
     fn test_trie_vs_btreemap_range_scan_in_sdb_insert() {
         let (trie, map) = setup_trie_and_btreemap();
-        let range = VariableSizeKey::from_string(&"/*test*test*test*".to_string())
-            ..VariableSizeKey::from_string(&"/*test*test*test*�".to_string());
+        let range =
+            VariableSizeKey::from("/*test*test*test*")..VariableSizeKey::from("/*test*test*test*�");
 
         let trie_results: Vec<_> = trie.range(range.clone()).collect();
         let map_results: Vec<_> = map.range(range).collect();
@@ -1826,7 +1927,7 @@ mod tests {
 
         // Test inclusive range (1..=3)
         let inclusive_results: Vec<_> = tree
-            .range_with_versions(start_key.clone()..=mid_key.clone())
+            .range_with_versions(start_key..=mid_key.clone())
             .collect();
         assert_eq!(inclusive_results.len(), 6); // 3 keys * 2 versions
 
@@ -1873,7 +1974,7 @@ mod tests {
         }
 
         // Test unbounded end (3..)
-        let end_unbounded_results: Vec<_> = tree.range_with_versions(mid_key.clone()..).collect();
+        let end_unbounded_results: Vec<_> = tree.range_with_versions(mid_key..).collect();
         assert_eq!(end_unbounded_results.len(), 6); // 3 keys * 2 versions
 
         // Verify content - should have keys 3, 4, and 5, each with versions 1 and 2
