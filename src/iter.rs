@@ -1429,19 +1429,19 @@ mod tests {
         let mut tree: Tree<VariableSizeKey, u16> = Tree::<VariableSizeKey, u16>::new();
         let mut map: BTreeMap<VariableSizeKey, u16> = BTreeMap::new();
         let keys = vec![
-            VariableSizeKey::from_string(&"/!nstest".to_string()),
-            VariableSizeKey::from_string(&"/*test!dbtest".to_string()),
-            VariableSizeKey::from_string(&"/*test*test!tbtest".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*b9ns6pmsa3sbsp0hjnzw".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*gp46l3i2cj57wja4k18g".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*6enirwrmcqwdi2xjd8qh".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*ehk18bp7mn54pfrx1523".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*ycadgte5z1uuc424niqw".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*v583rkcd9l2tml9ms7o9".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*fylh5a0cy9khkvc2nkyg".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*ughityuap0flmrssvhyf".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*mklf5j29ytbbo497hlhq".to_string()),
-            VariableSizeKey::from_string(&"/*test*test*test*ufh1obqdltnj4lrt59y4".to_string()),
+            VariableSizeKey::from("/!nstest"),
+            VariableSizeKey::from("/*test!dbtest"),
+            VariableSizeKey::from("/*test*test!tbtest"),
+            VariableSizeKey::from("/*test*test*test*b9ns6pmsa3sbsp0hjnzw"),
+            VariableSizeKey::from("/*test*test*test*gp46l3i2cj57wja4k18g"),
+            VariableSizeKey::from("/*test*test*test*6enirwrmcqwdi2xjd8qh"),
+            VariableSizeKey::from("/*test*test*test*ehk18bp7mn54pfrx1523"),
+            VariableSizeKey::from("/*test*test*test*ycadgte5z1uuc424niqw"),
+            VariableSizeKey::from("/*test*test*test*v583rkcd9l2tml9ms7o9"),
+            VariableSizeKey::from("/*test*test*test*fylh5a0cy9khkvc2nkyg"),
+            VariableSizeKey::from("/*test*test*test*ughityuap0flmrssvhyf"),
+            VariableSizeKey::from("/*test*test*test*mklf5j29ytbbo497hlhq"),
+            VariableSizeKey::from("/*test*test*test*ufh1obqdltnj4lrt59y4"),
         ];
 
         for key in &keys {
@@ -1458,8 +1458,8 @@ mod tests {
     #[test]
     fn test_trie_vs_btreemap_range_scan_in_sdb_insert() {
         let (trie, map) = setup_trie_and_btreemap();
-        let range = VariableSizeKey::from_string(&"/*test*test*test*".to_string())
-            ..VariableSizeKey::from_string(&"/*test*test*test*�".to_string());
+        let range =
+            VariableSizeKey::from("/*test*test*test*")..VariableSizeKey::from("/*test*test*test*�");
 
         let trie_results: Vec<_> = trie.range(range.clone()).collect();
         let map_results: Vec<_> = map.range(range).collect();

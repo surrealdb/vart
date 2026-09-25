@@ -94,7 +94,7 @@ impl<const SIZE: usize> FixedSizeKey<SIZE> {
         }
     }
 
-    pub fn from_string(s: &String) -> Self {
+    pub fn from_string(s: &str) -> Self {
         assert!(s.len() < SIZE, "data length is greater than array length");
         let mut arr = [0; SIZE];
         arr[..s.len()].copy_from_slice(s.as_bytes());
@@ -210,12 +210,46 @@ impl<const N: usize> From<String> for FixedSizeKey<N> {
 }
 impl<const N: usize> From<&String> for FixedSizeKey<N> {
     fn from(data: &String) -> Self {
-        Self::from_string(data)
+        Self::from_string(data.as_str())
+    }
+}
+impl<const SIZE: usize> Default for FixedSizeKey<SIZE> {
+    fn default() -> Self {
+        Self {
+            content: [0; SIZE],
+            len: 0,
+        }
+    }
+}
+
+impl<const SIZE: usize> AsRef<[u8]> for FixedSizeKey<SIZE> {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+impl<const SIZE: usize> std::borrow::Borrow<[u8]> for FixedSizeKey<SIZE> {
+    fn borrow(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+impl<const SIZE: usize> std::ops::Deref for FixedSizeKey<SIZE> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl<const SIZE: usize> std::hash::Hash for FixedSizeKey<SIZE> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_slice().hash(state);
     }
 }
 
 // VariableSizeKey is a variable-length key type stored as a byte vector.
-#[derive(Clone, PartialEq, PartialOrd, Ord, Eq, Debug)]
+#[derive(Clone, PartialEq, PartialOrd, Ord, Eq, Debug, Default)]
 pub struct VariableSizeKey {
     data: Vec<u8>,
 }
@@ -235,21 +269,70 @@ impl VariableSizeKey {
         &self.data
     }
 
-    pub fn from_string(s: &String) -> Self {
+    pub fn from_string(s: &str) -> Self {
         Self::from_slice(s.as_bytes())
     }
+}
 
-    pub fn from(data: Vec<u8>) -> Self {
+impl From<Vec<u8>> for VariableSizeKey {
+    fn from(data: Vec<u8>) -> Self {
         Self { data }
     }
 }
 
+impl From<Box<[u8]>> for VariableSizeKey {
+    fn from(data: Box<[u8]>) -> Self {
+        Self {
+            data: data.into_vec(),
+        }
+    }
+}
+
+impl From<&str> for VariableSizeKey {
+    fn from(s: &str) -> Self {
+        Self::from_slice(s.as_bytes())
+    }
+}
+
+impl From<String> for VariableSizeKey {
+    fn from(s: String) -> Self {
+        Self {
+            data: s.into_bytes(),
+        }
+    }
+}
+
+impl AsRef<[u8]> for VariableSizeKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.data
+    }
+}
+
+impl std::borrow::Borrow<[u8]> for VariableSizeKey {
+    fn borrow(&self) -> &[u8] {
+        &self.data
+    }
+}
+
+impl std::ops::Deref for VariableSizeKey {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl std::hash::Hash for VariableSizeKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.data.hash(state);
+    }
+}
+
 impl FromStr for VariableSizeKey {
-    type Err = ();
+    type Err = std::convert::Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let k = Self::from_slice(s.as_bytes());
-        Ok(k)
+        Ok(Self::from_slice(s.as_bytes()))
     }
 }
 
@@ -343,6 +426,28 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_key_traits() {
+        use std::collections::HashSet;
+
+        let vsk1 = VariableSizeKey::from("hello");
+        let vsk2: VariableSizeKey = "hello".to_string().into();
+        let vsk3: VariableSizeKey = b"hello"[..].into();
+        assert_eq!(vsk1, vsk2);
+        assert_eq!(vsk2, vsk3);
+        assert_eq!(&*vsk1, b"hello");
+
+        let mut set = HashSet::new();
+        set.insert(vsk1);
+        assert!(set.contains(&vsk2));
+
+        let fsk: FixedSizeKey<8> = FixedSizeKey::from_slice(b"test");
+        assert_eq!(&*fsk, b"test");
+        let mut fset = HashSet::new();
+        fset.insert(fsk.clone());
+        assert!(fset.contains(&fsk));
+    }
 
     #[test]
     fn test_fixed_size_key_extend_to_capacity() {
