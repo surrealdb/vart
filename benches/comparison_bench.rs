@@ -57,16 +57,6 @@ fn bench_insert(c: &mut Criterion) {
         })
     });
 
-    // im::OrdMap
-    group.bench_function("im_ordmap", |b| {
-        let mut im_map = im::OrdMap::new();
-        let mut key = 0u64;
-        b.iter(|| {
-            im_map.insert(key, key);
-            key += 1;
-        })
-    });
-
     // imbl::OrdMap
     group.bench_function("imbl_ordmap", |b| {
         let mut imbl_map = imbl::OrdMap::new();
@@ -87,7 +77,6 @@ fn bench_get(c: &mut Criterion) {
     let mut vart_tree = Tree::<FixedSizeKey<16>, u64>::new();
     let mut btree = BTreeMap::new();
     let mut hmap = HashMap::new();
-    let mut im_map = im::OrdMap::new();
     let mut imbl_map = imbl::OrdMap::new();
 
     for i in 0..SAMPLE_SIZE as u64 {
@@ -95,7 +84,6 @@ fn bench_get(c: &mut Criterion) {
         let _ = vart_tree.insert_unchecked(&k, i, 0, 0);
         btree.insert(i, i);
         hmap.insert(i, i);
-        im_map.insert(i, i);
         imbl_map.insert(i, i);
     }
 
@@ -133,14 +121,6 @@ fn bench_get(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("im_ordmap", |b| {
-        let mut rng = seeded_rng(0x12345678);
-        b.iter(|| {
-            let key = rng.gen_range(0..SAMPLE_SIZE as u64);
-            black_box(im_map.get(&key))
-        })
-    });
-
     group.bench_function("imbl_ordmap", |b| {
         let mut rng = seeded_rng(0x12345678);
         b.iter(|| {
@@ -158,14 +138,12 @@ fn bench_scan(c: &mut Criterion) {
 
     let mut vart_tree = Tree::<FixedSizeKey<16>, u64>::new();
     let mut btree = BTreeMap::new();
-    let mut im_map = im::OrdMap::new();
     let mut imbl_map = imbl::OrdMap::new();
 
     for i in 0..SAMPLE_SIZE as u64 {
         let k: FixedSizeKey<16> = i.into();
         let _ = vart_tree.insert_unchecked(&k, i, 0, 0);
         btree.insert(i, i);
-        im_map.insert(i, i);
         imbl_map.insert(i, i);
     }
 
@@ -189,15 +167,6 @@ fn bench_scan(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("im_ordmap", |b| {
-        let mut rng = seeded_rng(0x12345678);
-        b.iter(|| {
-            let start = rng.gen_range(0..(SAMPLE_SIZE - 200) as u64);
-            let count = im_map.range(start..start + 100).count();
-            black_box(count)
-        })
-    });
-
     group.bench_function("imbl_ordmap", |b| {
         let mut rng = seeded_rng(0x12345678);
         b.iter(|| {
@@ -216,22 +185,18 @@ fn bench_snapshot(c: &mut Criterion) {
 
     let mut vart_tree = Tree::<FixedSizeKey<16>, u64>::new();
     let mut btree = BTreeMap::new();
-    let mut im_map = im::OrdMap::new();
     let mut imbl_map = imbl::OrdMap::new();
 
     for i in 0..SAMPLE_SIZE as u64 {
         let k: FixedSizeKey<16> = i.into();
         let _ = vart_tree.insert_unchecked(&k, i, 0, 0);
         btree.insert(i, i);
-        im_map.insert(i, i);
         imbl_map.insert(i, i);
     }
 
     group.bench_function("vart", |b| b.iter(|| black_box(vart_tree.clone())));
 
     group.bench_function("btreemap", |b| b.iter(|| black_box(btree.clone())));
-
-    group.bench_function("im_ordmap", |b| b.iter(|| black_box(im_map.clone())));
 
     group.bench_function("imbl_ordmap", |b| b.iter(|| black_box(imbl_map.clone())));
 
