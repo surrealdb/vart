@@ -273,7 +273,7 @@ impl<P: KeyTrait, N, const WIDTH: usize> FlatNode<P, N, WIDTH> {
             new_node.keys[i] = self.keys[i];
             new_node.children[i].clone_from(&self.children[i]);
         }
-        new_node.inner_twig = self.inner_twig.clone();
+        new_node.inner_twig.clone_from(&self.inner_twig);
         new_node.num_children = self.num_children;
         new_node
     }
@@ -287,10 +287,10 @@ impl<P: KeyTrait, N, const WIDTH: usize> FlatNode<P, N, WIDTH> {
         let mut n48 = Node48::new(self.prefix.clone());
         for i in 0..self.num_children as usize {
             if let Some(child) = self.children[i].as_ref() {
-                n48.insert_child(self.keys[i], child.clone());
+                n48.insert_child(self.keys[i], Arc::clone(child));
             }
         }
-        n48.inner_twig = self.inner_twig.clone();
+        n48.inner_twig.clone_from(&self.inner_twig);
         n48
     }
 
@@ -324,7 +324,7 @@ impl<P: KeyTrait, N, const WIDTH: usize> NodeTrait<N> for FlatNode<P, N, WIDTH> 
             new_node.keys[i] = self.keys[i];
             new_node.children[i].clone_from(&self.children[i])
         }
-        new_node.inner_twig = self.inner_twig.clone();
+        new_node.inner_twig.clone_from(&self.inner_twig);
         new_node.num_children = self.num_children;
         new_node
     }
@@ -433,11 +433,11 @@ impl<P: KeyTrait, N> Node48<P, N> {
             .enumerate()
             .filter(|(_, idx)| **idx != u8::MAX)
         {
-            let child = self.children[*pos as usize].as_ref().unwrap().clone();
+            let child = Arc::clone(self.children[*pos as usize].as_ref().unwrap());
             let idx = fnode.find_pos(key as u8).expect("node is full");
             fnode.insert_child(idx, key as u8, child);
         }
-        fnode.inner_twig = self.inner_twig.clone();
+        fnode.inner_twig.clone_from(&self.inner_twig);
         fnode
     }
 
@@ -449,10 +449,10 @@ impl<P: KeyTrait, N> Node48<P, N> {
             .enumerate()
             .filter(|(_, idx)| **idx != u8::MAX)
         {
-            let child = self.children[*pos as usize].as_ref().unwrap().clone();
+            let child = Arc::clone(self.children[*pos as usize].as_ref().unwrap());
             n256.insert_child(key as u8, child);
         }
-        n256.inner_twig = self.inner_twig.clone();
+        n256.inner_twig.clone_from(&self.inner_twig);
         n256
     }
 
@@ -571,7 +571,7 @@ impl<P: KeyTrait, N> Node256<P, N> {
         {
             indexed.insert_child(key as u8, v);
         }
-        indexed.inner_twig = self.inner_twig.clone();
+        indexed.inner_twig.clone_from(&self.inner_twig);
         indexed
     }
 
@@ -955,7 +955,7 @@ mod tests {
         // verify the order of keys as [0, 1, 2, 4]
         assert_eq!(node4.keys, [0, 1, 2, 4]);
 
-        let mut node16 = FlatNode::<FixedSizeKey<8>, usize, 16>::new(dummy_prefix.clone());
+        let mut node16 = FlatNode::<FixedSizeKey<8>, usize, 16>::new(dummy_prefix);
         // Insert children into node16 in random order
         let mut rng = rand::thread_rng();
         let mut values: Vec<u8> = (0..16).collect();

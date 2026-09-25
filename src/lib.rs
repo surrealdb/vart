@@ -196,6 +196,7 @@ impl<const N: usize> From<u64> for FixedSizeKey<N> {
     }
 }
 
+#[allow(clippy::fallible_impl_from)]
 impl<const N: usize> From<&str> for FixedSizeKey<N> {
     fn from(data: &str) -> Self {
         Self::from_str(data).unwrap()

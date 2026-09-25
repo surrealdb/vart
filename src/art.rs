@@ -1092,10 +1092,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             let k = key.at(depth + prefix.len());
             depth += prefix.len();
 
-            match cur_node.find_child(k) {
-                Some(child) => cur_node = child,
-                None => return None,
-            }
+            cur_node = cur_node.find_child(k)?;
         }
     }
 
@@ -1184,7 +1181,7 @@ impl<P: KeyTrait, V: Clone> Default for Tree<P, V> {
 impl<P: KeyTrait, V: Clone> Clone for Tree<P, V> {
     fn clone(&self) -> Self {
         Self {
-            root: self.root.as_ref().cloned(),
+            root: self.root.clone(),
             size: self.size,
             version: self.version,
         }
@@ -2236,7 +2233,7 @@ mod tests {
     fn timed_insertion() {
         let mut tree: Tree<VariableSizeKey, i32> = Tree::<VariableSizeKey, i32>::new();
 
-        let kvts = vec![
+        let kvts = [
             Kvt {
                 k: b"key1_0".to_vec(),
                 version: 0,
@@ -2276,8 +2273,7 @@ mod tests {
         }
 
         // Verification
-        let mut curr_version = 1;
-        for kvt in &kvts {
+        for (curr_version, kvt) in (1..).zip(kvts.iter()) {
             let key = VariableSizeKey::from(kvt.k.clone());
             let (val, version, _ts) = tree.get(&key, 0).unwrap();
             assert_eq!(val, 1);
@@ -2287,8 +2283,6 @@ mod tests {
             } else {
                 assert_eq!(kvt.version, version);
             }
-
-            curr_version += 1;
         }
 
         // Root's version should match the greatest inserted version
@@ -2647,7 +2641,7 @@ mod tests {
         // Insert keys
         for key_data in &set_keys {
             let key = VariableSizeKey {
-                data: key_data.to_vec(),
+                data: key_data.clone(),
             };
             tree.insert(&key, 1, version, 0).unwrap();
         }
@@ -2655,7 +2649,7 @@ mod tests {
         // Delete one key at a time and check remaining keys
         for (index, key_data_to_delete) in set_keys.iter().enumerate() {
             let key_to_delete = VariableSizeKey {
-                data: key_data_to_delete.to_vec(),
+                data: key_data_to_delete.clone(),
             };
             tree.remove(&key_to_delete);
 
@@ -2672,7 +2666,7 @@ mod tests {
                     continue;
                 }
                 let remaining_key = VariableSizeKey {
-                    data: remaining_key_data.to_vec(),
+                    data: remaining_key_data.clone(),
                 };
                 assert!(
                     tree.get(&remaining_key, version).is_some(),

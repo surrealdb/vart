@@ -908,10 +908,8 @@ mod tests {
         for versions in versions_map.values() {
             assert_eq!(versions.len() as u64, versions_per_key);
 
-            let mut expected_version = 1;
-            for version in versions {
+            for (expected_version, version) in (1..).zip(versions.iter()) {
                 assert_eq!(*version, expected_version);
-                expected_version += 1;
             }
         }
 
@@ -967,10 +965,8 @@ mod tests {
             );
 
             // Check if versions are in decreasing order
-            let mut expected_version = 1;
-            for version in versions {
+            for (expected_version, version) in (1..).zip(versions.iter()) {
                 assert_eq!(*version, expected_version, "Version order mismatch");
-                expected_version += 1;
             }
         }
 
@@ -1037,14 +1033,12 @@ mod tests {
                     key
                 );
 
-                let mut expected_version = 1;
-                for version in versions {
+                for (expected_version, version) in (1..).zip(versions.iter()) {
                     assert_eq!(
                         *version, expected_version,
                         "Version sequence mismatch for key {}",
                         key
                     );
-                    expected_version += 1;
                 }
             } else {
                 panic!(
@@ -1912,7 +1906,7 @@ mod tests {
 
         // Test inclusive range (1..=3)
         let inclusive_results: Vec<_> = tree
-            .range_with_versions(start_key.clone()..=mid_key.clone())
+            .range_with_versions(start_key..=mid_key.clone())
             .collect();
         assert_eq!(inclusive_results.len(), 6); // 3 keys * 2 versions
 
@@ -1959,7 +1953,7 @@ mod tests {
         }
 
         // Test unbounded end (3..)
-        let end_unbounded_results: Vec<_> = tree.range_with_versions(mid_key.clone()..).collect();
+        let end_unbounded_results: Vec<_> = tree.range_with_versions(mid_key..).collect();
         assert_eq!(end_unbounded_results.len(), 6); // 3 keys * 2 versions
 
         // Verify content - should have keys 3, 4, and 5, each with versions 1 and 2
