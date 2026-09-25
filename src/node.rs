@@ -140,19 +140,29 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
 
     #[inline]
     pub(crate) fn get_latest_leaf(&self) -> Option<&Arc<LeafValue<V>>> {
-        self.values.iter().max_by_key(|value| value.version)
+        self.values.last()
     }
 
     #[inline]
     pub(crate) fn get_leaf_by_version(&self, version: u64) -> Option<&Arc<LeafValue<V>>> {
-        self.values
-            .iter()
-            .filter(|value| value.version <= version)
-            .max_by_key(|value| value.version)
+        if self.values.len() == 1 {
+            let v = &self.values[0];
+            return if v.version <= version { Some(v) } else { None };
+        }
+        let idx = self.values.partition_point(|v| v.version <= version);
+        if idx == 0 {
+            None
+        } else {
+            Some(&self.values[idx - 1])
+        }
     }
 
     #[inline]
     pub(crate) fn get_leaf_by_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
+        if self.values.len() == 1 {
+            let v = &self.values[0];
+            return if v.ts <= ts { Some(v) } else { None };
+        }
         self.values
             .iter()
             .filter(|value| value.ts <= ts)
@@ -169,6 +179,10 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
 
     #[inline]
     pub(crate) fn last_less_than_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
+        if self.values.len() == 1 {
+            let v = &self.values[0];
+            return if v.ts < ts { Some(v) } else { None };
+        }
         self.values
             .iter()
             .filter(|value| value.ts < ts)
@@ -182,6 +196,10 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
 
     #[inline]
     pub(crate) fn first_greater_than_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
+        if self.values.len() == 1 {
+            let v = &self.values[0];
+            return if v.ts > ts { Some(v) } else { None };
+        }
         self.values
             .iter()
             .filter(|value| value.ts > ts)
@@ -190,6 +208,10 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
 
     #[inline]
     pub(crate) fn first_greater_or_equal_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
+        if self.values.len() == 1 {
+            let v = &self.values[0];
+            return if v.ts >= ts { Some(v) } else { None };
+        }
         self.values
             .iter()
             .filter(|value| value.ts >= ts)
