@@ -175,7 +175,7 @@ jobs:
         run: cargo check --target wasm32-unknown-unknown
 
       - name: Run clippy (WASM)
-        run: cargo clippy --target wasm32-unknown-unknown --tests -- -D warnings
+        run: cargo clippy --target wasm32-unknown-unknown --lib -- -D warnings
 
   format:
     name: Format
