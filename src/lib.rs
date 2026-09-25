@@ -214,7 +214,7 @@ impl<const N: usize> From<&String> for FixedSizeKey<N> {
     }
 }
 
-// A VariableSizeKey is a variable-length datatype with NULL byte appended to it.
+// VariableSizeKey is a variable-length key type stored as a byte vector.
 #[derive(Clone, PartialEq, PartialOrd, Ord, Eq, Debug)]
 pub struct VariableSizeKey {
     data: Vec<u8>,

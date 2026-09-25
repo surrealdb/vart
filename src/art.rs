@@ -173,7 +173,6 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     /// Returns a new `Node` instance with an empty Node4 node.
     ///
     #[inline]
-    #[allow(dead_code)]
     pub(crate) fn new_node4(prefix: P) -> Self {
         // Create a new FlatNode instance using the provided prefix.
         let flat_node = FlatNode::new(prefix);
@@ -518,7 +517,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     ///
     /// Returns `true` if the node type is an inner node, otherwise returns `false`.
     ///
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn is_inner(&self) -> bool {
         !self.is_twig()
     }
@@ -581,7 +580,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     fn shrink(&mut self) {
         match &mut self.node_type {
             NodeType::Node4(n) => {
-                // Shrink Node4 to Node1 by resizing it.
+                // Collapse Node4 into its single child.
                 // In an Adaptive Radix Tree (ART), when a node has only one child,
                 // it can be collapsed into its first child to save space and improve efficiency.
                 // During this process, the prefix of the current node and the prefix of the child node
@@ -719,14 +718,14 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         Some(val)
     }
 
-    #[allow(unused)]
-    pub(crate) fn node_type_name(&self) -> String {
+    #[cfg(test)]
+    pub(crate) fn node_type_name(&self) -> &'static str {
         match &self.node_type {
-            NodeType::Node4(_) => "Node4".to_string(),
-            NodeType::Node16(_) => "Node16".to_string(),
-            NodeType::Node48(_) => "Node48".to_string(),
-            NodeType::Node256(_) => "Node256".to_string(),
-            NodeType::Twig(_) => "Twig".to_string(),
+            NodeType::Node4(_) => "Node4",
+            NodeType::Node16(_) => "Node16",
+            NodeType::Node48(_) => "Node48",
+            NodeType::Node256(_) => "Node256",
+            NodeType::Twig(_) => "Twig",
         }
     }
 

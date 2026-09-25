@@ -69,7 +69,6 @@ pub struct Iter<'a, P: KeyTrait + 'a, V: Clone> {
     last_forward_key: Option<&'a P>,
     backward: BackwardIterState<'a, P, V>,
     last_backward_key: Option<&'a P>,
-    _marker: std::marker::PhantomData<P>,
 }
 
 impl<'a, P: KeyTrait + 'a, V: Clone> Iter<'a, P, V> {
@@ -80,14 +79,12 @@ impl<'a, P: KeyTrait + 'a, V: Clone> Iter<'a, P, V> {
                 last_forward_key: None,
                 backward: BackwardIterState::new(node, is_versioned),
                 last_backward_key: None,
-                _marker: Default::default(),
             },
             None => Self {
                 forward: ForwardIterState::empty(),
                 backward: BackwardIterState::empty(),
                 last_backward_key: None,
                 last_forward_key: None,
-                _marker: Default::default(),
             },
         }
     }
