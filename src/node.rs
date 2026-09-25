@@ -17,11 +17,45 @@ pub(crate) trait NodeTrait<N: Clone> {
     fn replace_child(&self, key: u8, node: Arc<N>) -> Self;
 }
 
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) enum LeafPayload<V: Clone> {
+    Empty,
+    Single(LeafValue<V>),
+    Versioned(Vec<LeafValue<V>>),
+}
+
+impl<V: Clone> LeafPayload<V> {
+    #[inline]
+    pub(crate) fn as_slice(&self) -> &[LeafValue<V>] {
+        match self {
+            Self::Empty => &[],
+            Self::Single(v) => std::slice::from_ref(v),
+            Self::Versioned(list) => list.as_slice(),
+        }
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        self.as_slice().len()
+    }
+
+}
+
+impl<V: Clone> std::ops::Index<usize> for LeafPayload<V> {
+    type Output = LeafValue<V>;
+
+    #[inline]
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.as_slice()[index]
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct TwigNode<K: KeyTrait, V: Clone> {
     pub(crate) prefix: K,
     pub(crate) key: K,
-    pub(crate) values: Vec<Arc<LeafValue<V>>>,
+    pub(crate) values: LeafPayload<V>,
     pub(crate) version: u64, // Version for the twig node
 }
 
@@ -33,7 +67,7 @@ pub(crate) struct TwigNode<K: KeyTrait, V: Clone> {
 //      - If ts1 < ts2, then it must be that version1 < version2.
 // This ensures a consistent ordering of versions based on their timestamps.
 //
-#[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord)]
+#[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Debug)]
 pub(crate) struct LeafValue<V: Clone> {
     pub(crate) value: V,
     pub(crate) version: u64,
@@ -47,49 +81,58 @@ impl<V: Clone> LeafValue<V> {
 }
 
 impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
+    #[inline]
     pub(crate) fn new(prefix: K, key: K) -> Self {
         TwigNode {
             prefix,
             key,
-            values: Vec::new(),
+            values: LeafPayload::Empty,
             version: 0,
         }
     }
 
-    fn insert_common(values: &mut Vec<Arc<LeafValue<V>>>, value: V, version: u64, ts: u64) {
-        let new_leaf_value = LeafValue::new(value, version, ts);
-
-        match values.binary_search_by(|v| (v.version, v.ts).cmp(&(version, ts))) {
-            Ok(index) => {
-                values[index] = Arc::new(new_leaf_value);
-            }
-            Err(index) => {
-                values.insert(index, Arc::new(new_leaf_value));
-            }
-        }
-    }
-
+    #[inline]
     pub(crate) fn insert(&self, value: V, version: u64, ts: u64) -> TwigNode<K, V> {
-        let mut new_values = self.values.clone();
-        Self::insert_common(&mut new_values, value, version, ts);
-
-        TwigNode {
-            prefix: self.prefix.clone(),
-            key: self.key.clone(),
-            values: new_values,
-            version: version.max(self.version),
-        }
+        let mut new_twig = self.clone();
+        new_twig.insert_mut(value, version, ts);
+        new_twig
     }
 
+    #[inline]
     pub(crate) fn insert_mut(&mut self, value: V, version: u64, ts: u64) {
-        Self::insert_common(&mut self.values, value, version, ts);
-        self.version = version.max(self.version); // Update LeafNode's version
+        let new_leaf = LeafValue::new(value, version, ts);
+        match &mut self.values {
+            LeafPayload::Empty => {
+                self.values = LeafPayload::Single(new_leaf);
+            }
+            LeafPayload::Single(single) => {
+                if single.version == version && single.ts == ts {
+                    *single = new_leaf;
+                } else {
+                    let old = single.clone();
+                    let list = if (old.version, old.ts) < (version, ts) {
+                        vec![old, new_leaf]
+                    } else {
+                        vec![new_leaf, old]
+                    };
+                    self.values = LeafPayload::Versioned(list);
+                }
+            }
+            LeafPayload::Versioned(list) => {
+                match list.binary_search_by(|v| (v.version, v.ts).cmp(&(version, ts))) {
+                    Ok(idx) => list[idx] = new_leaf,
+                    Err(idx) => list.insert(idx, new_leaf),
+                }
+            }
+        }
+        self.version = version.max(self.version);
     }
 
+    #[inline]
     pub(crate) fn replace_if_newer_mut(&mut self, value: V, version: u64, ts: u64) {
         if version > self.version {
-            self.values.clear();
-            self.insert_mut(value, version, ts);
+            self.values = LeafPayload::Single(LeafValue::new(value, version, ts));
+            self.version = version;
         }
     }
 
@@ -101,7 +144,6 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         replace: bool,
     ) -> TwigNode<K, V> {
         if replace {
-            // Create a replacement Twig node with the new value only.
             let mut new_twig = TwigNode::new(self.prefix.clone(), self.key.clone());
             new_twig.insert_mut(value, version, ts);
             new_twig
@@ -110,15 +152,16 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
         }
     }
 
-    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &Arc<LeafValue<V>>> {
-        self.values.iter()
+    #[inline]
+    pub(crate) fn iter(&self) -> std::slice::Iter<'_, LeafValue<V>> {
+        self.values.as_slice().iter()
     }
 }
 
 /// Helper functions for TwigNode for timestamp-based queries
 impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     #[inline]
-    pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<&Arc<LeafValue<V>>> {
+    pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<&LeafValue<V>> {
         self.get_leaf_by_query_ref(query_type)
     }
 
@@ -126,7 +169,7 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     pub(crate) fn get_leaf_by_query_ref(
         &self,
         query_type: QueryType,
-    ) -> Option<&Arc<LeafValue<V>>> {
+    ) -> Option<&LeafValue<V>> {
         match query_type {
             QueryType::LatestByVersion(version) => self.get_leaf_by_version(version),
             QueryType::LatestByTs(ts) => self.get_leaf_by_ts(ts),
@@ -138,79 +181,107 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     }
 
     #[inline]
-    pub(crate) fn get_latest_leaf(&self) -> Option<&Arc<LeafValue<V>>> {
-        self.values.last()
-    }
-
-    #[inline]
-    pub(crate) fn get_leaf_by_version(&self, version: u64) -> Option<&Arc<LeafValue<V>>> {
-        if self.values.len() == 1 {
-            let v = &self.values[0];
-            return if v.version <= version { Some(v) } else { None };
-        }
-        let idx = self.values.partition_point(|v| v.version <= version);
-        if idx == 0 {
-            None
-        } else {
-            Some(&self.values[idx - 1])
+    pub(crate) fn get_latest_leaf(&self) -> Option<&LeafValue<V>> {
+        match &self.values {
+            LeafPayload::Empty => None,
+            LeafPayload::Single(v) => Some(v),
+            LeafPayload::Versioned(list) => list.last(),
         }
     }
 
     #[inline]
-    pub(crate) fn get_leaf_by_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
-        if self.values.len() == 1 {
-            let v = &self.values[0];
-            return if v.ts <= ts { Some(v) } else { None };
+    pub(crate) fn get_leaf_by_version(&self, version: u64) -> Option<&LeafValue<V>> {
+        match &self.values {
+            LeafPayload::Empty => None,
+            LeafPayload::Single(v) => {
+                if v.version <= version {
+                    Some(v)
+                } else {
+                    None
+                }
+            }
+            LeafPayload::Versioned(list) => {
+                let idx = list.partition_point(|v| v.version <= version);
+                if idx == 0 {
+                    None
+                } else {
+                    Some(&list[idx - 1])
+                }
+            }
         }
-        self.values
-            .iter()
-            .filter(|value| value.ts <= ts)
-            .max_by_key(|value| value.ts)
+    }
+
+    #[inline]
+    pub(crate) fn get_leaf_by_ts(&self, ts: u64) -> Option<&LeafValue<V>> {
+        match &self.values {
+            LeafPayload::Empty => None,
+            LeafPayload::Single(v) => {
+                if v.ts <= ts {
+                    Some(v)
+                } else {
+                    None
+                }
+            }
+            LeafPayload::Versioned(list) => {
+                list.iter().filter(|v| v.ts <= ts).max_by_key(|v| v.ts)
+            }
+        }
     }
 
     #[inline]
     pub(crate) fn get_all_versions(&self) -> Vec<(V, u64, u64)> {
         self.values
+            .as_slice()
             .iter()
-            .map(|value| (value.value.clone(), value.version, value.ts))
+            .map(|v| (v.value.clone(), v.version, v.ts))
             .collect()
     }
 
     #[inline]
-    pub(crate) fn last_less_than_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
-        if self.values.len() == 1 {
-            let v = &self.values[0];
-            return if v.ts < ts { Some(v) } else { None };
+    pub(crate) fn last_less_than_ts(&self, ts: u64) -> Option<&LeafValue<V>> {
+        match &self.values {
+            LeafPayload::Empty => None,
+            LeafPayload::Single(v) => {
+                if v.ts < ts {
+                    Some(v)
+                } else {
+                    None
+                }
+            }
+            LeafPayload::Versioned(list) => {
+                list.iter().filter(|v| v.ts < ts).max_by_key(|v| v.ts)
+            }
         }
-        self.values
-            .iter()
-            .filter(|value| value.ts < ts)
-            .max_by_key(|value| value.ts)
     }
 
     #[inline]
-    pub(crate) fn last_less_or_equal_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
+    pub(crate) fn last_less_or_equal_ts(&self, ts: u64) -> Option<&LeafValue<V>> {
         self.get_leaf_by_ts(ts)
     }
 
     #[inline]
-    pub(crate) fn first_greater_than_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
-        if self.values.len() == 1 {
-            let v = &self.values[0];
-            return if v.ts > ts { Some(v) } else { None };
+    pub(crate) fn first_greater_than_ts(&self, ts: u64) -> Option<&LeafValue<V>> {
+        match &self.values {
+            LeafPayload::Empty => None,
+            LeafPayload::Single(v) => {
+                if v.ts > ts {
+                    Some(v)
+                } else {
+                    None
+                }
+            }
+            LeafPayload::Versioned(list) => {
+                list.iter().filter(|v| v.ts > ts).min_by_key(|v| v.ts)
+            }
         }
-        self.values
-            .iter()
-            .filter(|value| value.ts > ts)
-            .min_by_key(|value| value.ts)
     }
 
-    #[inline]
     pub(crate) fn validate_invariants(&self) -> Result<usize, String> {
-        if self.values.is_empty() {
+        let slice = self.values.as_slice();
+        if slice.is_empty() {
             return Err("Twig node has empty values list".to_string());
         }
-        for window in self.values.windows(2) {
+        for window in slice.windows(2) {
             let a = (window[0].version, window[0].ts);
             let b = (window[1].version, window[1].ts);
             if a >= b {
@@ -223,15 +294,21 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
         Ok(1)
     }
 
-    pub(crate) fn first_greater_or_equal_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
-        if self.values.len() == 1 {
-            let v = &self.values[0];
-            return if v.ts >= ts { Some(v) } else { None };
+    #[inline]
+    pub(crate) fn first_greater_or_equal_ts(&self, ts: u64) -> Option<&LeafValue<V>> {
+        match &self.values {
+            LeafPayload::Empty => None,
+            LeafPayload::Single(v) => {
+                if v.ts >= ts {
+                    Some(v)
+                } else {
+                    None
+                }
+            }
+            LeafPayload::Versioned(list) => {
+                list.iter().filter(|v| v.ts >= ts).min_by_key(|v| v.ts)
+            }
         }
-        self.values
-            .iter()
-            .filter(|value| value.ts >= ts)
-            .min_by_key(|value| value.ts)
     }
 }
 

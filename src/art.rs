@@ -697,7 +697,7 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     }
 
     #[inline]
-    pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<&Arc<LeafValue<V>>> {
+    pub(crate) fn get_leaf_by_query(&self, query_type: QueryType) -> Option<&LeafValue<V>> {
         let twig = if let NodeType::Twig(twig) = &self.node_type {
             // For a Twig node simply use its inner value.
             twig

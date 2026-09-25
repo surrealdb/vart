@@ -37,7 +37,7 @@ impl<P: KeyTrait, V: Clone> DoubleEndedIterator for NodeIter<'_, P, V> {
     }
 }
 
-struct Leaf<'a, P: KeyTrait + 'a, V: Clone>(&'a P, &'a Arc<LeafValue<V>>);
+struct Leaf<'a, P: KeyTrait + 'a, V: Clone>(&'a P, &'a LeafValue<V>);
 
 impl<'a, P: KeyTrait + 'a, V: Clone> PartialEq for Leaf<'a, P, V> {
     fn eq(&self, other: &Self) -> bool {
