@@ -1,4 +1,4 @@
-// #[allow(warnings)]
+#![forbid(unsafe_code)]
 pub mod art;
 pub mod iter;
 pub mod node;
