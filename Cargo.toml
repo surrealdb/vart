@@ -23,6 +23,7 @@ keywords = [
 rand = "0.8.5"
 criterion = "0.5.1"
 divan = "0.1.14"
+im = "15.1"
 
 [[bench]]
 name = "vart_bench"
@@ -32,6 +33,16 @@ harness = false
 [[bench]]
 name = "allocs"
 path = "benches/allocs.rs"
+harness = false
+
+[[bench]]
+name = "comparison_bench"
+path = "benches/comparison_bench.rs"
+harness = false
+
+[[bench]]
+name = "alloc_comparison"
+path = "benches/alloc_comparison.rs"
 harness = false
 
 [lints.clippy]
