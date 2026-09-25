@@ -333,6 +333,7 @@ const _: () = {
     fn check<P: KeyTrait + Send + Sync, V: Clone + Send + Sync>() {
         assert_send_sync::<art::Tree<P, V>>();
         assert_send_sync::<art::Node<P, V>>();
+        assert_send_sync::<iter::Iter<'_, P, V>>();
         assert_send_sync::<FixedSizeKey<16>>();
         assert_send_sync::<VariableSizeKey>();
     }

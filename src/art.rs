@@ -1138,13 +1138,13 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
     ///
     /// Returns a boxed iterator that yields tuples containing keys and references to child nodes.
     ///
-    pub(crate) fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = &Arc<Self>> + '_> {
+    pub(crate) fn iter(&self) -> crate::node::ChildrenIter<'_, P, V> {
         match &self.node_type {
-            NodeType::Node4(n) => Box::new(n.iter()),
-            NodeType::Node16(n) => Box::new(n.iter()),
-            NodeType::Node48(n) => Box::new(n.iter()),
-            NodeType::Node256(n) => Box::new(n.iter()),
-            NodeType::Twig(_) => Box::new(std::iter::empty()),
+            NodeType::Node4(n) => crate::node::ChildrenIter::Node4(n.children_iter()),
+            NodeType::Node16(n) => crate::node::ChildrenIter::Node16(n.children_iter()),
+            NodeType::Node48(n) => crate::node::ChildrenIter::Node48(n.children_iter()),
+            NodeType::Node256(n) => crate::node::ChildrenIter::Node256(n.children_iter()),
+            NodeType::Twig(_) => crate::node::ChildrenIter::Empty,
         }
     }
 }

@@ -1,4 +1,3 @@
-use std::slice::from_ref;
 use std::sync::Arc;
 
 use crate::{art::QueryType, KeyTrait};
@@ -307,13 +306,8 @@ impl<P: KeyTrait, N: Clone, const WIDTH: usize> FlatNode<P, N, WIDTH> {
     }
 
     #[inline]
-    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &Arc<N>> {
-        let leaf_iter = from_ref(&self.inner_twig).iter();
-        let children_iter = self.children.iter().take(self.num_children as usize);
-
-        leaf_iter
-            .chain(children_iter)
-            .filter_map(|node| node.as_ref())
+    pub(crate) fn children_iter(&self) -> FlatChildren<'_, P, N, WIDTH> {
+        FlatChildren::new(self)
     }
 }
 
@@ -456,18 +450,9 @@ impl<P: KeyTrait, N: Clone> Node48<P, N> {
         n256
     }
 
-    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &Arc<N>> {
-        let leaf_iter = from_ref(&self.inner_twig)
-            .iter()
-            .filter_map(|node| node.as_ref());
-
-        let children_iter = self
-            .keys
-            .iter()
-            .filter(|key| **key != u8::MAX)
-            .map(move |pos| self.children[*pos as usize].as_ref().unwrap());
-
-        leaf_iter.chain(children_iter)
+    #[inline]
+    pub(crate) fn children_iter(&self) -> Node48Children<'_, P, N> {
+        Node48Children::new(self)
     }
 }
 
@@ -582,13 +567,9 @@ impl<P: KeyTrait, N: Clone> Node256<P, N> {
         self.num_children += new_insert as usize;
     }
 
-    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &Arc<N>> {
-        let leaf_iter = from_ref(&self.inner_twig).iter();
-        let children_iter = self.children.iter();
-
-        leaf_iter
-            .chain(children_iter)
-            .filter_map(|node| node.as_ref())
+    #[inline]
+    pub(crate) fn children_iter(&self) -> Node256Children<'_, P, N> {
+        Node256Children::new(self)
     }
 }
 
@@ -642,6 +623,227 @@ impl<P: KeyTrait, N: Clone> NodeTrait<N> for Node256<P, N> {
     #[inline(always)]
     fn size(&self) -> usize {
         256
+    }
+}
+
+pub(crate) struct FlatChildren<'a, P: KeyTrait, N: Clone, const WIDTH: usize> {
+    node: &'a FlatNode<P, N, WIDTH>,
+    inner_yielded: bool,
+    front: usize,
+    back: usize,
+}
+
+impl<'a, P: KeyTrait, N: Clone, const WIDTH: usize> FlatChildren<'a, P, N, WIDTH> {
+    #[inline]
+    pub(crate) fn new(node: &'a FlatNode<P, N, WIDTH>) -> Self {
+        Self {
+            node,
+            inner_yielded: false,
+            front: 0,
+            back: node.num_children as usize,
+        }
+    }
+}
+
+impl<'a, P: KeyTrait, N: Clone, const WIDTH: usize> Iterator for FlatChildren<'a, P, N, WIDTH> {
+    type Item = &'a Arc<N>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if !self.inner_yielded {
+            self.inner_yielded = true;
+            if let Some(inner) = &self.node.inner_twig {
+                return Some(inner);
+            }
+        }
+        while self.front < self.back {
+            let item = self.node.children[self.front].as_ref();
+            self.front += 1;
+            if item.is_some() {
+                return item;
+            }
+        }
+        None
+    }
+}
+
+impl<'a, P: KeyTrait, N: Clone, const WIDTH: usize> DoubleEndedIterator
+    for FlatChildren<'a, P, N, WIDTH>
+{
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        while self.back > self.front {
+            self.back -= 1;
+            let item = self.node.children[self.back].as_ref();
+            if item.is_some() {
+                return item;
+            }
+        }
+        if !self.inner_yielded {
+            self.inner_yielded = true;
+            if let Some(inner) = &self.node.inner_twig {
+                return Some(inner);
+            }
+        }
+        None
+    }
+}
+
+pub(crate) struct Node48Children<'a, P: KeyTrait, N: Clone> {
+    node: &'a Node48<P, N>,
+    inner_yielded: bool,
+    front: usize,
+    back: usize,
+}
+
+impl<'a, P: KeyTrait, N: Clone> Node48Children<'a, P, N> {
+    #[inline]
+    pub(crate) fn new(node: &'a Node48<P, N>) -> Self {
+        Self {
+            node,
+            inner_yielded: false,
+            front: 0,
+            back: 256,
+        }
+    }
+}
+
+impl<'a, P: KeyTrait, N: Clone> Iterator for Node48Children<'a, P, N> {
+    type Item = &'a Arc<N>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if !self.inner_yielded {
+            self.inner_yielded = true;
+            if let Some(inner) = &self.node.inner_twig {
+                return Some(inner);
+            }
+        }
+        while self.front < self.back {
+            let slot = self.node.keys[self.front];
+            self.front += 1;
+            if slot != u8::MAX {
+                return self.node.children[slot as usize].as_ref();
+            }
+        }
+        None
+    }
+}
+
+impl<'a, P: KeyTrait, N: Clone> DoubleEndedIterator for Node48Children<'a, P, N> {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        while self.back > self.front {
+            self.back -= 1;
+            let slot = self.node.keys[self.back];
+            if slot != u8::MAX {
+                return self.node.children[slot as usize].as_ref();
+            }
+        }
+        if !self.inner_yielded {
+            self.inner_yielded = true;
+            if let Some(inner) = &self.node.inner_twig {
+                return Some(inner);
+            }
+        }
+        None
+    }
+}
+
+pub(crate) struct Node256Children<'a, P: KeyTrait, N: Clone> {
+    node: &'a Node256<P, N>,
+    inner_yielded: bool,
+    front: usize,
+    back: usize,
+}
+
+impl<'a, P: KeyTrait, N: Clone> Node256Children<'a, P, N> {
+    #[inline]
+    pub(crate) fn new(node: &'a Node256<P, N>) -> Self {
+        Self {
+            node,
+            inner_yielded: false,
+            front: 0,
+            back: 256,
+        }
+    }
+}
+
+impl<'a, P: KeyTrait, N: Clone> Iterator for Node256Children<'a, P, N> {
+    type Item = &'a Arc<N>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if !self.inner_yielded {
+            self.inner_yielded = true;
+            if let Some(inner) = &self.node.inner_twig {
+                return Some(inner);
+            }
+        }
+        while self.front < self.back {
+            let item = self.node.children[self.front].as_ref();
+            self.front += 1;
+            if item.is_some() {
+                return item;
+            }
+        }
+        None
+    }
+}
+
+impl<'a, P: KeyTrait, N: Clone> DoubleEndedIterator for Node256Children<'a, P, N> {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        while self.back > self.front {
+            self.back -= 1;
+            let item = self.node.children[self.back].as_ref();
+            if item.is_some() {
+                return item;
+            }
+        }
+        if !self.inner_yielded {
+            self.inner_yielded = true;
+            if let Some(inner) = &self.node.inner_twig {
+                return Some(inner);
+            }
+        }
+        None
+    }
+}
+
+pub(crate) enum ChildrenIter<'a, P: KeyTrait + 'a, V: Clone + 'a> {
+    Node4(FlatChildren<'a, P, crate::art::Node<P, V>, 4>),
+    Node16(FlatChildren<'a, P, crate::art::Node<P, V>, 16>),
+    Node48(Node48Children<'a, P, crate::art::Node<P, V>>),
+    Node256(Node256Children<'a, P, crate::art::Node<P, V>>),
+    Empty,
+}
+
+impl<'a, P: KeyTrait, V: Clone> Iterator for ChildrenIter<'a, P, V> {
+    type Item = &'a Arc<crate::art::Node<P, V>>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Node4(i) => i.next(),
+            Self::Node16(i) => i.next(),
+            Self::Node48(i) => i.next(),
+            Self::Node256(i) => i.next(),
+            Self::Empty => None,
+        }
+    }
+}
+
+impl<'a, P: KeyTrait, V: Clone> DoubleEndedIterator for ChildrenIter<'a, P, V> {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Node4(i) => i.next_back(),
+            Self::Node16(i) => i.next_back(),
+            Self::Node48(i) => i.next_back(),
+            Self::Node256(i) => i.next_back(),
+            Self::Empty => None,
+        }
     }
 }
 
@@ -911,7 +1113,7 @@ mod tests {
             node.add_child(i as u8, i);
         }
 
-        for child in node.iter() {
+        for child in node.children_iter() {
             assert_eq!(Arc::strong_count(child), 1);
         }
 
@@ -921,7 +1123,7 @@ mod tests {
             n48.add_child(i, i);
         }
 
-        for child in n48.iter() {
+        for child in n48.children_iter() {
             assert_eq!(Arc::strong_count(child), 1);
         }
 
@@ -931,7 +1133,7 @@ mod tests {
             n256.add_child(i, i);
         }
 
-        for child in n256.iter() {
+        for child in n256.children_iter() {
             assert_eq!(Arc::strong_count(child), 1);
         }
     }

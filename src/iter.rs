@@ -6,38 +6,34 @@ use crate::art::{Node, NodeType, QueryType};
 use crate::node::LeafValue;
 use crate::KeyTrait;
 
-type NodeIterator<'a, P, V> = Box<dyn DoubleEndedIterator<Item = &'a Arc<Node<P, V>>> + 'a>;
-
 // A type alias for the Item type
 pub(crate) type IterItem<'a, V> = (&'a [u8], &'a V, u64, u64);
 
-/// An iterator over the nodes in the Trie.
-struct NodeIter<'a, P: KeyTrait, V: Clone> {
-    node: NodeIterator<'a, P, V>,
+/// An iterator over the child nodes in the Trie.
+struct NodeIter<'a, P: KeyTrait + 'a, V: Clone + 'a> {
+    iter: crate::node::ChildrenIter<'a, P, V>,
 }
 
-impl<'a, P: KeyTrait, V: Clone> NodeIter<'a, P, V> {
-    fn new<I>(iter: I) -> Self
-    where
-        I: DoubleEndedIterator<Item = &'a Arc<Node<P, V>>> + 'a,
-    {
-        Self {
-            node: Box::new(iter),
-        }
+impl<'a, P: KeyTrait + 'a, V: Clone + 'a> NodeIter<'a, P, V> {
+    #[inline]
+    fn new(iter: crate::node::ChildrenIter<'a, P, V>) -> Self {
+        Self { iter }
     }
 }
 
 impl<'a, P: KeyTrait, V: Clone> Iterator for NodeIter<'a, P, V> {
     type Item = &'a Arc<Node<P, V>>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        self.node.next()
+        self.iter.next()
     }
 }
 
 impl<P: KeyTrait, V: Clone> DoubleEndedIterator for NodeIter<'_, P, V> {
+    #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.node.next_back()
+        self.iter.next_back()
     }
 }
 
