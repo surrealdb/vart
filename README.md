@@ -35,10 +35,10 @@ Benchmarked on bare metal (**AMD Ryzen Threadripper 9970X 32-Core / 64-Thread Pr
 | `std::collections::BTreeMap` | 72.7 ns<br><sup>(13.7M/s)</sup> | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**37.7 ns**<br><sup>(26.5M/s)</sup> | 568.2 µs | ~0.16 allocs |
 | `std::collections::HashMap`* | 14.4 ns<br><sup>(69.3M/s)</sup> | 28.8 ns<br><sup>(34.7M/s)</sup> | N/A | ~0 allocs |
 
-<small>\* Rocket badge denotes the fastest implementation among ordered, range-scannable maps. `std::collections::HashMap` is included as an unordered $O(1)$ reference baseline and does not support range queries, sorted scans, or snapshots.</small>
+<sup>* Rocket badge denotes the fastest implementation among ordered, range-scannable maps. `std::collections::HashMap` is included as an unordered $O(1)$ reference baseline and does not support range queries, sorted scans, or snapshots.</sup>
 
 - **Zero-Allocation Range Scanning**: Traverses 1,000 contiguous items in **8.19 microseconds** (~122,000,000 items/sec) with zero heap allocations during iteration via the unboxed `ChildrenIter` enum.
-- **Fastest Persistent Point Lookups**: Point reads in `vart` (**27.6 ns**) are **58% faster than `imbl::OrdMap`** and **2.4× faster than standard `BTreeMap`**.
+- **Fastest Persistent Point Lookups**: Point reads in `vart` (**27.3 ns**) are **58% faster than `imbl::OrdMap`** and **2.4× faster than standard `BTreeMap`**.
 - **Snapshot Creation**: Instantaneous $O(1)$ snapshot creation via atomic reference counting (`tree.clone()`), enabling point-in-time isolation without cloning tree data.
 - **In-Place Mutation Bypass**: High-throughput ingestion via `tree.insert_unchecked`, avoiding copy-on-write overhead when writing to uniquely owned trees while safely falling back to copy-on-write for shared snapshot paths.
 
