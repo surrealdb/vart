@@ -33,7 +33,7 @@ Benchmarked on bare metal (**AMD Ryzen Threadripper 9970X 32-Core / 64-Thread Pr
 | `imbl::OrdMap` (Persistent B-Tree v7) | 46.3 ns (21.6M/s) | 71.8 ns (13.9M/s) | **8.12 ns** | ~0.14 allocs |
 | `im::OrdMap` (Persistent B-Tree v15) | 38.7 ns (25.8M/s) | 53.7 ns (18.6M/s) | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**7.93 ns** | ~0.06 allocs |
 | `std::collections::BTreeMap` | 71.6 ns (14.0M/s) | 37.5 ns (26.6M/s) | 572.1 µs (~70,000× slower) | ~0.16 allocs |
-| `std::collections::HashMap` | 14.5 ns (68.9M/s) | 28.7 ns (34.8M/s) | N/A | ~0 allocs |
+| `std::collections::HashMap` | 14.5 ns (68.9M/s) | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**28.7 ns** (34.8M/s) | N/A | ~0 allocs |
 
 - **Zero-Allocation Range Scanning**: Traverses 1,000 contiguous items in **8.19 microseconds** (~122,000,000 items/sec) with zero heap allocations during iteration via the unboxed `ChildrenIter` enum.
 - **Fastest Persistent Point Lookups**: Point reads in `vart` (**27.6 ns**) are **58% faster than `imbl::OrdMap`** and **2.4× faster than standard `BTreeMap`**.
