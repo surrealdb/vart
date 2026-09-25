@@ -60,33 +60,11 @@ impl<K: KeyTrait, V: Clone> TwigNode<K, V> {
     fn insert_common(values: &mut Vec<Arc<LeafValue<V>>>, value: V, version: u64, ts: u64) {
         let new_leaf_value = LeafValue::new(value, version, ts);
 
-        // Check if a LeafValue with the same version exists and update or insert accordingly
-        match values.binary_search_by(|v| v.version.cmp(&new_leaf_value.version)) {
+        match values.binary_search_by(|v| (v.version, v.ts).cmp(&(version, ts))) {
             Ok(index) => {
-                // If an entry with the same version and timestamp exists, just put the same value
-                if values[index].ts == ts {
-                    values[index] = Arc::new(new_leaf_value);
-                } else {
-                    // If an entry with the same version and different timestamp exists, add a new entry
-                    // Determine the direction to scan based on the comparison of timestamps
-                    let mut insert_position = index;
-                    if values[index].ts < ts {
-                        // Scan forward to find the first entry with a timestamp greater than the new entry's timestamp
-                        insert_position +=
-                            values[index..].iter().take_while(|v| v.ts <= ts).count();
-                    } else {
-                        // Scan backward to find the insertion point before the first entry with a timestamp less than the new entry's timestamp
-                        insert_position -= values[..index]
-                            .iter()
-                            .rev()
-                            .take_while(|v| v.ts >= ts)
-                            .count();
-                    }
-                    values.insert(insert_position, Arc::new(new_leaf_value));
-                }
+                values[index] = Arc::new(new_leaf_value);
             }
             Err(index) => {
-                // If no entry with the same version exists, insert the new value at the correct position
                 values.insert(index, Arc::new(new_leaf_value));
             }
         }
@@ -1120,4 +1098,24 @@ mod tests {
         let leaf = node.first_greater_or_equal_ts(5);
         assert_eq!(leaf.unwrap().value, 50);
     }
+
+    #[test]
+    fn test_twig_insert_same_version_different_timestamps() {
+        let dummy_prefix: FixedSizeKey<8> = FixedSizeKey::create_key(b"test");
+        let mut twig = TwigNode::<FixedSizeKey<8>, usize>::new(dummy_prefix.clone(), dummy_prefix);
+
+        twig.insert_mut(1, 10, 100);
+        twig.insert_mut(2, 10, 200);
+        twig.insert_mut(3, 10, 50);
+
+        // Values should be sorted by (version, ts) -> (10, 50), (10, 100), (10, 200)
+        let entries: Vec<_> = twig.iter().map(|l| (l.value, l.version, l.ts)).collect();
+        assert_eq!(entries, vec![(3, 10, 50), (1, 10, 100), (2, 10, 200)]);
+
+        // Replacing existing (10, 100)
+        twig.insert_mut(99, 10, 100);
+        let entries: Vec<_> = twig.iter().map(|l| (l.value, l.version, l.ts)).collect();
+        assert_eq!(entries, vec![(3, 10, 50), (99, 10, 100), (2, 10, 200)]);
+    }
+
 }
