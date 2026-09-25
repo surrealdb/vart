@@ -374,8 +374,8 @@ pub struct Range<'a, K: KeyTrait, V: Clone, R> {
     forward_prefix_lengths: Vec<usize>,
     backward_prefix: Vec<u8>,
     backward_prefix_lengths: Vec<usize>,
-    last_forward_key: Option<K>,
-    last_backward_key: Option<K>,
+    last_forward_key: Option<&'a K>,
+    last_backward_key: Option<&'a K>,
 }
 
 impl<'a, K: KeyTrait, V: Clone, R> Range<'a, K, V, R>
@@ -537,11 +537,10 @@ impl<'a, K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> Iterator for Range<'a, 
         }
 
         self.forward.leafs.pop_front().and_then(|leaf| {
-            self.last_forward_key = Some(leaf.0.clone());
+            self.last_forward_key = Some(leaf.0);
             if self
                 .last_forward_key
-                .as_ref()
-                .zip(self.last_backward_key.as_ref())
+                .zip(self.last_backward_key)
                 .is_none_or(|(k1, k2)| k1 < k2)
             {
                 Some((leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
@@ -602,11 +601,10 @@ impl<K: KeyTrait + Ord, V: Clone, R: RangeBounds<K>> DoubleEndedIterator for Ran
         }
 
         self.backward.leafs.pop().and_then(|leaf| {
-            self.last_backward_key = Some(leaf.0.clone());
+            self.last_backward_key = Some(leaf.0);
             if self
                 .last_backward_key
-                .as_ref()
-                .zip(self.last_forward_key.as_ref())
+                .zip(self.last_forward_key)
                 .is_none_or(|(k1, k2)| k1 > k2)
             {
                 Some((leaf.0.as_slice(), &leaf.1.value, leaf.1.version, leaf.1.ts))
