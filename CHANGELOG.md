@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0] - 2026-09-25
+
+### Performance
+
+- Comprehensive performance optimizations and zero-allocation slice queries (#96)
+- Zero-allocation range scanning via stack-allocated `ChildrenIter` (#96)
+
+### Features
+
+- Integration with `byteslice` (#96)
+- Deterministic Simulation Testing (DST) suite (#96)
+- Comprehensive benchmarks against BTreeMap, imbl::OrdMap, and HashMap (#96)
+
+### Bug Fixes
+
+- Correctness fixes for shared child and CoW boundary conditions (#96)
+
 ## [0.9.2] - 2025-02-22
 
 ### Miscellaneous Tasks

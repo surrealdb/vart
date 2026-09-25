@@ -56,7 +56,7 @@ Add `vart` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vart = "0.9"
+vart = "0.10"
 ```
 
 ```rust
