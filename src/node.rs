@@ -206,6 +206,23 @@ impl<K: KeyTrait + Clone, V: Clone> TwigNode<K, V> {
     }
 
     #[inline]
+    pub(crate) fn validate_invariants(&self) -> Result<usize, String> {
+        if self.values.is_empty() {
+            return Err("Twig node has empty values list".to_string());
+        }
+        for window in self.values.windows(2) {
+            let a = (window[0].version, window[0].ts);
+            let b = (window[1].version, window[1].ts);
+            if a >= b {
+                return Err(format!(
+                    "Twig versions not strictly sorted: ({}, {}) >= ({}, {})",
+                    window[0].version, window[0].ts, window[1].version, window[1].ts
+                ));
+            }
+        }
+        Ok(1)
+    }
+
     pub(crate) fn first_greater_or_equal_ts(&self, ts: u64) -> Option<&Arc<LeafValue<V>>> {
         if self.values.len() == 1 {
             let v = &self.values[0];
@@ -313,6 +330,50 @@ impl<P: KeyTrait, N: Clone, const WIDTH: usize> FlatNode<P, N, WIDTH> {
     #[inline]
     pub(crate) fn children_iter(&self) -> FlatChildren<'_, P, N, WIDTH> {
         FlatChildren::new(self)
+    }
+
+    pub(crate) fn validate_invariants<F>(&self, mut validate_child: F) -> Result<usize, String>
+    where
+        F: FnMut(&N) -> Result<usize, String>,
+    {
+        let num = self.num_children as usize;
+        if num > WIDTH {
+            return Err(format!("FlatNode has {} children (> {})", num, WIDTH));
+        }
+        for i in 0..num {
+            if self.children[i].is_none() {
+                return Err(format!(
+                    "FlatNode child slot {} is None while num_children is {}",
+                    i, num
+                ));
+            }
+        }
+        for i in num..WIDTH {
+            if self.children[i].is_some() {
+                return Err(format!(
+                    "FlatNode child slot {} is Some while beyond num_children {}",
+                    i, num
+                ));
+            }
+        }
+        for i in 1..num {
+            if self.keys[i - 1] >= self.keys[i] {
+                return Err(format!(
+                    "FlatNode keys not strictly sorted: {} >= {}",
+                    self.keys[i - 1],
+                    self.keys[i]
+                ));
+            }
+        }
+        let mut total = 0;
+        if let Some(inner) = &self.inner_twig {
+            total += validate_child(inner)?;
+        }
+        for i in 0..num {
+            let child = self.children[i].as_ref().unwrap();
+            total += validate_child(child)?;
+        }
+        Ok(total)
     }
 }
 
@@ -459,6 +520,55 @@ impl<P: KeyTrait, N: Clone> Node48<P, N> {
     pub(crate) fn children_iter(&self) -> Node48Children<'_, P, N> {
         Node48Children::new(self)
     }
+
+    pub(crate) fn validate_invariants<F>(&self, mut validate_child: F) -> Result<usize, String>
+    where
+        F: FnMut(&N) -> Result<usize, String>,
+    {
+        let num = self.num_children();
+        if num > 48 {
+            return Err(format!("Node48 has {} children (> 48)", num));
+        }
+        let bitmap_count = self.child_bitmap.count_ones() as usize;
+        if bitmap_count != num {
+            return Err(format!(
+                "Node48 bitmap count {} != num_children {}",
+                bitmap_count, num
+            ));
+        }
+        let mut keys_count = 0;
+        for &slot in self.keys.iter() {
+            if slot != u8::MAX {
+                keys_count += 1;
+                if slot >= 48 {
+                    return Err(format!("Node48 slot {} >= 48", slot));
+                }
+                if self.children[slot as usize].is_none() {
+                    return Err(format!("Node48 slot {} is None in children", slot));
+                }
+                if (self.child_bitmap & (1u64 << slot)) == 0 {
+                    return Err(format!("Node48 slot {} not set in child_bitmap", slot));
+                }
+            }
+        }
+        if keys_count != num {
+            return Err(format!(
+                "Node48 keys count {} != num_children {}",
+                keys_count, num
+            ));
+        }
+        let mut total = 0;
+        if let Some(inner) = &self.inner_twig {
+            total += validate_child(inner)?;
+        }
+        for &slot in self.keys.iter() {
+            if slot != u8::MAX {
+                let child = self.children[slot as usize].as_ref().unwrap();
+                total += validate_child(child)?;
+            }
+        }
+        Ok(total)
+    }
 }
 
 impl<P: KeyTrait, N: Clone> NodeTrait<N> for Node48<P, N> {
@@ -575,6 +685,32 @@ impl<P: KeyTrait, N: Clone> Node256<P, N> {
     #[inline]
     pub(crate) fn children_iter(&self) -> Node256Children<'_, P, N> {
         Node256Children::new(self)
+    }
+
+    pub(crate) fn validate_invariants<F>(&self, mut validate_child: F) -> Result<usize, String>
+    where
+        F: FnMut(&N) -> Result<usize, String>,
+    {
+        let mut child_count = 0;
+        for child_opt in self.children.iter() {
+            if child_opt.is_some() {
+                child_count += 1;
+            }
+        }
+        if child_count != self.num_children {
+            return Err(format!(
+                "Node256 actual children {} != num_children {}",
+                child_count, self.num_children
+            ));
+        }
+        let mut total = 0;
+        if let Some(inner) = &self.inner_twig {
+            total += validate_child(inner)?;
+        }
+        for child in self.children.iter().flatten() {
+            total += validate_child(child)?;
+        }
+        Ok(total)
     }
 }
 

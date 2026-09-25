@@ -1163,6 +1163,16 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
             NodeType::Twig(_) => crate::node::ChildrenIter::Empty,
         }
     }
+
+    pub(crate) fn validate_invariants(&self) -> Result<usize, String> {
+        match &self.node_type {
+            NodeType::Twig(twig) => twig.validate_invariants(),
+            NodeType::Node4(n) => n.validate_invariants(|child| child.validate_invariants()),
+            NodeType::Node16(n) => n.validate_invariants(|child| child.validate_invariants()),
+            NodeType::Node48(n) => n.validate_invariants(|child| child.validate_invariants()),
+            NodeType::Node256(n) => n.validate_invariants(|child| child.validate_invariants()),
+        }
+    }
 }
 
 /// A struct representing an Adaptive Radix Trie.
@@ -1800,6 +1810,28 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.size == 0
+    }
+
+    /// Validates internal structural invariants of the Trie (sorted keys, bitmaps, occupancy).
+    /// Returns the total distinct key count on success, or an error description.
+    pub fn validate_invariants(&self) -> Result<usize, String> {
+        let root = match &self.root {
+            None => {
+                if self.size != 0 {
+                    return Err(format!("Root is None but tree size is {}", self.size));
+                }
+                return Ok(0);
+            }
+            Some(r) => r,
+        };
+        let counted = root.validate_invariants()?;
+        if counted != self.size {
+            return Err(format!(
+                "Tree size ({}) does not match counted distinct keys ({})",
+                self.size, counted
+            ));
+        }
+        Ok(counted)
     }
 
     pub fn scan_at_ts<'a, R>(
@@ -4123,5 +4155,25 @@ mod tests {
             collected_keys.push((k.to_vec(), *v));
         }
         assert_eq!(collected_keys.len(), 3);
+    }
+
+    #[test]
+    fn test_tree_validate_invariants() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
+        assert_eq!(tree.validate_invariants().unwrap(), 0);
+
+        for i in 0..100 {
+            let key = VariableSizeKey::from_slice(format!("key_{:04}", i).as_bytes());
+            tree.insert(&key, i, 1, (i * 10) as u64).unwrap();
+        }
+
+        assert_eq!(tree.validate_invariants().unwrap(), 100);
+
+        for i in (0..100).step_by(2) {
+            let key = VariableSizeKey::from_slice(format!("key_{:04}", i).as_bytes());
+            tree.remove(&key);
+        }
+
+        assert_eq!(tree.validate_invariants().unwrap(), 50);
     }
 }
