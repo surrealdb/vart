@@ -71,7 +71,12 @@ impl<const SIZE: usize> Ord for FixedSizeKey<SIZE> {
 }
 
 impl<const SIZE: usize> FixedSizeKey<SIZE> {
-    // Create new instance with data ending in zero byte
+    /// Create a new instance from a byte slice with an explicit trailing null byte appended.
+    pub fn create_null_terminated(src: &[u8]) -> Self {
+        Self::create_key(src)
+    }
+
+    /// Create new instance with data ending in zero byte
     pub fn create_key(src: &[u8]) -> Self {
         debug_assert!(src.len() < SIZE);
         let mut content = [0; SIZE];
