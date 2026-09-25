@@ -1087,12 +1087,19 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
         }
     }
 
-    fn navigate_to_node<'a>(cur_node: &'a Node<P, V>, key: &P) -> Option<&'a Node<P, V>> {
+    #[inline]
+    pub(crate) fn navigate_to_slice<'a>(
+        cur_node: &'a Node<P, V>,
+        key: &[u8],
+    ) -> Option<&'a Node<P, V>> {
         let mut cur_node = cur_node;
         let mut depth = 0;
 
         loop {
-            let key_prefix = key.prefix_after(depth);
+            if depth > key.len() {
+                return None;
+            }
+            let key_prefix = &key[depth..];
             let prefix = cur_node.prefix();
             let lcp = prefix.longest_common_prefix(key_prefix);
 
@@ -1104,11 +1111,20 @@ impl<P: KeyTrait, V: Clone> Node<P, V> {
                 return Some(cur_node);
             }
 
-            let k = key.at(depth + prefix.len());
+            let next_idx = depth + prefix.len();
+            if next_idx >= key.len() {
+                return None;
+            }
+            let k = key[next_idx];
             depth += prefix.len();
 
             cur_node = cur_node.find_child(k)?;
         }
+    }
+
+    #[inline]
+    fn navigate_to_node<'a>(cur_node: &'a Node<P, V>, key: &P) -> Option<&'a Node<P, V>> {
+        Self::navigate_to_slice(cur_node, key.as_slice())
     }
 
     /// Recursively searches for a key in the node and its children.
@@ -1666,6 +1682,28 @@ impl<P: KeyTrait, V: Clone> Tree<P, V> {
     /// - `u64`: The timestamp of the value.
     ///
     /// Returns `None` if the key or timestamp is not found.
+    /// Retrieves a value by raw byte slice and version without allocating a key.
+    pub fn get_by_slice(&self, key: &[u8], version: u64) -> Option<(V, u64, u64)> {
+        let root = self.root.as_ref()?;
+        let commit_version = if version == 0 { self.version } else { version };
+        let cur_node = Node::navigate_to_slice(root, key)?;
+        let val = cur_node.get_leaf_by_query(QueryType::LatestByVersion(commit_version))?;
+        Some((val.value.clone(), val.version, val.ts))
+    }
+
+    /// Retrieves a value by raw byte slice at a specific timestamp without allocating a key.
+    pub fn get_at_ts_by_slice(&self, key: &[u8], ts: u64) -> Option<(V, u64, u64)> {
+        let root = self.root.as_ref()?;
+        let cur_node = Node::navigate_to_slice(root, key)?;
+        let val = cur_node.get_leaf_by_query(QueryType::LatestByTs(ts))?;
+        Some((val.value.clone(), val.version, val.ts))
+    }
+
+    /// Checks if a key exists by raw byte slice without allocating a key.
+    pub fn contains_key_slice(&self, key: &[u8]) -> bool {
+        self.get_by_slice(key, 0).is_some()
+    }
+
     pub fn get_at_ts(&self, key: &P, ts: u64) -> Option<(V, u64, u64)> {
         let root = self.root.as_ref()?;
         Node::get_recurse(root, key, QueryType::LatestByTs(ts))
@@ -4007,5 +4045,23 @@ mod tests {
         assert!(snapshot
             .get(&VariableSizeKey::from_slice(b"other"), 0)
             .is_none());
+    }
+
+    #[test]
+    fn test_zero_allocation_slice_lookups() {
+        let mut tree: Tree<VariableSizeKey, i32> = Tree::new();
+        let key = VariableSizeKey::from_slice(b"user:1001:profile");
+        tree.insert(&key, 42, 1, 100).unwrap();
+
+        assert!(tree.contains_key_slice(b"user:1001:profile"));
+        assert!(!tree.contains_key_slice(b"user:1001:settings"));
+
+        let res = tree.get_by_slice(b"user:1001:profile", 0);
+        assert_eq!(res, Some((42, 1, 100)));
+
+        let res_ts = tree.get_at_ts_by_slice(b"user:1001:profile", 150);
+        assert_eq!(res_ts, Some((42, 1, 100)));
+
+        assert_eq!(tree.get_by_slice(b"user:1001:none", 0), None);
     }
 }
