@@ -22,20 +22,28 @@ It is designed as an in-memory index engine for databases, storage engines, and 
 
 Benchmarked on bare metal (**AMD Ryzen Threadripper 9970X 32-Core / 64-Thread Processor @ 5.48 GHz, 128 GB DDR5 RAM**, Linux 6.8):
 
-| Data Structure | Point Read (Random Hit) | Point Insert (In-Place) | Snapshot Clone | Allocations / Insert |
-| :--- | ---: | ---: | ---: | ---: |
-| **`vart::Tree`**<br><sup>&nbsp;(Slice Lookup)</sup> | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**27.3 ns**<br><sup>(36.6M/s)</sup> | — | — | **0 allocs** |
-| **`vart::Tree`**<br><sup>&nbsp;(Standard Key)</sup> | **28.9 ns**<br><sup>(34.6M/s)</sup> | **83.2 ns**<br><sup>(12.0M/s)</sup> | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**8.12 ns** | **1.0 allocs** |
-| `imbl::OrdMap` | 46.5 ns<br><sup>(21.5M/s)</sup> | 71.6 ns<br><sup>(14.0M/s)</sup> | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**8.12 ns** | ~0.14 allocs |
-| `std::collections::BTreeMap` | 72.7 ns<br><sup>(13.7M/s)</sup> | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**37.7 ns**<br><sup>(26.5M/s)</sup> | 568.2 µs | ~0.16 allocs |
-| `std::collections::HashMap`* | 14.4 ns<br><sup>(69.3M/s)</sup> | 28.8 ns<br><sup>(34.7M/s)</sup> | N/A | ~0 allocs |
+| Data Structure | Read<br><sup>(with&nbsp;standard&nbsp;key)</sup> | Read<br><sup>(with&nbsp;slice&nbsp;key)</sup> | Insert<br><sup>(sequential&nbsp;entries)</sup> | Insert<br><sup>(random&nbsp;entries)</sup> | Range&nbsp;scans<br><sup>(100&nbsp;items)</sup> |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| **`vart::Tree`** | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**28.9&nbsp;ns**<br><sup>(34.6M/s)</sup> | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**27.3&nbsp;ns**<br><sup>(36.6M/s)</sup> | **83.2&nbsp;ns**<br><sup>(12.0M/s)</sup> | **114.6&nbsp;ns**<br><sup>(8.7M/s)</sup> | **819&nbsp;ns**<br><sup>(122.1M/s)</sup> |
+| `imbl::OrdMap` | 46.5&nbsp;ns<br><sup>(21.5M/s)</sup> | — | 52.8&nbsp;ns<br><sup>(19.0M/s)</sup> | 71.6&nbsp;ns<br><sup>(14.0M/s)</sup> | 341&nbsp;ns<br><sup>(293M/s)</sup> |
+| `std::collections::BTreeMap` | 58.6&nbsp;ns<br><sup>(17.1M/s)</sup> | — | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**31.5&nbsp;ns**<br><sup>(31.7M/s)</sup> | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**64.7&nbsp;ns**<br><sup>(15.5M/s)</sup> | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**183&nbsp;ns**<br><sup>(546M/s)</sup> |
+| `std::collections::HashMap`* | 13.1&nbsp;ns<br><sup>(76.1M/s)</sup> | — | 18.7&nbsp;ns<br><sup>(53.5M/s)</sup> | 21.1&nbsp;ns<br><sup>(47.4M/s)</sup> | N/A |
 
-<sup>* `std::collections::HashMap` is included as an unordered $O(1)$ reference baseline and does not support range queries, sorted scans, or snapshots. The rocket icon denotes the fastest implementation among ordered, range-scannable maps.</sup>
+<sup>* `std::collections::HashMap` is included as an unordered $O(1)$ reference baseline and does not support range queries, sorted scans, or snapshots. The rocket icon denotes the fastest implementation among ordered, range-scannable maps. Sequential insert for `vart::Tree` utilizes in-place mutation via `insert_unchecked`.</sup>
 
-- **Zero-Allocation Range Scanning**: Traverses 1,000 contiguous items in **8.19 microseconds** (~122,000,000 items/sec) with zero heap allocations during iteration via the unboxed `ChildrenIter` enum.
-- **Fastest Persistent Point Lookups**: Point reads in `vart` (**27.3 ns**) are **58% faster than `imbl::OrdMap`** and **2.4× faster than standard `BTreeMap`**.
-- **Snapshot Creation**: Instantaneous $O(1)$ snapshot creation via atomic reference counting (`tree.clone()`), enabling point-in-time isolation without cloning tree data.
-- **In-Place Mutation Bypass**: High-throughput ingestion via `tree.insert_unchecked`, avoiding copy-on-write overhead when writing to uniquely owned trees while safely falling back to copy-on-write for shared snapshot paths.
+### Snapshot Creation & Memory Footprint
+
+| Data Structure | Snapshot&nbsp;Clone<br><sup>(branching&nbsp;cost)</sup> | Allocations<br><sup>(per&nbsp;insert)</sup> | Concurrency&nbsp;&amp;&nbsp;Safety&nbsp;Model |
+| :--- | ---: | ---: | :--- |
+| **`vart::Tree`** | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**8.12&nbsp;ns** | **1.0** | 100% Safe Rust (`#![forbid(unsafe_code)]`) + Structural Sharing |
+| `imbl::OrdMap` | <img width="16" align="absmiddle" src="/img/rocket.png" alt="🚀">&nbsp;**8.12&nbsp;ns** | ~0.14 | Safe Rust + Chunked Copy-on-Write B-Tree |
+| `std::collections::BTreeMap` | 568.2&nbsp;µs | ~0.17 | Standard Library B-Tree (Deep Clone $O(N)$) |
+| `std::collections::HashMap`* | N/A | ~0 | Standard Library Hash Table |
+
+- **Fastest Persistent Point Lookups**: Point reads in `vart` (**27.3 ns** slice, **28.9 ns** standard key) are **58% faster than `imbl::OrdMap`** (46.5 ns) and **2× faster than standard `BTreeMap`** (58.6 ns).
+- **Instantaneous Snapshot Creation**: $O(1)$ snapshot creation via atomic reference counting (`tree.clone()`) takes **8.12 ns**, matching `imbl::OrdMap` and outperforming `BTreeMap` deep clones (568.2 µs) by **70,000×**.
+- **Zero-Allocation Range Scanning**: Traverses 100 contiguous items in **819 ns** (122M items/sec) with zero heap allocations during iteration via the unboxed `ChildrenIter` enum.
+- **In-Place Mutation Bypass**: High-throughput ingestion via `tree.insert_unchecked` (**83.2 ns**), avoiding copy-on-write overhead when writing to uniquely owned trees while safely falling back to copy-on-write for shared snapshot paths.
 
 ## Features
 
