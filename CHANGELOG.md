@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.0] - 2026-09-28
+
+### Security
+
+- Move to `byteslice` 0.2, which fixes unsound borrowed views in `byteslice` 0.1.0 (#97). This is a breaking change: the `ByteSlice` in vart's public API (`impl Key for ByteSlice` and the `VariableSizeKey` conversions) is now `byteslice` 0.2's type.
+
+### Documentation
+
+- Update benchmark comparison table to match artmap columns and style
+- Update footnote description in benchmark table
+
+### Miscellaneous Tasks
+
+- Update CI workflow to match surrealmx standard matrix and checks
+- Fix wasm clippy check in CI
+
 ## [0.10.0] - 2026-09-25
 
 ### Performance
